@@ -19,7 +19,36 @@ type aiExperiment struct {
 	Enabled   bool   `json:"enabled"`
 	// Variants: name → traffic percent (sum should be 100).
 	Variants  map[string]int `json:"variants"`
-	CreatedAt int64          `json:"created_at"`
+	// VariantModels: variant → model override (optional).
+	VariantModels map[string]string `json:"variant_models,omitempty"`
+	// VariantPromptSuffix: variant → extra system prompt (optional).
+	VariantPromptSuffix map[string]string `json:"variant_prompt_suffix,omitempty"`
+	CreatedAt           int64             `json:"created_at"`
+}
+
+func (s *Server) applyExperimentVariantOn(cfg AIConfig, expID, variant string) AIConfig {
+	if s == nil || s.pg == nil || expID == "" || variant == "" {
+		return cfg
+	}
+	exp, ok := s.pg.getAIExperiment(expID)
+	if !ok {
+		return cfg
+	}
+	if m := strings.TrimSpace(exp.VariantModels[variant]); m != "" {
+		cfg.Model = m
+	}
+	return cfg
+}
+
+func experimentPromptSuffix(s *Server, expID, variant string) string {
+	if s == nil || s.pg == nil || expID == "" || variant == "" {
+		return ""
+	}
+	exp, ok := s.pg.getAIExperiment(expID)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(exp.VariantPromptSuffix[variant])
 }
 
 func assignExperimentVariant(expID, actor string, variants map[string]int) string {
@@ -183,4 +212,94 @@ func (s *Server) handleAIExperimentStats(w http.ResponseWriter, r *http.Request)
 		rows = []map[string]any{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"experiment_id": id, "days": days, "variants": rows})
+}
+
+func (s *Server) handleListAIExperiments(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"experiments": []any{}})
+		return
+	}
+	list := s.pg.listAIExperiments()
+	if list == nil {
+		list = []aiExperiment{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"experiments": list})
+}
+
+func (s *Server) handleUpsertAIExperiment(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pg unavailable"})
+		return
+	}
+	var exp aiExperiment
+	if err := json.NewDecoder(r.Body).Decode(&exp); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if id := strings.TrimSpace(r.PathValue("id")); id != "" {
+		exp.ID = id
+	}
+	exp.ID = strings.TrimSpace(exp.ID)
+	if exp.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	if exp.Name == "" {
+		exp.Name = exp.ID
+	}
+	if len(exp.Variants) == 0 {
+		exp.Variants = map[string]int{"control": 100}
+	}
+	if err := s.pg.upsertAIExperiment(exp); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "experiment": exp})
+}
+
+func (s *Server) handleDeleteAIExperiment(w http.ResponseWriter, r *http.Request) {
+	if s.pg == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pg unavailable"})
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	if err := s.pg.deleteAIExperiment(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (p *pgStore) listAIExperiments() []aiExperiment {
+	if p == nil || p.db == nil {
+		return nil
+	}
+	p.ensureAIExperimentsTable()
+	rows, err := p.db.Query(`SELECT data FROM ai_experiments ORDER BY created_at DESC LIMIT 200`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []aiExperiment
+	for rows.Next() {
+		var raw []byte
+		var exp aiExperiment
+		if rows.Scan(&raw) != nil || json.Unmarshal(raw, &exp) != nil {
+			continue
+		}
+		out = append(out, exp)
+	}
+	return out
+}
+
+func (p *pgStore) deleteAIExperiment(id string) error {
+	if p == nil || p.db == nil {
+		return fmt.Errorf("pg unavailable")
+	}
+	_, err := p.db.Exec(`DELETE FROM ai_experiments WHERE id=$1`, id)
+	return err
 }

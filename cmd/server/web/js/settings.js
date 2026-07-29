@@ -949,10 +949,13 @@ async function loadCheckHistory() {
   const body = $("checkHistBody");
   body.innerHTML = `<div class="empty-line">加载中…</div>`;
   const now = Math.floor(Date.now() / 1000);
-  const from = custom ? custom.from : (range > 0 ? now - range * 3600 : 0);
-  const to = custom ? custom.to : now;
+  const anchorKey = "checks:" + id;
+  const win = (typeof resolveAnchoredRange === "function")
+    ? resolveAnchoredRange(anchorKey, range > 0 ? range : 1, custom)
+    : { from: custom ? custom.from : (range > 0 ? now - range * 3600 : now - 3600), to: custom ? custom.to : now };
+  const from = win.from, to = win.to;
   const load = (typeof beginRangeLoad === "function")
-    ? beginRangeLoad("checks:" + id)
+    ? beginRangeLoad(anchorKey)
     : { signal: undefined, isCurrent: () => true };
   // 快捷跨度按钮 + 自定义绝对区间（与主机趋势图一致）
   const ctrl = `${renderChartControls(custom ? -1 : range, "crange")}
@@ -1001,7 +1004,7 @@ async function loadCheckHistory() {
     }
     if (!load.isCurrent()) return;
     CHK_CHARTS = typeof mountChartsWithForecast === "function"
-      ? await mountChartsWithForecast("checks", specs)
+      ? await mountChartsWithForecast("checks", specs, load)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
     if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
@@ -1018,7 +1021,13 @@ safeAddEventListener("checkHistBody", "click", e => {
   if (tog) { const p = $("chkCustomPanel"); if (p) { p.hidden = !p.hidden; if (!p.hidden) { const f = $("chkCustomFrom"); if (f) f.focus(); } } return; }
   if (e.target.closest("[data-chk-custom-apply]")) { applyChkCustomRange(); return; }
   const rb = e.target.closest(".chip-btn[data-crange]");
-  if (rb) { CHK_HIST.custom = null; CHK_HIST.range = parseInt(rb.dataset.crange); loadCheckHistory(); return; }
+  if (rb) {
+    const next = parseInt(rb.dataset.crange);
+    if (CHK_HIST.custom || CHK_HIST.range !== next) {
+      if (typeof clearAnchoredRange === "function" && CHK_HIST.id) clearAnchoredRange("checks:" + CHK_HIST.id);
+    }
+    CHK_HIST.custom = null; CHK_HIST.range = next; loadCheckHistory(); return;
+  }
   const en = e.target.closest(".chart-enlarge"); if (!en) return;
   const ch = CHK_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
 });
@@ -1946,8 +1955,19 @@ async function loadOpsAdmin() {
     if ($("bakDailyAt")) $("bakDailyAt").value = bak.daily_at || "02:30";
     if ($("bakRetain")) $("bakRetain").value = bak.retain_count || 14;
     if ($("bakDir")) $("bakDir").value = bak.dir || "";
+    const rem = bak.remote || {};
+    if ($("bakRemoteEnabled")) $("bakRemoteEnabled").checked = !!rem.enabled;
+    if ($("bakRemoteEndpoint")) $("bakRemoteEndpoint").value = rem.endpoint || "";
+    if ($("bakRemoteBucket")) $("bakRemoteBucket").value = rem.bucket || "";
+    if ($("bakRemoteRegion")) $("bakRemoteRegion").value = rem.region || "";
+    if ($("bakRemoteAccessKey")) $("bakRemoteAccessKey").value = rem.access_key || "";
+    if ($("bakRemoteSecretKey")) $("bakRemoteSecretKey").value = "";
+    if ($("bakRemotePrefix")) $("bakRemotePrefix").value = rem.prefix || "";
   } catch (e) { /* non-admin or API missing */ }
   await loadBackupList();
+  await loadStatusPageCfg();
+  await loadTicketSlaCfg();
+  await loadSecretRotateStatus();
 }
 async function loadBackupList() {
   const el = $("backupList"); if (!el) return;
@@ -1993,11 +2013,104 @@ async function saveBackupCfg() {
     enabled: $("bakEnabled").checked,
     daily_at: ($("bakDailyAt").value || "02:30").trim(),
     retain_count: parseInt($("bakRetain").value, 10) || 14,
-    dir: ($("bakDir").value || "").trim()
+    dir: ($("bakDir").value || "").trim(),
+    remote: {
+      enabled: !!( $("bakRemoteEnabled") && $("bakRemoteEnabled").checked ),
+      endpoint: ($("bakRemoteEndpoint") && $("bakRemoteEndpoint").value || "").trim(),
+      bucket: ($("bakRemoteBucket") && $("bakRemoteBucket").value || "").trim(),
+      region: ($("bakRemoteRegion") && $("bakRemoteRegion").value || "").trim(),
+      access_key: ($("bakRemoteAccessKey") && $("bakRemoteAccessKey").value || "").trim(),
+      secret_key: ($("bakRemoteSecretKey") && $("bakRemoteSecretKey").value || "").trim(),
+      prefix: ($("bakRemotePrefix") && $("bakRemotePrefix").value || "").trim()
+    }
   };
   const r = await fetch(`${API}/admin/backup-config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (r.ok) toast("备份计划已保存", "ok"); else toast(j.error || "保存失败", "err");
+}
+async function loadStatusPageCfg() {
+  try {
+    const c = await fetch(`${API}/admin/status-page`).then(r => r.json());
+    if ($("statusPageEnabled")) $("statusPageEnabled").checked = !!c.enabled;
+    if ($("statusPageTitle")) $("statusPageTitle").value = c.title || "";
+    if ($("statusPageSubtitle")) $("statusPageSubtitle").value = c.subtitle || "";
+    if ($("statusPageToken")) $("statusPageToken").value = c.public_token || "";
+  } catch (e) {}
+}
+async function saveStatusPageCfg() {
+  const body = {
+    enabled: !!( $("statusPageEnabled") && $("statusPageEnabled").checked ),
+    title: ($("statusPageTitle") && $("statusPageTitle").value || "").trim(),
+    subtitle: ($("statusPageSubtitle") && $("statusPageSubtitle").value || "").trim(),
+    public_token: ($("statusPageToken") && $("statusPageToken").value || "").trim()
+  };
+  const r = await fetch(`${API}/admin/status-page`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) toast("Status Page 已保存", "ok"); else toast(j.error || "保存失败", "err");
+}
+function parseSlaPair(el, dResp, dResolve) {
+  const raw = ((el && el.value) || "").trim();
+  if (!raw) return [dResp, dResolve];
+  const parts = raw.split(/[/|,]/).map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+  return [parts[0] || dResp, parts[1] || dResolve];
+}
+async function loadTicketSlaCfg() {
+  try {
+    const p = await fetch(`${API}/tickets/sla`).then(r => r.json());
+    if ($("ticketSlaAutoAssign")) $("ticketSlaAutoAssign").checked = p.auto_assign !== false;
+    const rm = p.response_min || {}, sm = p.resolve_min || {};
+    if ($("ticketSlaP1")) $("ticketSlaP1").value = `${rm.p1 || 15}/${sm.p1 || 240}`;
+    if ($("ticketSlaP2")) $("ticketSlaP2").value = `${rm.p2 || 60}/${sm.p2 || 1440}`;
+    if ($("ticketSlaP3")) $("ticketSlaP3").value = `${rm.p3 || 240}/${sm.p3 || 4320}`;
+  } catch (e) {}
+}
+async function saveTicketSlaCfg() {
+  const [p1r, p1s] = parseSlaPair($("ticketSlaP1"), 15, 240);
+  const [p2r, p2s] = parseSlaPair($("ticketSlaP2"), 60, 1440);
+  const [p3r, p3s] = parseSlaPair($("ticketSlaP3"), 240, 4320);
+  const body = {
+    auto_assign: !!( $("ticketSlaAutoAssign") && $("ticketSlaAutoAssign").checked ),
+    response_min: { p1: p1r, p2: p2r, p3: p3r, p4: 1440 },
+    resolve_min: { p1: p1s, p2: p2s, p3: p3s, p4: 10080 }
+  };
+  const r = await fetch(`${API}/tickets/sla`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) toast("工单 SLA 已保存", "ok"); else toast(j.error || "保存失败", "err");
+}
+async function showTicketSlaBreaches() {
+  const el = $("ticketSlaBreachList"); if (!el) return;
+  try {
+    const j = await fetch(`${API}/tickets/sla/breaches`).then(r => r.json());
+    const list = j.breaches || [];
+    if (!list.length) { el.textContent = "当前无 SLA 违约工单"; return; }
+    el.innerHTML = list.slice(0, 20).map(b =>
+      `#${b.ticket_id} ${esc(b.title || "")} · ${esc(b.breach)} · ${b.age_min || 0}min`
+    ).join("<br>");
+  } catch (e) { el.textContent = "加载失败"; }
+}
+async function loadSecretRotateStatus() {
+  const el = $("secretRotateStatus"); if (!el) return;
+  try {
+    const j = await fetch(`${API}/security/secret-rotate`).then(r => r.json());
+    const ids = (j.key_ids || []).join(", ");
+    el.textContent = `主密钥 ${j.primary_id || "-"} · 可用 ${ids || "无"} · 间隔 ${j.interval_days || 0} 天 · 库 ${j.store_loaded ? "已加载" : "未加载"}`;
+  } catch (e) { el.textContent = "无法读取密钥状态（需管理员）"; }
+}
+async function rotateSecretKeyNow() {
+  const conf = await requestAITextInput({
+    title: "确认轮换配置加密密钥",
+    message: "将生成新主密钥并重加密配置。请输入 ROTATE 确认：",
+    label: "确认文本", placeholder: "ROTATE", submitLabel: "确认轮换",
+    singleLine: true, maxLength: 32, danger: true, requiredMessage: "请输入 ROTATE"
+  });
+  if (!conf) return;
+  const r = await fetch(`${API}/security/secret-rotate`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm: conf, interval_days: 90 })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) { toast("密钥已轮换：" + (j.primary_id || ""), "ok"); await loadSecretRotateStatus(); }
+  else toast(j.error || "轮换失败", "err");
 }
 async function createBackupNow() {
   await withLoading("bakNowBtn", async () => {
@@ -2025,3 +2138,8 @@ safeAddEventListener("retSaveBtn", "click", saveRetentionCfg);
 safeAddEventListener("cmdPolSaveBtn", "click", saveCmdPolicyCfg);
 safeAddEventListener("bakCfgSaveBtn", "click", saveBackupCfg);
 safeAddEventListener("bakNowBtn", "click", createBackupNow);
+safeAddEventListener("statusPageSaveBtn", "click", saveStatusPageCfg);
+safeAddEventListener("ticketSlaSaveBtn", "click", saveTicketSlaCfg);
+safeAddEventListener("ticketSlaBreachBtn", "click", showTicketSlaBreaches);
+safeAddEventListener("secretRotateRefreshBtn", "click", loadSecretRotateStatus);
+safeAddEventListener("secretRotateBtn", "click", rotateSecretKeyNow);

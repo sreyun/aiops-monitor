@@ -157,10 +157,12 @@ func secretKeyStatus() map[string]any {
 		ids = append(ids, k.ID)
 	}
 	return map[string]any{
-		"enabled":    len(keys) > 0,
-		"primary_id": currentSecretKeyID(),
-		"key_ids":    ids,
-		"format":     "enc:v2:<key_id>:<payload> (compat enc:v1:)",
-		"prev_env":   "AIOPS_SECRET_KEYS_PREV",
+		"enabled":     len(keys) > 0,
+		"primary_id":  currentSecretKeyID(),
+		"key_ids":     ids,
+		"format":      "enc:v2:<key_id>:<payload> (compat enc:v1:)",
+		"prev_env":    "AIOPS_SECRET_KEYS_PREV",
+		"store_env":   "AIOPS_SECRET_KEY_STORE",
+		"auto_rotate": "POST /api/v1/security/secret-rotate + interval_days",
 	}
 }

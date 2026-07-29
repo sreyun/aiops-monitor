@@ -41,7 +41,9 @@ func isPublicPath(r *http.Request) bool {
 		"/api/v1/mcp",                        // MCP server：外部 Agent(如 Hermes Agent) 连接，在 handler 内做 Bearer Token 鉴权
 		"/api/v1/prom/write",                 // Prometheus remote_write 接收：外部 exporter/telegraf/OTel 推送，在 handler 内做 Bearer 令牌鉴权
 		"/api/v1/integrations/content-audit", // LLM Gateway/SDK structured audit ingest; dedicated Bearer token in handler
-		"/api/v1/agent/logs":                 // fingerprint-gated log ingest (checked in the handler)
+		"/api/v1/agent/logs",                 // fingerprint-gated log ingest (checked in the handler)
+		"/status",                            // public Status Page (HTML)
+		"/api/v1/public/status":               // public Status Page (JSON; optional token in handler)
 		return true
 	}
 	// Agent-facing hardware/netflow/hyperv/snmp ingest are fingerprint-gated, not
@@ -131,7 +133,8 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 	if strings.HasPrefix(p, "/api/v1/auth/sso/identities/") {
 		return true
 	}
-	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" || strings.HasPrefix(p, "/api/v1/admin/") { // user mgmt + admin ops: admin only
+	if strings.HasPrefix(p, "/api/v1/users") || p == "/api/v1/mfa/global" || strings.HasPrefix(p, "/api/v1/admin/") ||
+		p == "/api/v1/security/secret-rotate" || p == "/api/v1/security/rewrap-secrets" || p == "/api/v1/security/key-status" { // user mgmt + admin ops: admin only
 		return rank >= roleRank(RoleAdmin)
 	}
 	// Content audit / AI tool audit / audit export: high-sensitivity security data.

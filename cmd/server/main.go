@@ -384,6 +384,7 @@ func main() {
 	pg := mustOpenPG(dsn)
 	slog.Info("PostgreSQL 已连接：配置 / 用户 / 审计 / 事件 / 工单 / 会话统一持久化到 PG")
 	store.BindPG(pg) // audit log + plugin events → PG
+	initSecretKeyStoreFromEnv()
 	if secretEncryptionEnabled() {
 		slog.Info("配置密钥落库加密已启用（AIOPS_SECRET_KEY）：MFA/SMTP/AI/webhook 等密钥 AES-256-GCM 静态加密")
 	} else {

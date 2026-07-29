@@ -19,11 +19,21 @@ var (
 	auditChainSeq  int64
 )
 
+func auditChainSecretDegraded() bool {
+	return len(loadSecretKey()) == 0
+}
+
+var auditDegradedOnce sync.Once
+
 func auditChainSecret() []byte {
 	if k := loadSecretKey(); len(k) > 0 {
 		return k
 	}
-	// deterministic fallback so chain still works without AIOPS_SECRET_KEY
+	// deterministic fallback so chain still works without AIOPS_SECRET_KEY (dev only).
+	// Production/compliance deployments must set AIOPS_SECRET_KEY — verify API reports degraded.
+	auditDegradedOnce.Do(func() {
+		slog.Error("audit chain using degraded default secret; set AIOPS_SECRET_KEY for compliance")
+	})
 	sum := sha256.Sum256([]byte("aiops-audit-chain-default"))
 	return sum[:]
 }
@@ -76,8 +86,14 @@ func (p *pgStore) verifyAuditChain(limit int) (ok bool, checked int, brokenAt in
 	}
 	rows, err := p.db.Query(`
 SELECT id, ts, data, COALESCE(content_hash,''), COALESCE(prev_hash,''), COALESCE(chain_seq,0)
+FROM audit_log_p WHERE COALESCE(content_hash,'') <> ''
+ORDER BY chain_seq ASC, id ASC LIMIT $1`, limit)
+	if err != nil {
+		rows, err = p.db.Query(`
+SELECT id, ts, data, COALESCE(content_hash,''), COALESCE(prev_hash,''), COALESCE(chain_seq,0)
 FROM audit_log WHERE COALESCE(content_hash,'') <> ''
 ORDER BY chain_seq ASC, id ASC LIMIT $1`, limit)
+	}
 	if err != nil {
 		return false, 0, 0, err.Error()
 	}
@@ -118,7 +134,8 @@ func (s *Server) handleAuditVerifyChain(w http.ResponseWriter, r *http.Request) 
 	ok, checked, broken, detail := s.pg.verifyAuditChain(limit)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": ok, "checked": checked, "broken_at": broken, "detail": detail,
-		"ts": time.Now().Unix(),
+		"secret_degraded": auditChainSecretDegraded(),
+		"ts":              time.Now().Unix(),
 	})
 }
 

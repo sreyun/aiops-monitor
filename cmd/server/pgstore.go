@@ -907,7 +907,10 @@ func (p *pgStore) appendAudit(e LogEntry) {
 }
 
 func (p *pgStore) loadRecentAudit(limit int) ([]LogEntry, error) {
-	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM audit_log ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM audit_log_p ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	if err != nil {
+		rows, err = p.db.Query(`SELECT data FROM (SELECT id,data FROM audit_log ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -993,7 +996,10 @@ func (p *pgStore) appendEvent(e storedEvent) {
 }
 
 func (p *pgStore) loadRecentEvents(limit int) ([]storedEvent, error) {
-	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM events ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	rows, err := p.db.Query(`SELECT data FROM (SELECT id,data FROM events_p ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	if err != nil {
+		rows, err = p.db.Query(`SELECT data FROM (SELECT id,data FROM events ORDER BY id DESC LIMIT $1) t ORDER BY id ASC`, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -3779,13 +3785,20 @@ func (p *pgStore) cleanupContentAudit(retainDays int) {
 	_, _ = p.db.Exec(`DELETE FROM content_audit WHERE created_at < $1`, cut)
 }
 
-// cleanupAuditAndEvents deletes old audit_log / events rows by unix ts.
+// cleanupAuditAndEvents retains audit/events via monthly partition drops on *_p.
+// Audit rows are never DELETE'd (append-only / hash-chain integrity).
 func (p *pgStore) cleanupAuditAndEvents(retainDays int) {
 	if retainDays <= 0 {
 		retainDays = 180
 	}
+	months := retainDays/30 + 1
+	if months < 2 {
+		months = 2
+	}
+	p.cleanupOldTSPartitions("audit_log_p", months)
+	p.cleanupOldTSPartitions("events_p", months)
+	// Legacy events table only (audit legacy never deleted).
 	cut := time.Now().AddDate(0, 0, -retainDays).Unix()
-	_, _ = p.db.Exec(`DELETE FROM audit_log WHERE ts > 0 AND ts < $1`, cut)
 	_, _ = p.db.Exec(`DELETE FROM events WHERE ts > 0 AND ts < $1`, cut)
 }
 

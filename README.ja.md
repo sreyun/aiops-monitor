@@ -1,6 +1,6 @@
 # AIOps
 
-[![Version](https://img.shields.io/badge/Version-v0.19.42-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)
+[![Version](https://img.shields.io/badge/Version-v0.19.43-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.43)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 > **エンタープライズ級ホスト監視・SRE 運用プラットフォーム · 100% オープンソース · プライベート自ホスティング · データ永久自社保有**
@@ -11,7 +11,7 @@
 
 **言語 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-**現行リリース [v0.19.42](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)** · [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · [CHANGELOG](CHANGELOG.md)
+**現行リリース [v0.19.43](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.43)** · [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · [CHANGELOG](CHANGELOG.md)
 
 ---
 

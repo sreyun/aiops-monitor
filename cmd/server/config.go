@@ -538,6 +538,8 @@ type ServerConfig struct {
 	BusinessServices       []BusinessService           `json:"business_services,omitempty"`
 	Retention              RetentionConfig             `json:"retention,omitempty"`
 	Backup             BackupConfig        `json:"backup,omitempty"`
+	StatusPage         StatusPageConfig    `json:"status_page,omitempty"`
+	TicketSLA          TicketSLAPolicy     `json:"ticket_sla,omitempty"`
 	CmdPolicy          CmdPolicyConfig     `json:"cmd_policy,omitempty"`
 	// LoopForceAllowNonAdmin：默认 false，闭环 force=true 仅管理员可用。
 	LoopForceAllowNonAdmin bool `json:"loop_force_allow_non_admin,omitempty"`
@@ -1296,6 +1298,8 @@ func (cs *ConfigStore) Set(c ServerConfig) error {
 	c.BusinessServices = cs.cfg.BusinessServices
 	c.Retention = cs.cfg.Retention
 	c.Backup = cs.cfg.Backup
+	c.StatusPage = cs.cfg.StatusPage
+	c.TicketSLA = cs.cfg.TicketSLA
 	c.CmdPolicy = cs.cfg.CmdPolicy
 	c.AI = cs.cfg.AI                             // managed via AI config endpoint
 	c.VM = cs.cfg.VM                             // managed via env / storage config

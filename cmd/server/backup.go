@@ -51,10 +51,11 @@ func (r RetentionConfig) withDefaults() RetentionConfig {
 
 // BackupConfig schedules PostgreSQL dumps via pg_dump.
 type BackupConfig struct {
-	Enabled     bool   `json:"enabled"`
-	DailyAt     string `json:"daily_at,omitempty"` // HH:MM local, default 02:30
-	RetainCount int    `json:"retain_count,omitempty"`
-	Dir         string `json:"dir,omitempty"` // override AIOPS_BACKUP_DIR
+	Enabled     bool               `json:"enabled"`
+	DailyAt     string             `json:"daily_at,omitempty"` // HH:MM local, default 02:30
+	RetainCount int                `json:"retain_count,omitempty"`
+	Dir         string             `json:"dir,omitempty"` // override AIOPS_BACKUP_DIR
+	Remote      BackupRemoteConfig `json:"remote,omitempty"`
 }
 
 func (b BackupConfig) withDefaults() BackupConfig {
@@ -108,6 +109,13 @@ func (cs *ConfigStore) SetRetention(r RetentionConfig) error {
 
 func (cs *ConfigStore) SetBackupCfg(b BackupConfig) error {
 	cs.mu.Lock()
+	// Preserve remote secret when blank/masked.
+	if b.Remote.SecretKey == "" || strings.Contains(b.Remote.SecretKey, "****") {
+		b.Remote.SecretKey = cs.cfg.Backup.Remote.SecretKey
+	}
+	if b.Remote.AccessKey == "" || strings.Contains(b.Remote.AccessKey, "****") {
+		b.Remote.AccessKey = cs.cfg.Backup.Remote.AccessKey
+	}
 	cs.cfg.Backup = b.withDefaults()
 	cs.mu.Unlock()
 	return cs.save()
@@ -224,6 +232,16 @@ func (s *Server) createPGBackup(operator, note string) (BackupMeta, error) {
 		_, _ = s.pg.db.Exec(`INSERT INTO backup_meta(id, created_at, size_bytes, sha256, operator, path, note)
 			VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE SET size_bytes=EXCLUDED.size_bytes, sha256=EXCLUDED.sha256`,
 			meta.ID, meta.CreatedAt, meta.SizeBytes, meta.SHA256, meta.Operator, meta.Path, meta.Note)
+	}
+	if cfg.Remote.Enabled {
+		if err := s.uploadBackupRemote(path, id); err != nil {
+			slog.Error("remote backup upload failed", "err", err, "id", id)
+			meta.Note = strings.TrimSpace(meta.Note + " remote_upload_error:" + err.Error())
+		} else if meta.Note == "" {
+			meta.Note = "remote_ok"
+		} else {
+			meta.Note += ";remote_ok"
+		}
 	}
 	s.pruneBackups(cfg.RetainCount)
 	return meta, nil
@@ -431,7 +449,10 @@ func (s *Server) handleSetRetention(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetBackupCfg(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.cfg.BackupCfg())
+	b := s.cfg.BackupCfg()
+	b.Remote.SecretKey = maskSecret(b.Remote.SecretKey)
+	b.Remote.AccessKey = maskSecret(b.Remote.AccessKey)
+	writeJSON(w, http.StatusOK, b)
 }
 
 func (s *Server) handleSetBackupCfg(w http.ResponseWriter, r *http.Request) {

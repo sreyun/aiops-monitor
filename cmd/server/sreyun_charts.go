@@ -840,16 +840,11 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 		// included in summary below
 		_ = bias
 	}
-	learnKey := forecastMetricKey("chat", metricKey, title)
-	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, learnKey)
+	// UI/chat path: empty learnKey + no calibration for deterministic overlays.
+	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, "")
 	if errMsg != "" {
 		return capabilityJSON(capabilityResult{OK: false, Error: errMsg}), nil
 	}
-	anchor := 0.0
-	if len(hist) > 0 {
-		anchor = hist[len(hist)-1][1]
-	}
-	band, method, _ = h.s.finalizeForecastWithLearning(learnKey, method, "", band, to, horizonSec, step, anchor)
 
 	// Build chat chart: history solid + forecast dashed
 	seriesDefs := []map[string]any{

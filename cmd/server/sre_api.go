@@ -547,6 +547,7 @@ func (s *Server) handleEscalateIncident(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	tk = s.finalizeNewTicket(tk)
 	s.incidents.SetTicket(inc.ID, tk.ID, s.actorName(r))
 	// Append a more descriptive timeline entry with the ticket number
 	s.incidents.AddEvent(inc.ID, "escalated", s.actorName(r),
@@ -996,6 +997,7 @@ func (s *Server) handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	tk = s.finalizeNewTicket(tk)
 	s.store.MarkDirty()
 	s.messages.push("ticket", "info", "新工单："+tk.Title,
 		fmt.Sprintf("类型 %s · 优先级 %s · 状态 %s", tk.Kind, tk.Priority, tk.Status), "sre", strconv.FormatInt(tk.ID, 10))
@@ -1350,6 +1352,13 @@ func (s *Server) handleSetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
+	}
+	if raw := strings.TrimSpace(c.TaskModelsJSON); raw != "" {
+		var m map[string]string
+		if json.Unmarshal([]byte(raw), &m) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "TaskModelsJSON 必须是合法 JSON 对象，如 {\"promql\":\"qwen-turbo\"}"})
+			return
+		}
 	}
 	// 启用 MCP Server 时强制强令牌：MCP 鉴权无登录节流，弱令牌可被在线暴力破解。脱敏占位(****)表示
 	// 沿用已保存的令牌（此前已校验），不重复校验。

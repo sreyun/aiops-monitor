@@ -1,6 +1,6 @@
 # AIOps
 
-[![Version](https://img.shields.io/badge/Version-v0.19.42-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)
+[![Version](https://img.shields.io/badge/Version-v0.19.43-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.43)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -13,7 +13,7 @@
 
 **语言 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-**当前版本 [v0.19.42](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)** · 镜像：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · 变更见 [CHANGELOG.md](CHANGELOG.md)
+**当前版本 [v0.19.43](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.43)** · 镜像：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · 变更见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 

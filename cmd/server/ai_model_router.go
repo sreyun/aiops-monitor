@@ -46,10 +46,11 @@ func taskModelFromJSON(raw, task string) string {
 func isCheapAITask(task string) bool {
 	switch task {
 	case "promql", "logql", "pgsql", "sqlql", "sql_beautify", "dashboard_prompt_optimize",
-		"summarize", "summary", "translate":
+		"summarize", "summary", "translate", "legend", "title", "rename", "classify",
+		"tag", "label", "format", "beautify":
 		return true
 	default:
-		return false
+		return strings.HasSuffix(task, "_suggest") || strings.HasPrefix(task, "fmt_")
 	}
 }
 

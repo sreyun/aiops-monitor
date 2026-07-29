@@ -198,8 +198,14 @@ func (s *Server) handleUpsertPlaybook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	rev := 0
+	if s.pg != nil {
+		if n, e := s.pg.savePlaybookRevision(saved, s.actorName(r)); e == nil {
+			rev = n
+		}
+	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.save_playbook", saved.Name)})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID, "rev": rev})
 }
 
 func (s *Server) handleDeletePlaybook(w http.ResponseWriter, r *http.Request) {

@@ -173,8 +173,9 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 				if len(src.Points) < 8 {
 					continue
 				}
-				learnKey := forecastMetricKey(expr, legendNameFromLabels(hist[hi].Labels, hi))
-				fc, mape, r2, method, errMsg := robustForecastWithKey(src.Points, req.To, horizon, req.Step, learnKey)
+				// UI path: empty learnKey + no calibration so the same history yields the
+				// same forecast (matches /metrics/forecast host-detail contract).
+				fc, mape, r2, method, errMsg := robustForecastWithKey(src.Points, req.To, horizon, req.Step, "")
 				if errMsg != "" || len(fc) == 0 {
 					if hi == 0 {
 						meta.OK = false
@@ -182,13 +183,6 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 					}
 					continue
 				}
-				anchor := 0.0
-				if last, okLast := lastValidPoint(hist[hi].Points); okLast {
-					anchor = last[1]
-				} else if len(src.Points) > 0 {
-					anchor = src.Points[len(src.Points)-1][1]
-				}
-				fc, method, _ = s.finalizeForecastWithLearning(learnKey, method, expr, fc, req.To, horizon, req.Step, anchor)
 				anyOK = true
 				if bestMethod == "" || mape < bestMAPE {
 					bestMAPE, bestR2, bestMethod = mape, r2, method
@@ -214,11 +208,7 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 				meta.Method = bestMethod
 				meta.MAPE = bestMAPE
 				meta.R2 = bestR2
-				biasHint := ""
-				if h := s.forecastBiasHints(expr, 1); h != "" {
-					biasHint = " · 已注入自学习记忆"
-				}
-				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）%s", bestMethod, bestMAPE, biasHint)
+				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）", bestMethod, bestMAPE)
 			} else if meta.Message == "" {
 				meta.OK = false
 				meta.Message = "数据不足，暂无法预测（至少需要约 8 个采样点）"

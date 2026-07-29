@@ -44,8 +44,30 @@ func TestVMExportParseGPU(t *testing.T) {
 	if byName["GPU0"] != 30 || byName["GPU1"] != 55 {
 		t.Errorf("sample@100 GPU 值错误：%+v", s[0].GPUs)
 	}
+	// Stable order by Name regardless of VM series arrival order.
+	if s[0].GPUs[0].Name != "GPU0" || s[0].GPUs[1].Name != "GPU1" {
+		t.Errorf("sample@100 GPU 应按 Name 排序：%+v", s[0].GPUs)
+	}
 	if len(s[1].GPUs) != 1 || s[1].GPUs[0].Name != "GPU0" || s[1].GPUs[0].UtilPercent != 40 { // ts=105：仅 GPU0
 		t.Errorf("sample@105 GPU 重建错误：%+v", s[1].GPUs)
+	}
+}
+
+// GPU series arriving in reverse order must still sort by Name after parse.
+func TestVMExportParseGPUStableOrder(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"GPU1"},"values":[55],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"GPU0"},"values":[30],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"A100"},"values":[10],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 1 || len(s[0].GPUs) != 3 {
+		t.Fatalf("expected 1 sample / 3 GPUs, got samples=%d gpus=%v", len(s), s)
+	}
+	got := []string{s[0].GPUs[0].Name, s[0].GPUs[1].Name, s[0].GPUs[2].Name}
+	want := []string{"A100", "GPU0", "GPU1"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("GPU order unstable: got %v want %v", got, want)
+		}
 	}
 }
 

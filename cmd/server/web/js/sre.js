@@ -93,6 +93,33 @@ function openPlaybookModal(pb) {
   $("pbSchedWeekday").value = String((sc && typeof sc.weekday === "number") ? sc.weekday : 1);
   pbSchedRefresh();
   $("playbookMask").classList.add("show");
+  loadPlaybookRevisions(pb && pb.id);
+}
+async function loadPlaybookRevisions(id) {
+  const panel = $("pbRevPanel"), list = $("pbRevList");
+  if (!panel || !list) return;
+  if (!id) { panel.style.display = "none"; return; }
+  panel.style.display = "";
+  list.textContent = "加载中…";
+  try {
+    const j = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/revisions`).then(r => r.json());
+    const revs = j.revisions || [];
+    if (!revs.length) { list.textContent = "尚无版本快照（保存后生成）"; return; }
+    list.innerHTML = revs.map(r =>
+      `<div class="sre-row" style="padding:6px 0"><div class="sre-row-main"><div class="mono">rev ${r.rev} · ${esc(r.name||"")} · ${r.steps||0} 步</div>
+        <div class="sre-row-sub">${fmtDateTime(r.saved_at)} · ${esc(r.actor||"")}</div></div>
+        <button class="btn sm" type="button" data-pb-restore="${r.rev}">还原</button></div>`
+    ).join("");
+    list.querySelectorAll("[data-pb-restore]").forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm(`确认还原到 rev ${btn.dataset.pbRestore}？当前内容将被覆盖并生成新版本。`)) return;
+        const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/revisions/${btn.dataset.pbRestore}/restore`, { method: "POST" });
+        const j = await r.json().catch(()=>({}));
+        if (r.ok) { toast("已还原版本", "ok"); loadPlaybooks(); $("playbookMask").classList.remove("show"); }
+        else toast(j.error || "还原失败", "err");
+      };
+    });
+  } catch (e) { list.textContent = "版本历史加载失败"; }
 }
 
 // Show/hide the schedule sub-fields based on the enable toggle + selected kind.
@@ -2174,8 +2201,12 @@ async function loadSloTrend(){
   const body=$("sloTrendBody");
   body.innerHTML=`<div class="empty-line">${I18N.t("ui.loading","加载中…")}</div>`;
   const now=Math.floor(Date.now()/1000);
-  const from = custom ? custom.from : (range>0 ? now-range*3600 : now-30*86400);
-  const to = custom ? custom.to : now;
+  const anchorKey="slo-trend:"+id;
+  const rangeH=range>0?range:30*24;
+  const win=(typeof resolveAnchoredRange==="function")
+    ? resolveAnchoredRange(anchorKey, rangeH, custom)
+    : { from: custom ? custom.from : (range>0 ? now-range*3600 : now-30*86400), to: custom ? custom.to : now };
+  const from=win.from, to=win.to;
   const ctrl = `${renderChartControls(custom?-1:range,"slorange")}
     <button class="chip-btn ${custom?"active":""}" data-slo-custom-toggle title="${I18N.t("time.custom_range","自定义时间范围")}">${I18N.t("time.custom","自定义")}</button>
     ${typeof forecastChipHTML==="function"?forecastChipHTML("slo-trend"):""}
@@ -2185,8 +2216,13 @@ async function loadSloTrend(){
       <input type="datetime-local" id="sloCustomTo" class="dt-input" value="${toLocalDatetimeValue(to)}">
       <button class="chip-btn primary" data-slo-custom-apply>${I18N.t("time.custom_apply","应用")}</button>
     </span>`;
+  const load=(typeof beginRangeLoad==="function")
+    ? beginRangeLoad(anchorKey)
+    : { signal:undefined, isCurrent:()=>true };
   try{
-    const d=await fetch(`${API}/slos/${encodeURIComponent(id)}/trend?from=${from}&to=${to}`).then(r=>r.json());
+    const fetchOpts=load.signal?{signal:load.signal}:undefined;
+    const d=await fetch(`${API}/slos/${encodeURIComponent(id)}/trend?from=${from}&to=${to}`, fetchOpts).then(r=>r.json());
+    if(!load.isCurrent()) return;
     const trend=(d&&d.trend)||[], st=(d&&d.status)||{};
     if(!trend.length){
       body.innerHTML=`<div class="chart-controls">${ctrl}</div><div class="empty-line">该时间范围暂无数据（SLO 数据源运行 / 积累后出现）。</div>`;
@@ -2204,14 +2240,20 @@ async function loadSloTrend(){
       <div class="chart-container"><div class="chart-wrap"><div class="chart-sub-title">SLI 趋势（每桶可用率 %）</div><canvas id="sloTrendCanvas" width="1000" height="240"></canvas></div></div>
       <div class="hint">按所选时间范围分桶现算每段可用率；可切换快捷跨度或自定义绝对区间（与主机趋势图一致）。y 轴自适应放大以显现波动。</div>`;
     const ser=[{ key:"sli", label:I18N.t("sre.slo_sli","SLI"), color:"#4c8dff", fmt:v=>v.toFixed(3)+"%" }];
+    if(!load.isCurrent()) return;
     if(typeof createChartWithForecast==="function" && isChartForecastOn("slo-trend")){
       SLO_TREND_CHART = await createChartWithForecast("sloTrendCanvas", samples, ser, null, 100, {
-        title:"", legendMode:"dash", cssH:220, forecast:true, forecastScope:"slo-trend"
+        title:"", legendMode:"dash", cssH:220, forecast:true, forecastScope:"slo-trend",
+        signal:load.signal, isCurrent:load.isCurrent
       });
     } else {
       SLO_TREND_CHART = createChart("sloTrendCanvas", samples, ser, null, 100, { title: "", legendMode: "dash", cssH: 220 });
     }
-  }catch(e){ body.innerHTML=`<div class="empty-line">加载失败：${esc(e)}</div>`; }
+  }catch(e){
+    if(e && (e.name==="AbortError" || /aborted/i.test(String(e.message||e)))) return;
+    if(!load.isCurrent()) return;
+    body.innerHTML=`<div class="empty-line">加载失败：${esc(e)}</div>`;
+  }
 }
 function applySloCustomRange(){
   const fEl=$("sloCustomFrom"), tEl=$("sloCustomTo");
@@ -2226,7 +2268,13 @@ safeAddEventListener("sloTrendBody","click",e=>{
   if(tog){ const p=$("sloCustomPanel"); if(p) p.hidden=!p.hidden; return; }
   if(e.target.closest("[data-slo-custom-apply]")){ applySloCustomRange(); return; }
   const rb=e.target.closest(".chip-btn[data-slorange]");
-  if(rb){ SLO_TREND.custom=null; SLO_TREND.range=parseInt(rb.dataset.slorange); loadSloTrend(); return; }
+  if(rb){
+    const next=parseInt(rb.dataset.slorange);
+    if(SLO_TREND.custom||SLO_TREND.range!==next){
+      if(typeof clearAnchoredRange==="function"&&SLO_TREND.id) clearAnchoredRange("slo-trend:"+SLO_TREND.id);
+    }
+    SLO_TREND.custom=null; SLO_TREND.range=next; loadSloTrend(); return;
+  }
 });
 
 /* ---- 工单 ---- */
@@ -3272,14 +3320,22 @@ async function loadMemories(){
 async function loadAIStats(){
   const el=$("aiStatsBody"); if(!el) return;
   const days=parseInt(($("aiStatsRange")&&$("aiStatsRange").value)||"7",10)||7;
+  const anchorKey="ai-usage:"+days;
+  const win=(typeof resolveAnchoredRange==="function")
+    ? resolveAnchoredRange(anchorKey, days*24, null)
+    : { from: Math.floor(Date.now()/1000)-days*86400, to: Math.floor(Date.now()/1000) };
+  const from=win.from, to=win.to;
+  const load=(typeof beginRangeLoad==="function")
+    ? beginRangeLoad(anchorKey)
+    : { signal:undefined, isCurrent:()=>true };
   try{
-    const from=Math.floor(Date.now()/1000)-days*86400;
-    const to=Math.floor(Date.now()/1000);
+    const fo=load.signal?{signal:load.signal}:undefined;
     const [j, hist, byUser]=await Promise.all([
-      fetch(`${API}/ai/stats?days=${days}`).then(r=>r.json()),
-      fetch(`${API}/ai/usage/history?from=${from}&to=${to}`).then(r=>r.json()).catch(()=>({points:[]})),
-      fetch(`${API}/ai/usage/by-user?from=${from}&to=${to}&limit=15`).then(r=>r.json()).catch(()=>({users:[]})),
+      fetch(`${API}/ai/stats?days=${days}`, fo).then(r=>r.json()),
+      fetch(`${API}/ai/usage/history?from=${from}&to=${to}`, fo).then(r=>r.json()).catch(()=>({points:[]})),
+      fetch(`${API}/ai/usage/by-user?from=${from}&to=${to}&limit=15`, fo).then(r=>r.json()).catch(()=>({users:[]})),
     ]);
+    if(!load.isCurrent()) return;
     const total=j.total||0, fail=j.fail||0;
     const rate=total?((j.fail_rate||0)*100).toFixed(1):"0.0";
     const avg=j.avg_latency_ms||0;
@@ -3332,18 +3388,44 @@ async function loadAIStats(){
           </tbody></table>`;
       }
     }catch(_e){}
+    let auditCard="";
+    try{
+      const av=await fetch(`${API}/audit/verify-chain?limit=200`).then(r=>r.json()).catch(()=>null);
+      if(av){
+        const deg=av.secret_degraded?" · 密钥降级(未设 AIOPS_SECRET_KEY)":"";
+        auditCard=`<div class="hint" style="margin:8px 0">审计链：${av.ok?"完整":"异常"} · 已校验 ${av.checked||0}${deg}${av.detail&&!av.ok?" · "+esc(av.detail):""}</div>`;
+      }
+    }catch(_e){}
+    const tco=j.tco||{};
+    const dailyAvg=Number(tco.daily_avg_cost!=null?tco.daily_avg_cost:(cost/Math.max(1,days)))||0;
+    const byTaskCost=j.by_task_cost||{};
+    const taskCostRows=Object.keys(byTaskCost).sort((a,b)=>(byTaskCost[b].cost||0)-(byTaskCost[a].cost||0)).slice(0,12).map(k=>{
+      const t=byTaskCost[k]||{};
+      return `<tr><td class="mono">${esc(k)}</td><td>${t.count||0}</td><td>${t.tokens||0}</td><td>${(t.cost||0).toFixed(4)} ${esc(cur)}</td></tr>`;
+    }).join("");
+    const modelCostTotal=Object.values(byModel).reduce((s,m)=>s+(Number(m.cost)||0),0)||1;
+    const modelCostBars=modelKeys.slice(0,8).map(k=>{
+      const t=byModel[k]||{};
+      const pct=Math.max(4, Math.round(((Number(t.cost)||0)/modelCostTotal)*100));
+      return `<div style="margin:4px 0"><div class="mono" style="font-size:11px;display:flex;justify-content:space-between"><span>${esc(k)}</span><span>${(Number(t.cost)||0).toFixed(4)} ${esc(cur)} (${pct}%)</span></div>
+        <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:#f97316"></div></div></div>`;
+    }).join("");
     el.innerHTML=`<div class="ai-metric-grid">
       <div class="ai-metric"><div class="hint">调用次数</div><b>${total}</b></div>
       <div class="ai-metric"><div class="hint">失败率</div><b>${rate}%</b></div>
       <div class="ai-metric"><div class="hint">平均延迟</div><b>${avg}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ms</span></b></div>
       <div class="ai-metric"><div class="hint">Token</div><b>${tok}</b></div>
-      <div class="ai-metric"><div class="hint">估算费用</div><b>${cost.toFixed(4)}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ${esc(cur)}</span></b></div>
+      <div class="ai-metric"><div class="hint">区间 TCO</div><b>${cost.toFixed(4)}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ${esc(cur)}</span></b></div>
+      <div class="ai-metric"><div class="hint">日均成本</div><b>${dailyAvg.toFixed(4)}<span style="font-size:11px;font-weight:500;color:var(--muted)"> ${esc(cur)}/天</span></b></div>
       <div class="ai-metric"><div class="hint">存储</div><b style="font-size:13px">${persisted?"PostgreSQL":"进程内"}</b></div>
       <div class="ai-metric" title="采纳、点赞与差评的人工质量信号"><div class="hint">人工反馈</div><b>${fbTotal}</b></div>
       <div class="ai-metric" title="（实际应用 + 有用）/ 全部人工反馈"><div class="hint">正向反馈率</div><b>${fbPositive}%</b></div>
       <div class="ai-metric" title="真正应用到配置或输入框的结果"><div class="hint">实际采纳</div><b>${fbApplied}</b></div>
       <div class="ai-metric" title="将形成避坑经验，不直接污染已验证知识"><div class="hint">需改进</div><b>${fbUnhelpful}</b></div>
     </div>
+    ${auditCard}
+    ${modelCostBars?`<div class="hint">模型成本占比（TCO）</div><div style="margin-bottom:10px">${modelCostBars}</div>`:""}
+    ${taskCostRows?`<div class="hint">任务成本 Top</div><table class="hv-mini-table" style="width:100%;margin-bottom:10px"><thead><tr><th>任务</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${taskCostRows}</tbody></table>`:""}
     <div class="chart-container ai-usage-chart" style="margin:4px 0 12px">
       <div class="hint" style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span>历史组合曲线 · 调用 / Token / 费用</span>
@@ -3372,14 +3454,18 @@ async function loadAIStats(){
       { key:"cost", label:`费用(${cur})`, color:"#f97316", fmt:v=>v.toFixed(4) },
     ];
     // 外层 hint 已标明「历史组合曲线」，画布不再重复标题
+    if(!load.isCurrent()) return;
     if(typeof createChartWithForecast==="function" && typeof isChartForecastOn==="function" && isChartForecastOn("ai-usage")){
       await createChartWithForecast("aiUsageComboChart", samples, aiSer, 0, null, {
-        title:"", noEntrance:true, cssH:240, legendMode:"dash", forecast:true, forecastScope:"ai-usage"
+        title:"", noEntrance:true, cssH:240, legendMode:"dash", forecast:true, forecastScope:"ai-usage",
+        signal:load.signal, isCurrent:load.isCurrent
       });
     } else if(typeof createChart==="function"){
       createChart("aiUsageComboChart", samples, aiSer, 0, null, { title:"", noEntrance:true, cssH:240, legendMode:"dash" });
     }
   }catch(e){
+    if(e && (e.name==="AbortError" || /aborted/i.test(String(e.message||e)))) return;
+    if(!load.isCurrent()) return;
     el.innerHTML=`<div class="hint">${I18N.t("sre.load_failed","加载失败")}：${esc(String(e))}</div>`;
   }
 }
@@ -3468,6 +3554,7 @@ async function openAIConfig(){
     ["embedCardBody","rerankCardBody","mcpCardBody","weknoraCardBody"].forEach(id=>{ const el=$(id); if(el) el.style.display=""; });
     switchAISettingsTab("provider");
     loadAIStats();
+    loadABExperiments();
   } catch(e){}
   if(editable) loadAIModels();
   applyAIConfigEditMode(editable);
@@ -3485,7 +3572,7 @@ function switchAISettingsTab(tab){
   document.querySelectorAll(".ai-panel").forEach(p=>{
     p.classList.toggle("active", p.getAttribute("data-ai-panel")===name);
   });
-  if(name==="observe") loadAIStats();
+  if(name==="observe"){ loadAIStats(); loadABExperiments(); }
 }
 // ===== AI 终端只读巡检权限：独立开关，开启需终端连接密码 =====
 let AI_TERM_ENABLED=false;
@@ -4220,8 +4307,15 @@ async function handleAIChatAction(a){
   }
   if(a.type==="navigate_view"&&a.view){
     try{
+      const view=String(a.view);
+      // Client soft allowlist mirroring server uiViewCatalog (unknown views ignored).
+      const known=typeof PAGE_META==="object"&&PAGE_META?Object.keys(PAGE_META):null;
+      if(known&&known.length&&!known.includes(view)&&typeof switchView==="function"){
+        // still try switchView — PAGE_META may use different keys; block obvious path injection
+        if(/[\/\\]/.test(view)||view.length>64){ if(typeof toast==="function") toast(I18N.t("sre.invalid_view","非法视图"),"err"); return; }
+      }
       const mask=$("aiChatMask"); if(mask) mask.classList.remove("show");
-      if(typeof switchView==="function") switchView(String(a.view));
+      if(typeof switchView==="function") switchView(view);
       const title=a.title||a.label||a.view;
       if(typeof toast==="function") toast(I18N.t("sre.opened_view","已打开界面")+" · "+title,"ok");
     }catch(e){ if(typeof toast==="function") toast(String(e),"err"); }
@@ -4919,8 +5013,49 @@ safeAddEventListener("skillsShowArchived","change",loadSkills);
 safeAddEventListener("memoryBtn","click",openMemories);
 safeAddEventListener("memoryKindFilter","change",loadMemories);
 safeAddEventListener("memoryVerifiedFilter","change",loadMemories);
-safeAddEventListener("aiStatsRefreshBtn","click",loadAIStats);
-safeAddEventListener("aiStatsRange","change",loadAIStats);
+async function loadABExperiments(){
+  const el=$("abExpList"); if(!el) return;
+  try{
+    const j=await fetch(`${API}/ai/experiments`).then(r=>r.json());
+    const list=j.experiments||[];
+    if(!list.length){ el.textContent="暂无实验定义"; return; }
+    el.innerHTML=list.map(e=>{
+      const vars=Object.entries(e.variants||{}).map(([k,v])=>`${k}:${v}%`).join(" ");
+      return `<div class="sre-row" style="padding:6px 0"><div class="sre-row-main"><div class="mono">${esc(e.id)} · ${esc(e.name||"")}${e.enabled?"":" · 停用"}</div>
+        <div class="sre-row-sub">${esc(e.task||"全部任务")} · ${esc(vars)}</div></div>
+        <button class="btn danger sm" type="button" data-ab-del="${esc(e.id)}">删除</button></div>`;
+    }).join("");
+    el.querySelectorAll("[data-ab-del]").forEach(btn=>{
+      btn.onclick=async()=>{
+        if(!confirm("删除实验 "+btn.dataset.abDel+"？")) return;
+        const r=await fetch(`${API}/ai/experiments/${encodeURIComponent(btn.dataset.abDel)}`,{method:"DELETE"});
+        if(r.ok){ toast("已删除","ok"); loadABExperiments(); } else toast("删除失败","err");
+      };
+    });
+  }catch(e){ el.textContent="加载失败"; }
+}
+async function saveABExperiment(){
+  let variants={}, models={};
+  try{ variants=JSON.parse(($("abExpVariants")&&$("abExpVariants").value)||'{"control":50,"treatment":50}'); }catch(e){ toast("变体 JSON 无效","err"); return; }
+  try{ const raw=($("abExpModels")&&$("abExpModels").value||"").trim(); if(raw) models=JSON.parse(raw); }catch(e){ toast("模型映射 JSON 无效","err"); return; }
+  const id=($("abExpId")&&$("abExpId").value||"").trim();
+  if(!id){ toast("请填写实验 ID","err"); return; }
+  const body={ id, name:($("abExpName")&&$("abExpName").value||id).trim(), task:($("abExpTask")&&$("abExpTask").value||"").trim(),
+    enabled:!!($("abExpEnabled")&&$("abExpEnabled").checked), variants, variant_models:models };
+  const r=await fetch(`${API}/ai/experiments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(r.ok){ toast("实验已保存","ok"); loadABExperiments(); } else toast(j.error||"保存失败","err");
+}
+safeAddEventListener("abExpSaveBtn","click",saveABExperiment);
+safeAddEventListener("abExpRefreshBtn","click",loadABExperiments);
+safeAddEventListener("aiStatsRefreshBtn","click",()=>{ loadAIStats(); loadABExperiments(); });
+safeAddEventListener("aiStatsRange","change",()=>{
+  const days=parseInt(($("aiStatsRange")&&$("aiStatsRange").value)||"7",10)||7;
+  if(typeof clearAnchoredRange==="function") clearAnchoredRange("ai-usage:"+days);
+  // Also clear other day anchors so switching ranges always re-freezes to now.
+  [1,3,7,14,30].forEach(d=>{ if(d!==days&&typeof clearAnchoredRange==="function") clearAnchoredRange("ai-usage:"+d); });
+  loadAIStats();
+});
 safeAddEventListener("aiConfigBtn","click",openAIConfig);
 safeAddEventListener("aiChatSettingsBtn","click",openAIConfig);
 safeAddEventListener("settingsAiConfigBtn","click",()=>{

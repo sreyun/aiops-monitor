@@ -26,7 +26,7 @@ INSERT INTO ai_call_events(
 		st.MemHits, st.SkillHits, st.ReplyChars, st.ApproxTokens,
 		st.PromptTokens, st.CompletionTokens, st.CostEstimate)
 	if err != nil {
-		slog.Warn("PG 写 AI 调用观测失败", "err", err)
+		slog.Warn("PG ? AI ??????", "err", err)
 	}
 	// Dual-track partitioned table (best-effort).
 	_, _ = p.db.Exec(`
@@ -52,7 +52,7 @@ INSERT INTO ai_feedback_events(ts, task, actor, action, source_hash)
 VALUES ($1,$2,$3,$4,$5)`,
 		time.Now().Unix(), task, actor, action, sourceHash)
 	if err != nil {
-		slog.Warn("PG 写 AI 反馈观测失败", "err", err)
+		slog.Warn("PG ? AI ??????", "err", err)
 		return false
 	}
 	return true
@@ -80,9 +80,9 @@ SELECT COUNT(*),
        COALESCE(SUM(latency_ms),0),
        COALESCE(SUM(approx_tokens),0),
        COALESCE(SUM(cost_estimate),0)
-FROM ai_call_events WHERE ts >= $1`, sinceTs).Scan(&total, &fail, &sumLat, &sumTok, &sumCost)
+FROM ai_call_events_p WHERE ts >= $1`, sinceTs).Scan(&total, &fail, &sumLat, &sumTok, &sumCost)
 	if err != nil {
-		slog.Warn("PG 聚合 AI 调用失败", "err", err)
+		slog.Warn("PG ?? AI ????", "err", err)
 		out["persisted"] = false
 		return out
 	}
@@ -103,7 +103,7 @@ SELECT task,
        COUNT(*),
        COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
        COALESCE(AVG(latency_ms),0)
-FROM ai_call_events WHERE ts >= $1
+FROM ai_call_events_p WHERE ts >= $1
 GROUP BY task ORDER BY COUNT(*) DESC`, sinceTs)
 	if err == nil {
 		defer rows.Close()
@@ -129,7 +129,7 @@ GROUP BY task ORDER BY COUNT(*) DESC`, sinceTs)
 SELECT ts, task, model, actor, latency_ms, ok, COALESCE(error,''),
        memory_hits, skill_hits, reply_chars, approx_tokens,
        prompt_tokens, completion_tokens, cost_estimate
-FROM ai_call_events WHERE ts >= $1
+FROM ai_call_events_p WHERE ts >= $1
 ORDER BY id DESC LIMIT $2`, sinceTs, recentLimit)
 	if err == nil {
 		defer rrows.Close()
@@ -167,7 +167,7 @@ SELECT COUNT(*),
 FROM ai_feedback_events WHERE ts >= $1`, sinceTs).
 		Scan(&a.Total, &a.Applied, &a.Helpful, &a.Unhelpful)
 	if err != nil {
-		slog.Warn("PG 聚合 AI 反馈失败", "err", err)
+		slog.Warn("PG ?? AI ????", "err", err)
 		out["feedback_persisted"] = false
 		return out
 	}
@@ -238,12 +238,12 @@ SELECT EXTRACT(EPOCH FROM date_trunc('` + trunc + `', to_timestamp(ts)))::bigint
        COALESCE(SUM(approx_tokens),0),
        COALESCE(SUM(cost_estimate),0),
        COALESCE(AVG(latency_ms),0)::bigint
-FROM ai_call_events
+FROM ai_call_events_p
 WHERE ts >= $1 AND ts <= $2
 GROUP BY 1 ORDER BY 1`
 	rows, err := p.db.Query(q, fromTs, toTs)
 	if err != nil {
-		slog.Warn("PG 查询 AI 用量历史失败", "err", err)
+		slog.Warn("PG ?? AI ??????", "err", err)
 		return nil
 	}
 	defer rows.Close()
@@ -281,11 +281,11 @@ SELECT COALESCE(NULLIF(TRIM(actor),''),'(system)') AS actor,
        COALESCE(SUM(approx_tokens),0),
        COALESCE(SUM(cost_estimate),0),
        COALESCE(AVG(latency_ms),0)::bigint
-FROM ai_call_events
+FROM ai_call_events_p
 WHERE ts >= $1 AND ts <= $2
 GROUP BY 1 ORDER BY SUM(approx_tokens) DESC NULLS LAST LIMIT $3`, fromTs, toTs, limit)
 	if err != nil {
-		slog.Warn("PG 查询 AI 用户用量失败", "err", err)
+		slog.Warn("PG ?? AI ??????", "err", err)
 		return nil
 	}
 	defer rows.Close()
@@ -304,6 +304,11 @@ func (p *pgStore) cleanupAICallEvents(retainDays int) {
 	if retainDays <= 0 {
 		retainDays = 365
 	}
+	months := retainDays/30 + 1
+	if months < 2 {
+		months = 2
+	}
+	p.cleanupOldTSPartitions("ai_call_events_p", months)
 	cut := time.Now().AddDate(0, 0, -retainDays).Unix()
 	_, _ = p.db.Exec(`DELETE FROM ai_call_events WHERE ts > 0 AND ts < $1`, cut)
 	_, _ = p.db.Exec(`DELETE FROM ai_feedback_events WHERE ts > 0 AND ts < $1`, cut)
@@ -351,10 +356,17 @@ func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
 		}
 		out["days"] = days
 		out["by_model"] = s.pg.aiCallByModelFromPG(since)
+		out["by_task_cost"] = s.pg.aiCallByTaskCostFromPG(since)
 		cfg := s.cfg.AIConfig()
 		out["cost_currency"] = cfg.CostCurrency
 		if out["cost_currency"] == "" {
 			out["cost_currency"] = "CNY"
+		}
+		costTotal, _ := out["cost_total"].(float64)
+		out["tco"] = map[string]any{
+			"total_cost":     costTotal,
+			"daily_avg_cost": costTotal / float64(days),
+			"days":           days,
 		}
 		writeJSON(w, http.StatusOK, out)
 		return
@@ -480,7 +492,7 @@ func (p *pgStore) queryTerminalCommands(fromTs, toTs int64, host, actor, q strin
 		n++
 	}
 	var total int
-	_ = p.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE `+where, args...).Scan(&total)
+	_ = p.db.QueryRow(`SELECT COUNT(*) FROM audit_log_p WHERE `+where, args...).Scan(&total)
 
 	args = append(args, limit, offset)
 	rows, err := p.db.Query(`
@@ -489,10 +501,10 @@ SELECT COALESCE((data->>'timestamp')::bigint, ts),
        COALESCE(data->>'ip',''),
        COALESCE(data->>'host',''),
        COALESCE(data->>'message','')
-FROM audit_log WHERE `+where+`
+FROM audit_log_p WHERE `+where+`
 ORDER BY ts DESC LIMIT $`+strconv.Itoa(n)+` OFFSET $`+strconv.Itoa(n+1), args...)
 	if err != nil {
-		slog.Warn("PG 查询终端命令历史失败", "err", err)
+		slog.Warn("PG ??????????", "err", err)
 		return nil, total
 	}
 	defer rows.Close()
@@ -567,7 +579,7 @@ ON CONFLICT (id) DO UPDATE SET ts=EXCLUDED.ts, playbook_id=EXCLUDED.playbook_id,
   status=EXCLUDED.status, data=EXCLUDED.data`,
 		e.ID, ts, e.PlaybookID, e.Status, raw)
 	if err != nil {
-		slog.Warn("PG 写剧本执行失败", "err", err)
+		slog.Warn("PG ???????", "err", err)
 	}
 }
 
@@ -616,7 +628,7 @@ ON CONFLICT (id) DO UPDATE SET ts=EXCLUDED.ts, rule_id=EXCLUDED.rule_id,
   status=EXCLUDED.status, data=EXCLUDED.data`,
 		run.ID, ts, run.RuleID, run.Status, raw)
 	if err != nil {
-		slog.Warn("PG 写修复执行失败", "err", err)
+		slog.Warn("PG ???????", "err", err)
 	}
 }
 

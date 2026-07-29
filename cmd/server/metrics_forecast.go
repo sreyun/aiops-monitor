@@ -81,13 +81,13 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		if fromTS > nowTS {
 			nowTS = fromTS
 		}
-		learnKey := forecastMetricKey("metrics", name)
-		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, horizon, step, learnKey)
+		// UI path: empty learnKey + no calibration so the same history yields the same
+		// forecast (learning still runs for PromQL/dashboard paths).
+		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, horizon, step, "")
 		if errMsg != "" || len(fc) == 0 {
 			continue
 		}
 		last := pts[len(pts)-1]
-		fc, method, _ = s.finalizeForecastWithLearning(learnKey, method, "", fc, fromTS, horizon, step, last[1])
 		anyOK = true
 		if mape < bestMAPE {
 			bestMAPE, bestMethod = mape, method

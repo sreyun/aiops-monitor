@@ -325,8 +325,11 @@ async function loadAPIHistory() {
   const body = $("apiHistBody");
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading", "加载中…")}</div>`;
   const now = Math.floor(Date.now() / 1000);
-  const from = custom ? custom.from : (range > 0 ? now - range * 3600 : 0);
-  const to = custom ? custom.to : now;
+  const anchorKey = "apimon:" + id;
+  const win = (typeof resolveAnchoredRange === "function")
+    ? resolveAnchoredRange(anchorKey, range > 0 ? range : 1, custom)
+    : { from: custom ? custom.from : (range > 0 ? now - range * 3600 : now - 3600), to: custom ? custom.to : now };
+  const from = win.from, to = win.to;
   const ctrl = `${renderChartControls(custom ? -1 : range, "arange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-ahist-custom-toggle title="${I18N.t("time.custom_range", "自定义时间范围")}">${I18N.t("time.custom", "自定义")}</button>
     ${typeof forecastChipHTML === "function" ? forecastChipHTML("apimon") : ""}
@@ -337,11 +340,11 @@ async function loadAPIHistory() {
       <button class="chip-btn primary" data-ahist-custom-apply>${I18N.t("time.custom_apply", "应用")}</button>
     </span>`;
   const load = (typeof beginRangeLoad === "function")
-    ? beginRangeLoad("apimon:" + id)
+    ? beginRangeLoad(anchorKey)
     : { signal: undefined, isCurrent: () => true };
   try {
-    const sinceMin = custom ? Math.max(1, Math.ceil((now - from) / 60)) : (range > 0 ? range * 60 : 43200); // 43200min=30d
-    const r = await fetch(`${API}/apimon/endpoints/${encodeURIComponent(id)}/history?since_min=${sinceMin}`,
+    const sinceMin = Math.max(1, Math.ceil((to - from) / 60));
+    const r = await fetch(`${API}/apimon/endpoints/${encodeURIComponent(id)}/history?since_min=${sinceMin}&from=${from}&to=${to}`,
       load.signal ? { signal: load.signal } : undefined);
     if (!load.isCurrent()) return;
     const all = await r.json().catch(() => []);
@@ -393,10 +396,13 @@ async function loadAPIHistory() {
         { key: "resp_kb", label: "响应体", color: "#06b6d4", fmt: v => v.toFixed(1) + " KB" },
       ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
     ];
+    if (!load.isCurrent()) return;
     API_HIST_CHARTS = typeof mountChartsWithForecast === "function"
-      ? await mountChartsWithForecast("apimon", specs)
+      ? await mountChartsWithForecast("apimon", specs, load)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
+    if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+    if (!load.isCurrent()) return;
     body.innerHTML = `<div class="empty-line">加载失败: ${esc(e)}</div>`;
   }
 }
@@ -503,7 +509,13 @@ safeAddEventListener("apiHistBody", "click", e => {
   if (tog) { const p = $("ahistCustomPanel"); if (p) p.hidden = !p.hidden; return; }
   if (e.target.closest("[data-ahist-custom-apply]")) { applyAhistCustomRange(); return; }
   const rb = e.target.closest(".chip-btn[data-arange]");
-  if (rb) { API_HIST.custom = null; API_HIST.range = parseInt(rb.dataset.arange); loadAPIHistory(); return; }
+  if (rb) {
+    const next = parseInt(rb.dataset.arange);
+    if (API_HIST.custom || API_HIST.range !== next) {
+      if (typeof clearAnchoredRange === "function" && API_HIST.id) clearAnchoredRange("apimon:" + API_HIST.id);
+    }
+    API_HIST.custom = null; API_HIST.range = next; loadAPIHistory(); return;
+  }
   const en = e.target.closest(".chart-enlarge"); if (!en) return;
   const ch = API_HIST_CHARTS[en.dataset.chart]; if (ch) openChartZoom(ch);
 });

@@ -399,17 +399,26 @@ async function nfLoadIPHistory() {
   if (!body) return;
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading") || "加载中…"}</div>`;
   const now = Math.floor(Date.now() / 1000);
-  const from = nfIPHist.custom ? nfIPHist.custom.from : now - nfIPHist.range * 3600;
-  const to = nfIPHist.custom ? nfIPHist.custom.to : now;
+  const anchorKey = "netflow:" + (nfIPHist.host || "") + ":" + (nfIPHist.ip || "") + ":" + (nfIPHist.dimension || "");
+  const win = (typeof resolveAnchoredRange === "function")
+    ? resolveAnchoredRange(anchorKey, nfIPHist.range > 0 ? nfIPHist.range : 1, nfIPHist.custom)
+    : { from: nfIPHist.custom ? nfIPHist.custom.from : now - nfIPHist.range * 3600, to: nfIPHist.custom ? nfIPHist.custom.to : now };
+  const from = win.from, to = win.to;
   const q = new URLSearchParams({
     host: nfIPHist.host, ip: nfIPHist.ip, dimension: nfIPHist.dimension,
     from: String(from), to: String(to),
   });
+  const load = (typeof beginRangeLoad === "function")
+    ? beginRangeLoad(anchorKey)
+    : { signal: undefined, isCurrent: () => true };
   try {
-    const data = await fetch(`${API}/netflow/ip-history?${q}`, { credentials: "same-origin" }).then(r => {
+    const opts = { credentials: "same-origin" };
+    if (load.signal) opts.signal = load.signal;
+    const data = await fetch(`${API}/netflow/ip-history?${q}`, opts).then(r => {
       if (!r.ok) throw new Error(r.statusText);
       return r.json();
     });
+    if (!load.isCurrent()) return;
     const samples = data.points || [];
     const controls = nfHistoryControls(from, to);
     if (!samples.length) {
@@ -445,10 +454,13 @@ async function nfLoadIPHistory() {
         { key: "avg_packet_bytes", label: I18N.t("netflow.avg_pkt", "平均包长"), color: "#e06c9a", fmt: v => v.toFixed(0) + " B" },
       ], yMin: 0, yMax: null, opts: nfOpts(I18N.t("netflow.packet_size_history", "平均包长")) },
     ];
+    if (!load.isCurrent()) return;
     nfIPCharts = typeof mountChartsWithForecast === "function"
-      ? await mountChartsWithForecast("netflow", specs)
+      ? await mountChartsWithForecast("netflow", specs, load)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
+    if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+    if (!load.isCurrent()) return;
     body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
   }
 }
@@ -490,7 +502,14 @@ safeAddEventListener("netflowPanel", "click", e => {
 });
 safeAddEventListener("networkHistBody", "click", e => {
   const range = e.target.closest("[data-nfhrange]");
-  if (range) { nfIPHist.range = parseInt(range.dataset.nfhrange); nfIPHist.custom = null; nfLoadIPHistory(); return; }
+  if (range) {
+    const next = parseInt(range.dataset.nfhrange);
+    const anchorKey = "netflow:" + (nfIPHist.host || "") + ":" + (nfIPHist.ip || "") + ":" + (nfIPHist.dimension || "");
+    if (nfIPHist.custom || nfIPHist.range !== next) {
+      if (typeof clearAnchoredRange === "function") clearAnchoredRange(anchorKey);
+    }
+    nfIPHist.range = next; nfIPHist.custom = null; nfLoadIPHistory(); return;
+  }
   if (e.target.closest("[data-nfh-custom-toggle]")) {
     const p = $("nfhCustomPanel"); if (p) p.hidden = !p.hidden;
     return;

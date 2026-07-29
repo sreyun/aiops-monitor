@@ -116,6 +116,55 @@ func TestHandleMetricsForecastCapsSeries(t *testing.T) {
 	}
 }
 
+func TestHandleMetricsForecastDeterministic(t *testing.T) {
+	srv, _ := newTestServer(t)
+	now := int64(1_700_000_000)
+	step := int64(60)
+	pts := make([][2]float64, 0, 40)
+	for i := 0; i < 40; i++ {
+		pts = append(pts, [2]float64{float64(now - int64(40-i)*step), 20 + float64(i)*0.3})
+	}
+	body := map[string]any{
+		"series":      []map[string]any{{"name": "cpu_percent", "points": pts}},
+		"horizon_sec": 20 * step,
+		"step":        step,
+	}
+	raw, _ := json.Marshal(body)
+	call := func() [][2]float64 {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/forecast", bytes.NewReader(raw))
+		rr := httptest.NewRecorder()
+		srv.handleMetricsForecast(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		var res struct {
+			Series []struct {
+				Kind   string       `json:"kind"`
+				Points [][2]float64 `json:"points"`
+			} `json:"series"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		for _, s := range res.Series {
+			if s.Kind == "forecast" {
+				return s.Points
+			}
+		}
+		t.Fatal("no forecast series")
+		return nil
+	}
+	a, b := call(), call()
+	if len(a) != len(b) {
+		t.Fatalf("length mismatch %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i][0] != b[i][0] || a[i][1] != b[i][1] {
+			t.Fatalf("non-deterministic at %d: %v vs %v", i, a[i], b[i])
+		}
+	}
+}
+
 func TestHandleMetricsForecastRejectsEmpty(t *testing.T) {
 	srv, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/forecast", bytes.NewReader([]byte(`{"series":[]}`)))

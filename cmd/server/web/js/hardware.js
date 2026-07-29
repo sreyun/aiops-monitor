@@ -939,6 +939,10 @@ async function loadHwHistory() {
   const hostID = HW_CUR.host.id, target = HW_CUR.snap.target_name || "";
   HW_CHARTS = {};
   HW_HIST_SUMMARY = {};
+  const loadKey = "hardware:" + hostID + ":" + (target || "") + ":" + HW_HIST_RANGE;
+  const load = (typeof beginRangeLoad === "function")
+    ? beginRangeLoad(loadKey)
+    : { signal: undefined, isCurrent: () => true };
   const specs = [
     ["hwChartTemp", "temperature", hwT("hardware.temperature", "温度传感器") + " (°C)", v => v.toFixed(0) + "°C"],
     ["hwChartFan", "fan_rpm", hwT("hardware.fans", "风扇") + " (RPM)", v => v.toFixed(0)],
@@ -949,8 +953,10 @@ async function loadHwHistory() {
     try {
       const qs = new URLSearchParams({ host: hostID, metric, range: HW_HIST_RANGE });
       if (target) qs.set("target", target);
-      const d = await fetch(`${API}/hardware/history?${qs}`).then(r => r.json());
-      const series = hwParseSeries(d.points || []);
+      const fetchOpts = load.signal ? { signal: load.signal } : undefined;
+      const d = await fetch(`${API}/hardware/history?${qs}`, fetchOpts).then(r => r.json());
+      if (!load.isCurrent()) return;
+      const series = hwParseSeries(d.points || []).sort((a, b) => String(a.name).localeCompare(String(b.name)));
       // 汇总该指标历史概况（min/max/avg/最新），供导出的「历史概况」段——补上导出此前缺失的历史数据
       const allVals = series.flatMap(s => s.pts.map(p => p[1])).filter(v => !isNaN(v));
       if (allVals.length) {
@@ -963,6 +969,7 @@ async function loadHwHistory() {
         };
       }
       if (!series.length) {
+        if (!load.isCurrent()) return;
         const c = $(cid);
         if (c) drawChartEmpty(c.getContext("2d"), c.getBoundingClientRect().width || 1000, 200,
           hwT("hardware.no_history", "暂无历史数据（需等待采集积累）"));
@@ -980,13 +987,18 @@ async function loadHwHistory() {
       const defs = series.slice(0, 8).map((s, i) => ({
         key: "v" + i, label: s.name, color: palette[i % palette.length], fmt,
       }));
-      const opts = { title, legendMode: defs.length >= 4 ? "dash" : "full", cssH: 210, forecastScope: "hardware" };
+      const opts = { title, legendMode: defs.length >= 4 ? "dash" : "full", cssH: 210, forecastScope: "hardware",
+        signal: load.signal, isCurrent: load.isCurrent };
+      if (!load.isCurrent()) return;
       if (typeof createChartWithForecast === "function" && typeof isChartForecastOn === "function" && isChartForecastOn("hardware")) {
         HW_CHARTS[cid] = await createChartWithForecast(cid, samples, defs, null, null, Object.assign({}, opts, { forecast: true }));
       } else {
         HW_CHARTS[cid] = createChart(cid, samples, defs, null, null, opts);
       }
-    } catch (e) { /* 单图失败不影响其它图 */ }
+    } catch (e) {
+      if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+      /* 单图失败不影响其它图 */
+    }
   }));
 }
 document.addEventListener("chart-forecast-toggle", (ev) => {

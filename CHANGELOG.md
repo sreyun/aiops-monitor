@@ -11,6 +11,16 @@
 
 ---
 
+## [v0.19.43] — 2026-07-29
+
+### 变更
+
+- **企业级治理补齐**：公开 Status Page（`/status` + JSON API）、Playbook 版本快照/diff/还原、工单 SLA（时限 + OnCall 自动指派 + 违约巡检）、备份远程 S3/OSS 上传、配置密钥自动轮换（密钥库 + 定时/手动 ROTATE）。
+- **AI 治理增强**：输出层 ops action 白名单校验；TaskModels 智能路由；A/B 实验 CRUD UI + 变体模型覆盖；AI 成本 TCO 看板；高风险助手 MoA/SelfVerify 编排对齐。
+- **数据与安全**：`ai_call_events`/`audit_log`/`events` 按月分区；审计链 HMAC + 校验 API；主机趋势/多图表竞态与预测确定性修复。
+
+---
+
 ## [v0.19.42] — 2026-07-29
 
 ### 变更

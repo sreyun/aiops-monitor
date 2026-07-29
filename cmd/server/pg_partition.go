@@ -136,4 +136,97 @@ func (p *pgStore) migrateDualTrackPartitions() {
 	p.ensureTSPartitions("audit_log_p", 3)
 	p.ensureTSPartitions("events_p", 3)
 	p.ensureTSPartitions("ai_call_events_p", 3)
+	p.backfillPartitionTwins()
+	p.tryRevokeAuditMutations()
+}
+
+// backfillPartitionTwins copies legacy rows into partitioned twins (idempotent by id+ts).
+func (p *pgStore) backfillPartitionTwins() {
+	if p == nil || p.db == nil {
+		return
+	}
+	stmts := []string{
+		`INSERT INTO audit_log_p(id, ts, data, content_hash, prev_hash, chain_seq)
+SELECT a.id, a.ts, a.data, COALESCE(a.content_hash,''), COALESCE(a.prev_hash,''), COALESCE(a.chain_seq,0)
+FROM audit_log a
+WHERE NOT EXISTS (SELECT 1 FROM audit_log_p p WHERE p.id=a.id AND p.ts=a.ts)
+LIMIT 50000`,
+		`INSERT INTO events_p(id, ts, data)
+SELECT e.id, e.ts, e.data FROM events e
+WHERE NOT EXISTS (SELECT 1 FROM events_p p WHERE p.id=e.id AND p.ts=e.ts)
+LIMIT 50000`,
+		`INSERT INTO ai_call_events_p(
+  id, ts, task, model, actor, latency_ms, ok, error,
+  memory_hits, skill_hits, reply_chars, approx_tokens,
+  prompt_tokens, completion_tokens, cost_estimate)
+SELECT a.id, a.ts, a.task, a.model, a.actor, a.latency_ms, a.ok, a.error,
+  a.memory_hits, a.skill_hits, a.reply_chars, a.approx_tokens,
+  a.prompt_tokens, a.completion_tokens, a.cost_estimate
+FROM ai_call_events a
+WHERE NOT EXISTS (SELECT 1 FROM ai_call_events_p p WHERE p.id=a.id AND p.ts=a.ts)
+LIMIT 50000`,
+	}
+	for _, s := range stmts {
+		if _, err := p.db.Exec(s); err != nil {
+			slog.Debug("partition backfill", "err", err)
+		}
+	}
+}
+
+// tryRevokeAuditMutations best-effort append-only hardening (no-op for superusers).
+func (p *pgStore) tryRevokeAuditMutations() {
+	if p == nil || p.db == nil {
+		return
+	}
+	for _, s := range []string{
+		`REVOKE UPDATE, DELETE ON audit_log_p FROM CURRENT_USER`,
+		`REVOKE UPDATE, DELETE ON audit_log FROM CURRENT_USER`,
+	} {
+		if _, err := p.db.Exec(s); err != nil {
+			slog.Debug("audit revoke", "err", err)
+		}
+	}
+}
+
+// cleanupOldTSPartitions drops monthly child partitions older than retainMonths.
+func (p *pgStore) cleanupOldTSPartitions(parent string, retainMonths int) {
+	if p == nil || p.db == nil || parent == "" {
+		return
+	}
+	if retainMonths <= 0 {
+		retainMonths = 12
+	}
+	p.ensureTSPartitions(parent, 3)
+	cut := time.Now().UTC().AddDate(0, -retainMonths, 0)
+	cutYM := cut.Year()*100 + int(cut.Month())
+	rows, err := p.db.Query(`
+SELECT c.relname FROM pg_class c
+JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class par ON par.oid = i.inhparent
+WHERE par.relname = $1 AND c.relkind = 'r'`, parent)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	prefix := parent + "_"
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) != nil || !isSafePartitionName(name, parent) {
+			continue
+		}
+		if strings.HasSuffix(name, "_default") {
+			continue
+		}
+		ymStr := strings.TrimPrefix(name, prefix)
+		ym, err := strconv.Atoi(ymStr)
+		if err != nil || ym < 197001 || ym >= cutYM {
+			continue
+		}
+		ddl := fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteIdent(name))
+		if _, err := p.db.Exec(ddl); err != nil {
+			slog.Warn("drop old partition", "table", name, "err", err)
+		} else {
+			slog.Info("dropped old partition", "table", name)
+		}
+	}
 }

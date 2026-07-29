@@ -2264,18 +2264,57 @@
         <div class="mfa-foot"><button class="btn primary sm" id="cmdPolSaveBtn" type="button">保存命令策略</button></div>
 
         <div class="subhead">PostgreSQL 自动备份</div>
-        <div class="hint">依赖主机 PATH 中的 <code>pg_dump</code> / <code>pg_restore</code>。备份目录默认 <code>./backups</code>（可用环境变量 AIOPS_BACKUP_DIR）。还原会覆盖当前库，需二次确认并建议随后重启服务。</div>
+        <div class="hint">依赖主机 PATH 中的 <code>pg_dump</code> / <code>pg_restore</code>。备份目录默认 <code>./backups</code>（可用环境变量 AIOPS_BACKUP_DIR）。可同步上传到 S3/OSS 兼容对象存储。还原会覆盖当前库，需二次确认并建议随后重启服务。</div>
         <div class="grid2">
           <div class="field"><label class="switch"><input type="checkbox" id="bakEnabled"> 启用每日自动备份</label></div>
           <div class="field"><label>每日时刻（HH:MM）</label><input type="text" id="bakDailyAt" placeholder="02:30"></div>
           <div class="field"><label>保留份数</label><input type="number" id="bakRetain" min="1" placeholder="14"></div>
           <div class="field"><label>目录（可选）</label><input type="text" id="bakDir" placeholder="./backups"></div>
+          <div class="field"><label class="switch"><input type="checkbox" id="bakRemoteEnabled"> 上传到远程对象存储</label></div>
+          <div class="field"><label>Endpoint</label><input type="text" id="bakRemoteEndpoint" placeholder="https://s3.amazonaws.com 或 OSS/MinIO"></div>
+          <div class="field"><label>Bucket</label><input type="text" id="bakRemoteBucket" placeholder="aiops-backups"></div>
+          <div class="field"><label>Region</label><input type="text" id="bakRemoteRegion" placeholder="us-east-1"></div>
+          <div class="field"><label>Access Key</label><input type="text" id="bakRemoteAccessKey" autocomplete="off"></div>
+          <div class="field"><label>Secret Key</label><input type="password" id="bakRemoteSecretKey" autocomplete="off" placeholder="留空则保留原值"></div>
+          <div class="field"><label>对象前缀</label><input type="text" id="bakRemotePrefix" placeholder="pg/"></div>
         </div>
         <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap">
           <button class="btn primary sm" id="bakCfgSaveBtn" type="button">保存备份计划</button>
           <button class="btn sm" id="bakNowBtn" type="button">立即备份</button>
         </div>
         <div id="backupList" class="sre-list" style="margin-top:10px"></div>
+
+        <div class="subhead">对外 Status Page</div>
+        <div class="hint">公开地址 <code>/status</code>（HTML）与 <code>/api/v1/public/status</code>（JSON）。可选 Bearer/query token。</div>
+        <div class="grid2">
+          <div class="field"><label class="switch"><input type="checkbox" id="statusPageEnabled"> 启用公开状态页</label></div>
+          <div class="field"><label>标题</label><input type="text" id="statusPageTitle" placeholder="服务状态"></div>
+          <div class="field"><label>副标题</label><input type="text" id="statusPageSubtitle" placeholder="实时运维状态"></div>
+          <div class="field"><label>可选访问令牌</label><input type="text" id="statusPageToken" placeholder="留空=匿名可访问"></div>
+        </div>
+        <div class="mfa-foot"><button class="btn primary sm" id="statusPageSaveBtn" type="button">保存 Status Page</button></div>
+
+        <div class="subhead">工单 SLA</div>
+        <div class="hint">按优先级设置响应/解决时限（分钟），违约由后台巡检写入审计。新建工单可自动指派当前 OnCall。</div>
+        <div class="grid2">
+          <div class="field"><label class="switch"><input type="checkbox" id="ticketSlaAutoAssign" checked> 自动指派 OnCall</label></div>
+          <div class="field"><label>P1 响应/解决（分钟）</label><input type="text" id="ticketSlaP1" class="mono" placeholder="15/240"></div>
+          <div class="field"><label>P2 响应/解决（分钟）</label><input type="text" id="ticketSlaP2" class="mono" placeholder="60/1440"></div>
+          <div class="field"><label>P3 响应/解决（分钟）</label><input type="text" id="ticketSlaP3" class="mono" placeholder="240/4320"></div>
+        </div>
+        <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap">
+          <button class="btn primary sm" id="ticketSlaSaveBtn" type="button">保存工单 SLA</button>
+          <button class="btn sm" id="ticketSlaBreachBtn" type="button">查看违约</button>
+        </div>
+        <div id="ticketSlaBreachList" class="hint" style="margin-top:8px"></div>
+
+        <div class="subhead">配置密钥轮换</div>
+        <div class="hint">将生成新的 <code>enc:v2</code> 主密钥并写入密钥库（<code>AIOPS_SECRET_KEY_STORE</code>），旧密钥保留用于解密。需二次确认 <code>ROTATE</code>。</div>
+        <div id="secretRotateStatus" class="hint" style="margin-bottom:8px">加载中…</div>
+        <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap">
+          <button class="btn sm" id="secretRotateRefreshBtn" type="button">刷新状态</button>
+          <button class="btn danger sm" id="secretRotateBtn" type="button">立即轮换密钥</button>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
@@ -2899,6 +2938,10 @@
       <input type="hidden" id="pbId">
       <div class="field"><label data-i18n="playbook.name">剧本名称</label><input type="text" id="pbName" data-i18n-placeholder="playbook.name_placeholder" placeholder="如 重启 Nginx 服务"></div>
       <div class="field"><label data-i18n="playbook.desc">描述（可选）</label><input type="text" id="pbDesc" data-i18n-placeholder="playbook.desc_placeholder" placeholder="剧本用途说明"></div>
+      <details id="pbRevPanel" style="margin:0 0 10px;display:none">
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted2)">版本历史（保存时自动快照）</summary>
+        <div id="pbRevList" class="hint" style="margin-top:8px">加载中…</div>
+      </details>
       <button type="button" class="btn sm ai-assist-btn" id="pbAIGenBtn" style="margin:0 0 6px"><span class="ai-assist-btn-ic">🤖</span>AI 生成剧本（描述需求，自动生成步骤）</button>
       <div id="pbTemplateBar" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px">
         <span style="font-size:12px;color:var(--muted);align-self:center">只读模板：</span>
@@ -3449,6 +3492,21 @@
           </header>
           <div class="ai-panel-body" id="aiStatsCard">
             <div id="aiStatsBody"><div class="hint">打开本分区时自动加载…</div></div>
+            <div class="subhead" style="margin-top:16px">A/B 实验管理</div>
+            <div class="hint">定义分流变体与模型覆盖；在「模型路由」中设置活跃实验 ID 后生效。</div>
+            <div class="grid2">
+              <div class="field"><label>实验 ID</label><input type="text" id="abExpId" class="mono" placeholder="exp-assist-v1"></div>
+              <div class="field"><label>名称</label><input type="text" id="abExpName" placeholder="助手模型对比"></div>
+              <div class="field"><label>限定任务（空=全部）</label><input type="text" id="abExpTask" class="mono" placeholder="assist"></div>
+              <div class="field"><label class="switch"><input type="checkbox" id="abExpEnabled" checked> 启用</label></div>
+              <div class="field"><label>变体流量 JSON</label><input type="text" id="abExpVariants" class="mono" placeholder='{"control":50,"treatment":50}'></div>
+              <div class="field"><label>变体→模型 JSON</label><input type="text" id="abExpModels" class="mono" placeholder='{"treatment":"gpt-4o-mini"}'></div>
+            </div>
+            <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap;margin-bottom:8px">
+              <button class="btn primary sm" id="abExpSaveBtn" type="button">保存实验</button>
+              <button class="btn sm" id="abExpRefreshBtn" type="button">刷新列表</button>
+            </div>
+            <div id="abExpList" class="hint">打开观测页后加载…</div>
           </div>
         </section>
 

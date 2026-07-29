@@ -11,6 +11,7 @@ let CUR_DASH = null;               // 当前打开的完整仪表盘
 let DASH_EDIT = false;             // 编辑模式
 let DASH_RANGE = { hours: 1, custom: null };
 let DASH_LOAD_SEQ = 0;
+let DASH_LOAD = null; // { seq, signal, isCurrent } from beginRangeLoad
 let DASH_VARVALS = {};             // 变量名 → 选中值
 let DASH_VAR_OPTIONS = {};         // 变量名 → 候选值列表
 let DASH_CHART_ARGS = {};          // panelId → createChart 参数（供 resize 重绘）
@@ -367,9 +368,58 @@ async function resolveDashVars() {
   }
 }
 function dashRange() {
-  if (DASH_RANGE.custom) return { from: DASH_RANGE.custom.from, to: DASH_RANGE.custom.to };
+  const dashKey = "dashboard:" + (CUR_DASH && CUR_DASH.id || "x");
+  if (DASH_RANGE.custom && DASH_RANGE.custom.from < DASH_RANGE.custom.to) {
+    if (typeof clearAnchoredRange === "function") clearAnchoredRange(dashKey);
+    return { from: DASH_RANGE.custom.from, to: DASH_RANGE.custom.to };
+  }
+  if (typeof resolveAnchoredRange === "function") {
+    return resolveAnchoredRange(dashKey, DASH_RANGE.hours > 0 ? DASH_RANGE.hours : 1, null);
+  }
   const now = Math.floor(Date.now() / 1000);
-  return { from: now - DASH_RANGE.hours * 3600, to: now };
+  const h = DASH_RANGE.hours > 0 ? DASH_RANGE.hours : 1;
+  return { from: now - h * 3600, to: now };
+}
+function dashAbortPanelLoads() {
+  const m = window.__dashPanelLoads;
+  if (!m) return;
+  Object.keys(m).forEach(k => {
+    const cur = m[k];
+    if (cur && cur.ctrl) {
+      try { cur.ctrl.abort(); } catch (_) {}
+    }
+    m[k] = { seq: (cur && cur.seq ? cur.seq : 0) + 1, ctrl: null };
+  });
+}
+function dashBumpLoad() {
+  const key = "dashboard:" + (CUR_DASH && CUR_DASH.id || "x");
+  dashAbortPanelLoads();
+  if (typeof beginRangeLoad === "function") {
+    DASH_LOAD = beginRangeLoad(key);
+    DASH_LOAD_SEQ = DASH_LOAD.seq;
+  } else {
+    DASH_LOAD = null;
+    DASH_LOAD_SEQ++;
+  }
+  return DASH_LOAD_SEQ;
+}
+function dashBeginPanelLoad(panelKey) {
+  if (!window.__dashPanelLoads) window.__dashPanelLoads = {};
+  const prev = window.__dashPanelLoads[panelKey];
+  if (prev && prev.ctrl) {
+    try { prev.ctrl.abort(); } catch (_) {}
+  }
+  const seq = (prev && prev.seq ? prev.seq : 0) + 1;
+  const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+  window.__dashPanelLoads[panelKey] = { seq, ctrl };
+  return {
+    seq,
+    signal: ctrl ? ctrl.signal : undefined,
+    isCurrent: () => {
+      const cur = window.__dashPanelLoads[panelKey];
+      return !!(cur && cur.seq === seq);
+    }
+  };
 }
 function dashAppearance(d) {
   const a = (d && d.appearance) || {};
@@ -409,11 +459,7 @@ function renderDashDetail() {
   const d = CUR_DASH, wrap = $("dashDetail");
   if (!wrap) return;
   // Bump generation so in-flight panel fetches from a previous range are ignored.
-  if (typeof beginRangeLoad === "function") {
-    DASH_LOAD_SEQ = beginRangeLoad("dashboard:" + (d && d.id || "x")).seq;
-  } else {
-    DASH_LOAD_SEQ++;
-  }
+  dashBumpLoad();
   DASH_CHART_ARGS = {};
   Object.keys(DASH_ECHART_ELS).forEach(id => { try { const el = DASH_ECHART_ELS[id]; if (el && typeof DashCharts !== "undefined") DashCharts.dispose(el); } catch (e) {} });
   DASH_ECHART_ELS = {};
@@ -1020,14 +1066,15 @@ async function loadPanelContent(p, body, chartKey, loadSeq) {
   if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
   body.innerHTML = `<div class="dash-panel-skeleton" aria-busy="true" aria-label="加载中"></div>`;
   const { from, to } = dashRange();
-  const stillCurrent = () => seq === DASH_LOAD_SEQ || key === "zoom";
+  const panelLoad = dashBeginPanelLoad(key);
+  const stillCurrent = () => (seq === DASH_LOAD_SEQ || key === "zoom") && panelLoad.isCurrent();
   const run = async (fn) => { await fn; if (!stillCurrent()) return; };
-  if (p.type === "logs") await run(loadLogsPanel(pView, body, from, to));
-  else if (p.type === "timeseries" || p.type === "graph") await run(loadTimeseriesPanel(pView, body, from, to));
-  else if (p.type === "stat") await run(loadStatPanel(pView, body, from, to));
+  if (p.type === "logs") await run(loadLogsPanel(pView, body, from, to, panelLoad));
+  else if (p.type === "timeseries" || p.type === "graph") await run(loadTimeseriesPanel(pView, body, from, to, panelLoad));
+  else if (p.type === "stat") await run(loadStatPanel(pView, body, from, to, panelLoad));
   else if (p.type === "gauge") await run(loadGaugePanel(pView, body));
   else if (p.type === "piechart" || p.type === "pie") await run(loadPiePanel(pView, body));
-  else if (p.type === "barchart" || p.type === "bar") await run(loadBarPanel(pView, body, from, to));
+  else if (p.type === "barchart" || p.type === "bar") await run(loadBarPanel(pView, body, from, to, panelLoad));
   else if (p.type === "histogram") await run(loadHistogramPanel(pView, body));
   else if (p.type === "state-timeline" || p.type === "statetimeline") await run(loadStateTimelinePanel(pView, body, from, to));
   else if (p.type === "heatmap") await run(loadHeatmapPanel(pView, body, from, to));
@@ -1217,14 +1264,16 @@ function fmtLogTs(ms) {
   const p2 = n => String(n).padStart(2, "0");
   return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
 }
-async function loadTimeseriesPanel(p, body, from, to) {
+async function loadTimeseriesPanel(p, body, from, to, panelLoad) {
   const collected = []; // { labels, legendFmt, points, name, kind, band }
   let naOff = false;
   let metaMsg = "";
   const st = panelTrendState(p.id);
   const mode = panelTrendMode(st);
   const useForecastAPI = !!mode;
+  const alive = () => !panelLoad || panelLoad.isCurrent();
   for (const t of p.targets) {
+    if (!alive()) return;
     let res;
     try {
       const payload = { expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() };
@@ -1233,8 +1282,14 @@ async function loadTimeseriesPanel(p, body, from, to) {
         if (st.horizonSec > 0) payload.horizon_sec = st.horizonSec;
       }
       const url = useForecastAPI ? `${API}/dashboards/query-forecast` : `${API}/dashboards/query`;
-      res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(r => r.json());
-    } catch (e) { continue; }
+      const fetchOpts = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+      if (panelLoad && panelLoad.signal) fetchOpts.signal = panelLoad.signal;
+      res = await fetch(url, fetchOpts).then(r => r.json());
+    } catch (e) {
+      if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+      continue;
+    }
+    if (!alive()) return;
     if (res && res.available === false) { naOff = true; break; }
     if (res && res.meta && res.meta.message) metaMsg = res.meta.message;
     for (const s of (res && res.series || [])) {
@@ -1248,6 +1303,7 @@ async function loadTimeseriesPanel(p, body, from, to) {
     // Multi-target panels (CPU/mem/net combo): forecast each expr; cap total series.
     if (useForecastAPI && collected.length >= 32) break;
   }
+  if (!alive()) return;
   if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
   if (!collected.length) { body.innerHTML = dashEmptyHint(metaMsg || "该范围无数据", p); return; }
   const histOnly = collected.filter(c => !c.kind || c.kind === "history");
@@ -1425,10 +1481,11 @@ async function loadInstantPanel(p, body) {
   }
 }
 // loadStatPanel：大数值（取区间最后一点）+ 阈值配色 + 迷你趋势 sparkline + 说明。
-async function loadStatPanel(p, body, from, to) {
+async function loadStatPanel(p, body, from, to, panelLoad) {
   const t = p.targets[0];
   const st = panelTrendState(p.id);
   const mode = panelTrendMode(st);
+  const alive = () => !panelLoad || panelLoad.isCurrent();
   let res;
   try {
     const payload = { expr: t.expr, from, to, datasource: resolveDS(p), vars: panelVars() };
@@ -1438,8 +1495,14 @@ async function loadStatPanel(p, body, from, to) {
       payload.mode = mode;
       if (st.horizonSec > 0) payload.horizon_sec = st.horizonSec;
     }
-    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then(r => r.json());
-  } catch (e) { body.innerHTML = `<div class="dash-empty">查询失败</div>`; return; }
+    const fetchOpts = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+    if (panelLoad && panelLoad.signal) fetchOpts.signal = panelLoad.signal;
+    res = await fetch(url, fetchOpts).then(r => r.json());
+  } catch (e) {
+    if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+    body.innerHTML = `<div class="dash-empty">查询失败</div>`; return;
+  }
+  if (!alive()) return;
   if (res && res.available === false) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）</div>`; return; }
   const series = (res && res.series) || [];
   if (!series.length) { body.innerHTML = dashEmptyHint((res && res.meta && res.meta.message) || "无数据"); return; }
@@ -1548,7 +1611,7 @@ async function loadPiePanel(p, body) {
   body.innerHTML = `<div class="dash-pie"><div class="dash-pie-chart">${svgDonut(items, total, centerVal)}</div>` +
     `<div class="dash-pie-legend">${legend}</div></div>`;
 }
-async function loadBarPanel(p, body, from, to) {
+async function loadBarPanel(p, body, from, to, panelLoad) {
   // 预测/环比/同比开启时：走区间时序柱状（左历史右预测），与曲线面板同一套 query-forecast
   const st = panelTrendState(p.id);
   if (panelTrendMode(st)) {
@@ -1559,7 +1622,7 @@ async function loadBarPanel(p, body, from, to) {
       type: "timeseries",
       options: Object.assign({}, p.options || {}, { chart_style: "bar" }),
     });
-    await loadTimeseriesPanel(p2, body, range.from, range.to);
+    await loadTimeseriesPanel(p2, body, range.from, range.to, panelLoad);
     return;
   }
   const series = await instantQuery(p, body);
@@ -1871,7 +1934,13 @@ safeAddEventListener("dashDetail", "click", async e => {
     if (DASH_EDIT && DASH_DIRTY && !confirm("仍有未保存修改，确认放弃并返回列表？")) return;
     showDashHome(); loadDashboards(); return;
   }
-  if (t.closest("#dashRefresh")) { renderPanels(); return; }
+  if (t.closest("#dashRefresh")) {
+    const dashKey = "dashboard:" + (CUR_DASH && CUR_DASH.id || "x");
+    if (typeof clearAnchoredRange === "function") clearAnchoredRange(dashKey);
+    dashBumpLoad();
+    renderPanels();
+    return;
+  }
   if (t.closest("#dashEditBtn")) { DASH_EDIT = true; resetDashEditHistory(); renderDashDetail(); return; }
   if (t.closest("#dashAnalyzeBtn")) { aiAnalyzeDash(); return; }
   if (t.closest("#dashOptimizeBtn")) { aiOptimizeDash(); return; }
@@ -1920,7 +1989,15 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (t.closest("#dashCustomToggle")) { const pn = $("dashCustomPanel"); if (pn) pn.hidden = !pn.hidden; return; }
   if (t.closest("#dashCustomApply")) { applyDashCustom(); return; }
   const rc = t.closest("[data-drange]");
-  if (rc) { DASH_RANGE = { hours: +rc.dataset.drange, custom: null }; renderDashDetail(); return; }
+  if (rc) {
+    const nextH = +rc.dataset.drange;
+    if (DASH_RANGE.hours !== nextH || DASH_RANGE.custom) {
+      if (typeof clearAnchoredRange === "function") clearAnchoredRange("dashboard:" + (CUR_DASH && CUR_DASH.id || "x"));
+    }
+    DASH_RANGE = { hours: nextH, custom: null };
+    renderDashDetail();
+    return;
+  }
   const pa = t.closest("[data-pact]");
   if (pa) { handlePanelAction(pa.dataset.pact, +pa.dataset.id); return; }
 });

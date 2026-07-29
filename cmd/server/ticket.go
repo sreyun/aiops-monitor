@@ -165,6 +165,16 @@ func (m *ticketManager) Create(t Ticket, reporter string) (Ticket, error) {
 	return t, nil
 }
 
+// ApplySLAAndAssign is called by API layer after Create to set deadlines / OnCall assignee.
+func (m *ticketManager) ApplyPostCreate(id int64, apply func(*Ticket)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t := m.find(id); t != nil && apply != nil {
+		apply(t)
+		t.UpdatedAt = time.Now().Unix()
+	}
+}
+
 // Update mutates editable fields (title/description/priority/status/assignee/...).
 func (m *ticketManager) Update(id int64, in Ticket, actor string) (Ticket, error) {
 	m.mu.Lock()

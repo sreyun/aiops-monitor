@@ -1119,17 +1119,7 @@ func (v *vmWriter) queryHistoryRange(hostID string, from, to, step int64) ([]sha
 	}
 	out := make([]shared.Sample, 0, len(byTs))
 	for _, s := range byTs {
-		if len(s.Disks) > 1 {
-			sort.Slice(s.Disks, func(a, b int) bool { return s.Disks[a].Path < s.Disks[b].Path })
-		}
-		if len(s.Conns) > 1 {
-			sort.Slice(s.Conns, func(a, b int) bool {
-				if s.Conns[a].Proto != s.Conns[b].Proto {
-					return s.Conns[a].Proto < s.Conns[b].Proto
-				}
-				return s.Conns[a].State < s.Conns[b].State
-			})
-		}
+		stabilizeSampleArrays(s)
 		out = append(out, *s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
@@ -1180,21 +1170,33 @@ func parseVMExport(r io.Reader) []shared.Sample {
 	}
 	out := make([]shared.Sample, 0, len(byTs))
 	for _, s := range byTs {
-		if len(s.Disks) > 1 { // 分区按 path 排序，保证跨样本顺序稳定
-			sort.Slice(s.Disks, func(a, b int) bool { return s.Disks[a].Path < s.Disks[b].Path })
-		}
-		if len(s.Conns) > 1 { // 连接按 proto+state 排序，保证跨样本顺序稳定
-			sort.Slice(s.Conns, func(a, b int) bool {
-				if s.Conns[a].Proto != s.Conns[b].Proto {
-					return s.Conns[a].Proto < s.Conns[b].Proto
-				}
-				return s.Conns[a].State < s.Conns[b].State
-			})
-		}
+		stabilizeSampleArrays(s)
 		out = append(out, *s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
 	return out
+}
+
+// stabilizeSampleArrays sorts nested GPU/Disk/Conn slices so cross-request order is stable
+// (frontend used to key GPUs by array index — unsorted VM order caused chart flicker).
+func stabilizeSampleArrays(s *shared.Sample) {
+	if s == nil {
+		return
+	}
+	if len(s.GPUs) > 1 {
+		sort.Slice(s.GPUs, func(a, b int) bool { return s.GPUs[a].Name < s.GPUs[b].Name })
+	}
+	if len(s.Disks) > 1 {
+		sort.Slice(s.Disks, func(a, b int) bool { return s.Disks[a].Path < s.Disks[b].Path })
+	}
+	if len(s.Conns) > 1 {
+		sort.Slice(s.Conns, func(a, b int) bool {
+			if s.Conns[a].Proto != s.Conns[b].Proto {
+				return s.Conns[a].Proto < s.Conns[b].Proto
+			}
+			return s.Conns[a].State < s.Conns[b].State
+		})
+	}
 }
 
 // ============================================================================

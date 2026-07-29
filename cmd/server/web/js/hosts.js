@@ -999,6 +999,9 @@ let DETAIL_TIME_RANGE = 1; // hours: 1/3/6/12/24/72/168/336（默认 1 小时）
 let DETAIL_CUSTOM = null;   // {from,to} unix seconds — set when a custom range is active
 let DETAIL_SAMPLES = [];
 let DETAIL_LOAD_SEQ = 0;
+/** Frozen query window for the open detail session (reduces now-drift on re-click). */
+let DETAIL_ANCHOR = null; // { hostId, rangeH, from, to } | null
+let DETAIL_SHARED_FC = null; // shared enrich result for current load
 
 // 把 unix 秒格式化为 <input type="datetime-local"> 需要的本地时间字符串 YYYY-MM-DDTHH:mm
 function toLocalDatetimeValue(unixSec) {
@@ -1023,6 +1026,8 @@ async function openDetail(id, name) {
   DETAIL_HOST_NAME = name || id;
   DETAIL_TIME_RANGE = 1;
   DETAIL_CUSTOM = null;
+  DETAIL_ANCHOR = null;
+  DETAIL_SHARED_FC = null;
   // 每次打开主机趋势默认关闭预测（需手动点「预测」开启）
   if (typeof setChartForecastOn === "function") setChartForecastOn("host-detail", false);
   $("detailTitle").textContent = name + " " + I18N.t("section.recent_trend");
@@ -1032,20 +1037,62 @@ async function openDetail(id, name) {
   await loadAndRenderCharts();
 }
 
+/** Align unix seconds down to step for stable PromQL buckets. */
+function alignUnixFloor(ts, step) {
+  step = Math.max(1, step | 0);
+  return Math.floor(ts / step) * step;
+}
+
+/** Resolve [from,to] for host detail; freeze within the same host+preset session. */
+function resolveDetailWindow() {
+  if (DETAIL_CUSTOM) {
+    DETAIL_ANCHOR = null;
+    return { from: DETAIL_CUSTOM.from, to: DETAIL_CUSTOM.to };
+  }
+  const rangeH = DETAIL_TIME_RANGE;
+  const spanSec = Math.max(3600, rangeH * 3600);
+  // Match backend adaptiveHistoryStep density (~480 pts).
+  let step = Math.floor(spanSec / 480);
+  if (step < 5) step = 5;
+  if (step > 300) step = 300;
+  if (
+    DETAIL_ANCHOR &&
+    DETAIL_ANCHOR.hostId === DETAIL_HOST_ID &&
+    DETAIL_ANCHOR.rangeH === rangeH &&
+    DETAIL_ANCHOR.from < DETAIL_ANCHOR.to
+  ) {
+    return { from: DETAIL_ANCHOR.from, to: DETAIL_ANCHOR.to };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const to = alignUnixFloor(now, step);
+  const from = to - spanSec;
+  DETAIL_ANCHOR = { hostId: DETAIL_HOST_ID, rangeH, from, to };
+  return { from, to };
+}
+
 async function loadAndRenderCharts() {
   const body = $("detailBody");
-  const now = Math.floor(Date.now() / 1000);
-  const to = DETAIL_CUSTOM ? DETAIL_CUSTOM.to : now;
-  const from = DETAIL_CUSTOM ? DETAIL_CUSTOM.from : now - DETAIL_TIME_RANGE * 3600;
+  const win = resolveDetailWindow();
+  const from = win.from;
+  const to = win.to;
   const spanH = Math.max(0, (to - from) / 3600); // effective window in hours
   const load = (typeof beginRangeLoad === "function")
     ? beginRangeLoad("host-detail:" + DETAIL_HOST_ID)
     : { signal: undefined, isCurrent: () => true, seq: 0 };
   DETAIL_LOAD_SEQ = load.seq;
+  DETAIL_SHARED_FC = null;
 
   // 取消上一轮懒加载观察，避免切时间范围后旧回调继续触发。
   if (DETAIL_CHART_IO) { try { DETAIL_CHART_IO.disconnect(); } catch (_) {} DETAIL_CHART_IO = null; }
   DETAIL_CHART_PENDING = {};
+  // Drop previous canvas chart state so stale paint cannot reuse registry.
+  Object.keys(DETAIL_CHARTS || {}).forEach(k => {
+    try {
+      const c = DETAIL_CHARTS[k] && DETAIL_CHARTS[k].canvas;
+      if (c) c._chart = null;
+    } catch (_) {}
+  });
+  DETAIL_CHARTS = {};
 
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`,
@@ -1091,12 +1138,12 @@ async function loadAndRenderCharts() {
     const lazy = (id, series, yMin, yMax, title) => {
       DETAIL_CHART_PENDING[id] = { samples, series, yMin, yMax, title };
     };
-    // 资源组合曲线：CPU / 内存 / 磁盘% 同轴，便于多序列预测对照
+    // 资源组合：磁盘用聚合 disk_percent（与分盘图语义不同，标题注明）
     lazy('chartCombo', [
       { key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct },
       { key: 'mem_percent', label: I18N.t("section.mem_usage"), color: '#8b5cf6', fmt: pct },
-      { key: 'disk_percent', label: I18N.t("section.disk_usage"), color: '#f7b23b', fmt: pct },
-    ], 0, 100, I18N.t("section.resource_combo", "资源组合 · CPU / 内存 / 磁盘"));
+      { key: 'disk_percent', label: I18N.t("section.disk_usage") + " · " + I18N.t("section.disk_agg", "聚合"), color: '#f7b23b', fmt: pct },
+    ], 0, 100, I18N.t("section.resource_combo", "资源组合 · CPU / 内存 / 磁盘(聚合)"));
     lazy('chartCPU',
       [{ key: 'cpu_percent', label: I18N.t("section.cpu_usage"), color: '#4c8dff', fmt: pct }], 0, 100, I18N.t("section.cpu_usage"));
     lazy('chartMem',
@@ -1107,12 +1154,12 @@ async function loadAndRenderCharts() {
       { key: 'load15', label: I18N.t("section.load_15m_label"), color: '#f2545b', fmt: v => v.toFixed(1) },
     ], null, null, I18N.t("section.load_avg"));
 
-    let diskProto = [];
-    samples.forEach(s => { if (Array.isArray(s.disks) && s.disks.length > diskProto.length) diskProto = s.disks; });
-    const diskKeys = diskProto.map(d => d.path);
+    const diskPathSet = new Set();
+    samples.forEach(s => (s.disks || []).forEach(d => { if (d && d.path) diskPathSet.add(d.path); }));
+    const diskKeys = [...diskPathSet].sort();
     const latestDisk = {};
     for (let i = samples.length - 1; i >= 0 && Object.keys(latestDisk).length < diskKeys.length; i--) {
-      (samples[i].disks || []).forEach(d => { if (!(d.path in latestDisk)) latestDisk[d.path] = d; });
+      (samples[i].disks || []).forEach(d => { if (d && d.path && !(d.path in latestDisk)) latestDisk[d.path] = d; });
     }
     const _gb = b => b / 1073741824;
     const diskLabel = (path) => {
@@ -1122,35 +1169,47 @@ async function loadAndRenderCharts() {
       return `磁盘 ${path} · 已用 ${used.toFixed(0)}/${tot.toFixed(0)}GB · 剩 ${(tot - used).toFixed(0)}GB`;
     };
     const diskSeries = diskKeys.map((path, idx) => ({
-      key: `disk_${idx}`, label: diskLabel(path),
+      key: `disk_${path}`, label: diskLabel(path),
       color: ['#f7b23b', '#2fd07a', '#f2545b', '#43b6f0', '#8b5cf6', '#e06c9a'][idx % 6], fmt: pct,
       transform: (s) => { const d = (s.disks || []).find(x => x.path === path); return d ? d.percent : null; }
     }));
     lazy('chartDisk',
-      diskSeries.length ? diskSeries : [{ key: 'disk_percent', label: I18N.t("section.root_partition"), color: '#f7b23b', fmt: pct }],
+      diskSeries.length
+        ? diskSeries
+        : [{ key: 'disk_percent', label: (I18N.t("section.root_partition") || "根分区") + " · " + I18N.t("section.disk_agg", "聚合"), color: '#f7b23b', fmt: pct }],
       0, 100, I18N.t("section.disk_usage"));
 
     if (hasGPU) {
-      const gpuNames = [];
-      samples.forEach(s => (s.gpus || []).forEach((g, i) => { if (!gpuNames[i]) gpuNames[i] = g.name || ('GPU' + i); }));
+      const gpuNameSet = new Set();
+      samples.forEach(s => (s.gpus || []).forEach(g => {
+        const nm = (g && g.name) ? String(g.name) : "";
+        if (nm) gpuNameSet.add(nm);
+      }));
+      const gpuNames = [...gpuNameSet].sort();
       const gpalette = ['#8b5cf6', '#43b6f0', '#2fd07a', '#f7b23b', '#f2545b', '#e06c9a'];
       const gcolor = idx => gpalette[idx % gpalette.length];
-      const gpuVal = (idx, field) => (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g[field] || 0) : null; };
+      const gpuByName = (nm, field) => (s) => {
+        const g = (s.gpus || []).find(x => x && x.name === nm);
+        return g ? (g[field] || 0) : null;
+      };
       const gbUnit = I18N.t("unit.gb");
-      const gpuBytesGB = (idx, field) => (s) => { const g = s.gpus && s.gpus[idx] ? s.gpus[idx] : null; return g ? (g[field] || 0) / 1073741824 : null; };
+      const gpuBytesGB = (nm, field) => (s) => {
+        const g = (s.gpus || []).find(x => x && x.name === nm);
+        return g ? (g[field] || 0) / 1073741824 : null;
+      };
       lazy('chartGPU', gpuNames.map((nm, idx) => ({
-        key: `gpu_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuVal(idx, 'util_percent')
+        key: `gpu_${nm}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuByName(nm, 'util_percent')
       })), 0, 100, I18N.t("section.gpu_usage"));
       lazy('chartGPUTemp', gpuNames.map((nm, idx) => ({
-        key: `gput_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '℃', transform: gpuVal(idx, 'temp')
+        key: `gput_${nm}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '℃', transform: gpuByName(nm, 'temp')
       })), null, null, I18N.t("section.gpu_temp"));
       lazy('chartGPUMemPct', gpuNames.map((nm, idx) => ({
-        key: `gpump_${idx}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuVal(idx, 'mem_percent')
+        key: `gpump_${nm}`, label: nm, color: gcolor(idx), fmt: v => v.toFixed(0) + '%', transform: gpuByName(nm, 'mem_percent')
       })), 0, 100, I18N.t("section.gpu_mem_pct"));
       const gpuMemSeries = [];
       gpuNames.forEach((nm, idx) => {
-        gpuMemSeries.push({ key: `gpumu_${idx}`, label: `${nm} · ${I18N.t("section.gpu_mem_used")}`, color: gcolor(idx * 2), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(idx, 'mem_used') });
-        gpuMemSeries.push({ key: `gpumf_${idx}`, label: `${nm} · ${I18N.t("section.gpu_mem_free")}`, color: gcolor(idx * 2 + 1), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(idx, 'mem_free') });
+        gpuMemSeries.push({ key: `gpumu_${nm}`, label: `${nm} · ${I18N.t("section.gpu_mem_used")}`, color: gcolor(idx * 2), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(nm, 'mem_used') });
+        gpuMemSeries.push({ key: `gpumf_${nm}`, label: `${nm} · ${I18N.t("section.gpu_mem_free")}`, color: gcolor(idx * 2 + 1), fmt: v => v.toFixed(1) + gbUnit, transform: gpuBytesGB(nm, 'mem_free') });
       });
       lazy('chartGPUMem', gpuMemSeries, null, null, I18N.t("section.gpu_vram"));
     }
@@ -1189,8 +1248,26 @@ async function loadAndRenderCharts() {
     ], null, null, '进程数趋势');
 
     if (!load.isCurrent()) return;
+
+    // Shared forecast once for all charts — avoids N racing POSTs painting stale canvases.
+    const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
+    if (fcOn && typeof enrichSharedForecast === "function") {
+      const allSeries = [];
+      Object.keys(DETAIL_CHART_PENDING).forEach(cid => {
+        const sp = DETAIL_CHART_PENDING[cid];
+        if (sp && sp.series) allSeries.push(...sp.series);
+      });
+      const en = await enrichSharedForecast(samples, allSeries, {
+        forecast: true,
+        signal: load.signal,
+        isCurrent: () => load.isCurrent()
+      });
+      if (!load.isCurrent() || (en && en.stale)) return;
+      DETAIL_SHARED_FC = en;
+    }
+
     DETAIL_CHARTS = {};
-    mountDetailLazyCharts(body, load.seq);
+    mountDetailLazyCharts(body, load.seq, load);
   } catch (e) {
     if (e && (e.name === "AbortError" || e.message === "The user aborted a request.")) return;
     if (!load.isCurrent()) return;
@@ -1202,20 +1279,37 @@ let DETAIL_CHART_IO = null;
 let DETAIL_CHART_PENDING = {};
 
 /** 视口进入时才 createChart；首屏可见的图表立即绘制（无入场动画）。 */
-function mountDetailLazyCharts(root, loadSeq) {
+function mountDetailLazyCharts(root, loadSeq, loadHandle) {
   const seq = loadSeq != null ? loadSeq : DETAIL_LOAD_SEQ;
+  const isCurrent = () => {
+    if (loadHandle && typeof loadHandle.isCurrent === "function") return loadHandle.isCurrent();
+    return seq === DETAIL_LOAD_SEQ;
+  };
   const mountOne = async (id) => {
-    if (seq !== DETAIL_LOAD_SEQ) return;
+    if (!isCurrent()) return;
     const spec = DETAIL_CHART_PENDING[id];
     if (!spec || DETAIL_CHARTS[id]) return;
     delete DETAIL_CHART_PENDING[id];
     const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
-    const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: "dash" };
-    if (fcOn && typeof createChartWithForecast === "function") {
+    const legendMode = fcOn ? "wrap" : "dash";
+    const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode };
+    if (fcOn && DETAIL_SHARED_FC && typeof sliceForecastForChart === "function") {
+      if (!isCurrent()) return;
+      const sliced = sliceForecastForChart(DETAIL_SHARED_FC, spec.series);
+      if (!isCurrent()) return;
+      if (sliced) {
+        DETAIL_CHARTS[id] = createChart(id, sliced.samples, sliced.series, spec.yMin, spec.yMax,
+          Object.assign({}, chartOpts, { nowTs: sliced.nowTs || 0 }));
+      } else {
+        DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, chartOpts);
+      }
+    } else if (fcOn && typeof createChartWithForecast === "function") {
       const ch = await createChartWithForecast(id, spec.samples, spec.series, spec.yMin, spec.yMax, Object.assign({}, chartOpts, {
-        forecast: true, forecastScope: "host-detail"
+        forecast: true, forecastScope: "host-detail",
+        signal: loadHandle && loadHandle.signal,
+        isCurrent
       }));
-      if (seq !== DETAIL_LOAD_SEQ) return;
+      if (!isCurrent()) return;
       DETAIL_CHARTS[id] = ch;
     } else {
       DETAIL_CHARTS[id] = createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, chartOpts);
@@ -1265,11 +1359,22 @@ safeAddEventListener("detailBody", "click", e => {
       const spec = DETAIL_CHART_PENDING[id];
       delete DETAIL_CHART_PENDING[id];
       const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
-      const finish = (ch) => { DETAIL_CHARTS[id] = ch; if (ch) openChartZoom(ch); };
-      const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: "dash" };
+      const finish = (ch) => { if (ch) { DETAIL_CHARTS[id] = ch; openChartZoom(ch); } };
+      const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: fcOn ? "wrap" : "dash" };
+      if (fcOn && DETAIL_SHARED_FC && typeof sliceForecastForChart === "function") {
+        const sliced = sliceForecastForChart(DETAIL_SHARED_FC, spec.series);
+        if (sliced) {
+          finish(createChart(id, sliced.samples, sliced.series, spec.yMin, spec.yMax,
+            Object.assign({}, chartOpts, { nowTs: sliced.nowTs || 0 })));
+        } else {
+          finish(createChart(id, spec.samples, spec.series, spec.yMin, spec.yMax, chartOpts));
+        }
+        return;
+      }
       if (fcOn && typeof createChartWithForecast === "function") {
         createChartWithForecast(id, spec.samples, spec.series, spec.yMin, spec.yMax, Object.assign({}, chartOpts, {
-          forecast: true, forecastScope: "host-detail"
+          forecast: true, forecastScope: "host-detail",
+          isCurrent: () => true
         })).then(finish);
         return;
       }
@@ -1296,8 +1401,10 @@ safeAddEventListener("detailBody", "click", e => {
   if (e.target.closest("[data-custom-apply]")) { applyDetailCustomRange(); return; }
   const btn = e.target.closest(".chip-btn[data-range]");
   if (!btn) return;
-  DETAIL_CUSTOM = null; // 切回预设跨度（相对当前时间）
-  DETAIL_TIME_RANGE = parseInt(btn.dataset.range);
+  DETAIL_CUSTOM = null; // 切回预设跨度
+  const next = parseInt(btn.dataset.range);
+  if (DETAIL_TIME_RANGE !== next) DETAIL_ANCHOR = null; // 新预设 → 重建冻结窗口
+  DETAIL_TIME_RANGE = next;
   loadAndRenderCharts();
 });
 
@@ -1348,6 +1455,7 @@ function applyDetailCustomRange() {
   if (to <= from) { toast(I18N.t("time.custom_order") || "结束时间必须晚于开始时间", "warn"); return; }
   if (to - from < 60) { toast(I18N.t("time.custom_tooshort") || "时间范围太短（至少 1 分钟）", "warn"); return; }
   DETAIL_CUSTOM = { from, to };
+  DETAIL_ANCHOR = null;
   loadAndRenderCharts();
 }
 
@@ -1462,15 +1570,31 @@ function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opt
     drawChartEmpty(canvas.getContext("2d"), dim.W, dim.H, I18N.t("empty.no_trend_data") || "暂无趋势数据");
     return null;
   }
+  // Fixed-axis charts with zero finite points → empty state (avoid misleading 50–100% blank axes).
+  if (yMin !== null && yMax !== null) {
+    let any = false;
+    for (const s of (series || [])) {
+      for (const sm of allSamples) {
+        const v = seriesVal(s, sm);
+        if (v !== null) { any = true; break; }
+      }
+      if (any) break;
+    }
+    if (!any) {
+      drawChartEmpty(canvas.getContext("2d"), dim.W, dim.H, I18N.t("empty.no_trend_data") || "暂无趋势数据");
+      return null;
+    }
+  }
   const nSeries = (series || []).length;
   // Auto compact legend: many series or short canvas → never use full "当前/峰值" rows.
+  // wrap = compact labels but up to 2 rows (forecast doubles series count).
   const legendMode = opts.legendMode || ((nSeries >= 4 || cssH < 220) ? "dash" : "full");
   const state = {
     canvas, ctx: canvas.getContext("2d"),
     W: dim.W, H: dim.H, dpr: dim.dpr, cssH,
     all: allSamples, series, yMin, yMax,
     title: opts.title || "", isZoom: !!opts.isZoom,
-    legendMode, // full=主机详情；dash=精简图例（短面板/多序列强制）
+    legendMode, // full | dash | wrap
     nowTs: opts.nowTs || 0, // realtime|forecast boundary (unix sec)
     i0: 0, i1: allSamples.length - 1,
     hover: -1, drag: false, downX: null, curX: null, moved: false,
@@ -1546,7 +1670,8 @@ function drawChart(state) {
   pad.left = Math.max(48, Math.ceil(maxLabelW) + 12);
 
   // —— Layout: title + legend reserved ABOVE the plot (never overlay series) ——
-  const dashLegend = state.legendMode === "dash";
+  const dashLegend = state.legendMode === "dash" || state.legendMode === "wrap";
+  const maxCompactLines = state.legendMode === "wrap" ? 2 : 1;
   const titleH = state.title ? 16 : 0;
   const legFont = "10.5px -apple-system, 'Segoe UI', 'PingFang SC', sans-serif";
   const truncLeg = (s, maxN) => {
@@ -1558,7 +1683,7 @@ function drawChart(state) {
     const lines = [];
     let line = { items: [], x: 0 };
     const maxW = Math.max(80, w - pad.left - pad.right - 8);
-    const maxItems = compact ? Math.min(8, series.length) : series.length;
+    const maxItems = compact ? Math.min(series.length, state.legendMode === "wrap" ? 16 : 8) : series.length;
     ctx.font = legFont;
     for (let sIdx = 0; sIdx < maxItems; sIdx++) {
       const s = series[sIdx];
@@ -1574,9 +1699,9 @@ function drawChart(state) {
       if (line.items.length && line.x + itemW > maxW) {
         lines.push(line);
         line = { items: [], x: 0 };
-        if (compact) break; // dash: single row only
+        if (compact && lines.length >= maxCompactLines) break;
       }
-      if (compact && line.items.length && line.x + itemW > maxW) break;
+      if (compact && lines.length >= maxCompactLines && line.items.length && line.x + itemW > maxW) break;
       line.items.push({ color: s.color, labelText, w: itemW });
       line.x += itemW;
     }

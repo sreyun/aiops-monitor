@@ -277,29 +277,57 @@ async function applyOpsActionPlan(text, opts) {
     }
   }
 
-  let okN = 0;
-  for (const a of actions) {
-    try {
-      const res = await runOneAction(a, opts);
+  // Server-side whitelist + apply (prompt-injection hard gate). Client only handles sql_apply UI.
+  try {
+    const validated = await apiJSON("/ops/actions/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: { summary: plan.summary || "", actions } }),
+    });
+    const applied = await apiJSON("/ops/actions/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        plan: validated.plan || { summary: plan.summary || "", actions },
+        confirm: true,
+        allow_ddl: !!opts.allowDDL,
+        grant: validated.grant || "",
+      }),
+    });
+    const results = (applied && applied.results) || [];
+    let okN = 0;
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      const a = (validated.plan && validated.plan.actions && validated.plan.actions[i]) || actions[i] || {};
+      if (r.client_side && a.type === "sql_apply" && r.sql) {
+        try {
+          await runOneAction(Object.assign({}, a, { params: Object.assign({}, a.params || {}, { sql: r.sql }) }), opts);
+          okN++;
+        } catch (e) {
+          if (typeof toast === "function") toast(actionLabel(a) + ": " + (e.message || e), "err");
+          return false;
+        }
+        continue;
+      }
+      if (!r.ok) {
+        if (typeof toast === "function") toast(actionLabel(a) + ": " + (r.error || applied.error || "failed"), "err");
+        return false;
+      }
       okN++;
-      if (a.type === "sql_ddl" && typeof opts.onDDLResult === "function" && res) {
-        try { opts.onDDLResult(res); } catch (_) {}
+      if (a.type === "sql_ddl" && typeof opts.onDDLResult === "function" && r.output) {
+        try { opts.onDDLResult(r.output); } catch (_) {}
       }
-      try { await verifyAction(a, opts); } catch (ve) {
-        console.warn("verify failed", ve);
-      }
-    } catch (e) {
-      if (typeof toast === "function") toast(actionLabel(a) + ": " + (e.message || e), "err");
-      return false;
+      try { await verifyAction(a, opts); } catch (ve) { console.warn("verify failed", ve); }
     }
+    if (typeof toast === "function") {
+      toast(oaT("ops.applied_n", "已执行 {n} 条动作").replace("{n}", String(okN)), "ok");
+    }
+    if (typeof opts.refresh === "function") {
+      try { await opts.refresh(); } catch (_) {}
+    }
+    return true;
+  } catch (e) {
+    if (typeof toast === "function") toast(oaT("ops.plan_blocked", "动作计划被服务端拦截") + ": " + (e.message || e), "err");
+    return false;
   }
-  if (typeof toast === "function") {
-    toast(oaT("ops.applied_n", "已执行 {n} 条动作").replace("{n}", String(okN)), "ok");
-  }
-  if (typeof opts.refresh === "function") {
-    try { await opts.refresh(); } catch (_) {}
-  }
-  return true;
 }
 
 window.parseOpsActionPlan = parseOpsActionPlan;

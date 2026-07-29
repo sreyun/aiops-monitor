@@ -366,14 +366,17 @@ async function snLoadInterfaceHistory() {
   if (!body) return;
   body.innerHTML = `<div class="empty-line">${I18N.t("ui.loading") || "加载中…"}</div>`;
   const now = Math.floor(Date.now() / 1000);
-  const from = snHist.custom ? snHist.custom.from : now - snHist.range * 3600;
-  const to = snHist.custom ? snHist.custom.to : now;
+  const anchorKey = "snmp:" + (snHist.host || "") + ":" + (snHist.ifindex || "");
+  const win = (typeof resolveAnchoredRange === "function")
+    ? resolveAnchoredRange(anchorKey, snHist.range > 0 ? snHist.range : 1, snHist.custom)
+    : { from: snHist.custom ? snHist.custom.from : now - snHist.range * 3600, to: snHist.custom ? snHist.custom.to : now };
+  const from = win.from, to = win.to;
   const q = new URLSearchParams({
     host: snHist.host, device: snHist.device, device_ip: snHist.deviceIP,
     ifindex: snHist.ifindex, ifname: snHist.ifname, from: String(from), to: String(to),
   });
   const load = (typeof beginRangeLoad === "function")
-    ? beginRangeLoad("snmp:" + (snHist.host || "") + ":" + (snHist.ifindex || ""))
+    ? beginRangeLoad(anchorKey)
     : { signal: undefined, isCurrent: () => true };
   try {
     const opts = { credentials: "same-origin" };
@@ -416,10 +419,13 @@ async function snLoadInterfaceHistory() {
         { key: "speed_bps", label: I18N.t("snmp.if_speed", "接口速率"), color: "#4c8dff", fmt: fmtRate },
       ], yMin: 0, yMax: null, opts: snOpts(I18N.t("snmp.speed_history", "接口协商速率")) },
     ];
+    if (!load.isCurrent()) return;
     snHistCharts = typeof mountChartsWithForecast === "function"
-      ? await mountChartsWithForecast("snmp", specs)
+      ? await mountChartsWithForecast("snmp", specs, load)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
   } catch (e) {
+    if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
+    if (!load.isCurrent()) return;
     body.innerHTML = `<div class="empty-line">${I18N.t("netflow.load_error") || "加载失败"}: ${esc(e)}</div>`;
   }
 }
@@ -486,7 +492,14 @@ safeAddEventListener("snmpPanel", "click", e => {
 
 safeAddEventListener("networkHistBody", "click", e => {
   const range = e.target.closest("[data-snhrange]");
-  if (range) { snHist.range = parseInt(range.dataset.snhrange); snHist.custom = null; snLoadInterfaceHistory(); return; }
+  if (range) {
+    const next = parseInt(range.dataset.snhrange);
+    const anchorKey = "snmp:" + (snHist.host || "") + ":" + (snHist.ifindex || "");
+    if (snHist.custom || snHist.range !== next) {
+      if (typeof clearAnchoredRange === "function") clearAnchoredRange(anchorKey);
+    }
+    snHist.range = next; snHist.custom = null; snLoadInterfaceHistory(); return;
+  }
   if (e.target.closest("[data-snh-custom-toggle]")) {
     const p = $("snhCustomPanel"); if (p) p.hidden = !p.hidden;
     return;

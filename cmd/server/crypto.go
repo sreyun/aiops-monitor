@@ -219,6 +219,8 @@ func encryptConfigSecrets(c *ServerConfig) {
 	for i := range c.MySQLConnections {
 		c.MySQLConnections[i].Password = encryptSecret(c.MySQLConnections[i].Password)
 	}
+	c.Backup.Remote.SecretKey = encryptSecret(c.Backup.Remote.SecretKey)
+	c.Backup.Remote.AccessKey = encryptSecret(c.Backup.Remote.AccessKey)
 }
 
 // decryptConfigSecrets reverses encryptConfigSecrets, restoring plaintext in the
@@ -269,4 +271,6 @@ func decryptConfigSecrets(c *ServerConfig) {
 	for i := range c.MySQLConnections {
 		c.MySQLConnections[i].Password = decryptSecret(c.MySQLConnections[i].Password)
 	}
+	c.Backup.Remote.SecretKey = decryptSecret(c.Backup.Remote.SecretKey)
+	c.Backup.Remote.AccessKey = decryptSecret(c.Backup.Remote.AccessKey)
 }

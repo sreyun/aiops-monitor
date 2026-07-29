@@ -128,6 +128,35 @@ function beginRangeLoad(key) {
   };
 }
 
+/**
+ * Freeze relative [from,to] within a view session so re-clicking "1h" / forecast
+ * does not slide the window with wall-clock now (reduces flicker).
+ * key: stable id (e.g. "checks:abc"); rangeH: hours; custom: {from,to}|null
+ */
+function resolveAnchoredRange(key, rangeH, custom) {
+  if (!window.__rangeAnchors) window.__rangeAnchors = {};
+  if (custom && custom.from < custom.to) {
+    delete window.__rangeAnchors[key];
+    return { from: custom.from, to: custom.to };
+  }
+  const spanSec = Math.max(3600, (rangeH > 0 ? rangeH : 1) * 3600);
+  let step = Math.floor(spanSec / 480);
+  if (step < 5) step = 5;
+  if (step > 300) step = 300;
+  const prev = window.__rangeAnchors[key];
+  if (prev && prev.rangeH === rangeH && prev.from < prev.to) {
+    return { from: prev.from, to: prev.to };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const to = Math.floor(now / step) * step;
+  const from = to - spanSec;
+  window.__rangeAnchors[key] = { rangeH, from, to };
+  return { from, to };
+}
+function clearAnchoredRange(key) {
+  if (window.__rangeAnchors) delete window.__rangeAnchors[key];
+}
+
 // Account password policy (mirrors the server): >=8 chars incl. upper/lower/digit/special.
 function pwPolicyOK(pw){
   return typeof pw==="string" && pw.length>=8 && /[A-Z]/.test(pw) && /[a-z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);

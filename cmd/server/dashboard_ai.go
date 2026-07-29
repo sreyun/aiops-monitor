@@ -2342,6 +2342,7 @@ func (s *Server) handleDashboardAITicket(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	tk = s.finalizeNewTicket(tk)
 	s.store.MarkDirty()
 	s.messages.push("ticket", "info", "AI 看板研判建单："+tk.Title, "优先级 "+tk.Priority, "sre", itoa64(tk.ID))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "needed": true, "ticket_id": tk.ID, "title": tk.Title, "priority": tk.Priority})

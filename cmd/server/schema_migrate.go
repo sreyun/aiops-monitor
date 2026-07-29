@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS backup_meta (
 CREATE INDEX IF NOT EXISTS backup_meta_created ON backup_meta(created_at DESC);
 `,
 	},
+	{
+		Version: 5,
+		Name:    "partition_backfill_marker",
+		SQL:     `-- backfill of audit_log/events/ai_call_events into *_p is done in migrateDualTrackPartitions`,
+	},
 }
 
 // runVersionedMigrations applies numbered schema steps after the bootstrap IF NOT EXISTS schema.

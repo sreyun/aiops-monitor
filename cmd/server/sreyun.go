@@ -1172,6 +1172,18 @@ func (h *SreyunCore) Chat(ctx context.Context, session *SreyunSession, userMsg s
 // 工具调用的原始 JSON 绝不下发到前端。max 8 turns（对齐 Hermes 多步工具深度，仍有硬顶）。
 func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[string]string, images []chatImage, stream bool, w http.ResponseWriter, actor string) (string, AgentLoopMeta, error) {
 	meta := AgentLoopMeta{}
+	primary := cfg.Model
+	cfg = applyRoutedModel(cfg, "chat")
+	if h != nil && h.s != nil {
+		if expID, variant := h.s.pickAssistExperiment(cfg, "chat", actor); expID != "" {
+			cfg = h.s.applyExperimentVariantOn(cfg, expID, variant)
+			meta.ExperimentID = expID
+			meta.Variant = variant
+		}
+	}
+	if cfg.Model != "" && cfg.Model != primary {
+		meta.RoutedModel = cfg.Model
+	}
 	flusher, _ := w.(http.Flusher)
 	sendDelta := func(text string) {
 		if !stream || w == nil || text == "" {

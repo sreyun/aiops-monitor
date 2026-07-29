@@ -412,6 +412,9 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var slotID uint64
+	ctx, slotID = withAIUsageSlot(ctx)
+	defer endAIUsageSlot(slotID)
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", nil, fmt.Errorf("AI Endpoint 或模型名未配置，请先在「AI 设置」中填写并保存")
 	}
@@ -562,7 +565,7 @@ func aiChatVOpts(ctx context.Context, cfg AIConfig, messages []map[string]string
 			return "", nil, fmt.Errorf("解析 AI 响应失败：%v", err)
 		}
 		if out.Usage != nil {
-			captureAIUsage(out.Usage.PromptTokens, out.Usage.CompletionTokens)
+			captureAIUsageCtx(ctx, out.Usage.PromptTokens, out.Usage.CompletionTokens)
 		}
 		if len(out.Choices) == 0 {
 			return "", nil, fmt.Errorf("AI 服务返回空结果")
@@ -702,7 +705,7 @@ func aiChatVStreamOpts(ctx context.Context, cfg AIConfig, messages []map[string]
 			continue
 		}
 		if chunk.Usage != nil {
-			captureAIUsage(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
+			captureAIUsageCtx(ctx, chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens)
 		}
 		if len(chunk.Choices) == 0 {
 			continue
