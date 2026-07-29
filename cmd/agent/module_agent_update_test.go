@@ -106,6 +106,9 @@ func TestValidateUpdateServerURL(t *testing.T) {
 	if err := validateUpdateServerURL("http://mon.example:8529", []string{"http://mon.example:8529"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := validateUpdateServerURL("https://mon.example:8529", []string{"http://mon.example:8529"}); err != nil {
+		t.Fatal("http↔https same host must be allowed:", err)
+	}
 	if err := validateUpdateServerURL("http://evil.example", []string{"http://mon.example:8529"}); err == nil {
 		t.Fatal("expected reject")
 	}

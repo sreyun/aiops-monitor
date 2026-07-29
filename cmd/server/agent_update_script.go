@@ -147,9 +147,9 @@ echo "legacy agent update ok sha=$ACTUAL"
 }
 
 func legacyWindowsAgentUpdateScript(server, bin string) string {
-	// Keep as one encoded command; restart must use --install-service / --config.
-	// Bare Start-Process $Exe (no args) was breaking terminal + remote desktop
-	// after auto-update on hosts without a healthy SCM restart.
+	// Keep as one encoded command; restart must use --install-service / --config
+	// for service installs, and VBS/schtasks/Start-Process --config for per-user
+	// one-liner installs. Bare Start-Process $Exe (no args) breaks terminal+desktop.
 	ps := fmt.Sprintf(`$ErrorActionPreference='Stop'
 try{[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072}catch{}
 $Server='%s'; $Bin='%s'
@@ -166,29 +166,34 @@ $Expected=((Invoke-WebRequest "$Server/dl/$Bin.sha256" -UseBasicParsing).Content
 $Sha=[Security.Cryptography.SHA256]::Create(); $Stream=[IO.File]::OpenRead($New)
 try{ $Actual=([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace('-','').ToLowerInvariant() } finally { $Stream.Dispose(); $Sha.Dispose() }
 if(-not $Expected -or $Expected -ne $Actual){ Remove-Item $New -Force; throw 'SHA-256 mismatch' }
-foreach($name in @('AiopsMonitorAgent','AIOps-Agent')){ Get-Service $name -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue }
-Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+$procNames=@('aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64','aiops-agent-windows-amd64-win2012')
+$svcNames=@('AiopsMonitorAgent','AIOps-Agent','AIOpsAgent')
+foreach($name in $svcNames){ Get-Service $name -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue }
+Get-Process -Name $procNames -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 800
 if(Test-Path $Exe){ Copy-Item $Exe ($Exe+'.bak') -Force -ErrorAction SilentlyContinue }
 Move-Item $New $Exe -Force
 try{ Unblock-File $Exe -ErrorAction SilentlyContinue }catch{}
+function Test-Running { if(Get-Process -Name $procNames -ErrorAction SilentlyContinue){ return $true }; foreach($n in $svcNames){ $s=Get-Service $n -ErrorAction SilentlyContinue; if($s -and $s.Status -eq 'Running'){ return $true } }; return $false }
 $ok=$false
-if($Cfg){
+$hasSvc=$false
+foreach($n in $svcNames){ if(Get-Service $n -ErrorAction SilentlyContinue){ $hasSvc=$true; break } }
+if($hasSvc -and $Cfg){
   $p=Start-Process -FilePath $Exe -ArgumentList @('--install-service','--config',$Cfg) -WorkingDirectory $Dir -Wait -PassThru -WindowStyle Hidden
   if($p.ExitCode -eq 0){ $ok=$true }
-}
-if(-not $ok){
-  $svc=Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue
-  if($svc){ Start-Service AiopsMonitorAgent; $ok=$true }
+  if(-not $ok){ foreach($n in $svcNames){ $svc=Get-Service $n -ErrorAction SilentlyContinue; if($svc){ try{ Start-Service $n; $ok=$true; break }catch{} } } }
 }
 if(-not $ok){
   $vbs=Join-Path $Dir 'start-agent.vbs'
   if(Test-Path $vbs){ Start-Process wscript.exe -ArgumentList ('"'+$vbs+'"') -WorkingDirectory $Dir -WindowStyle Hidden }
-  elseif($Cfg){ Start-Process -FilePath $Exe -ArgumentList @('--config',$Cfg) -WorkingDirectory $Dir -WindowStyle Hidden }
-  else { throw 'restart failed: no service and no config.yaml beside agent' }
+  else {
+    foreach($tn in @('AIOpsAgent','AIOpsAgentKeepalive')){ try{ schtasks /Run /TN $tn 2>$null | Out-Null }catch{} }
+    if($Cfg){ Start-Process -FilePath $Exe -ArgumentList @('--config',$Cfg) -WorkingDirectory $Dir -WindowStyle Hidden }
+    else { throw 'restart failed: no service and no config.yaml beside agent' }
+  }
 }
-Start-Sleep -Seconds 2
-if(-not (Get-Process -Name 'aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64' -ErrorAction SilentlyContinue) -and -not (Get-Service AiopsMonitorAgent -ErrorAction SilentlyContinue | Where-Object Status -eq Running)){ throw 'agent not running after update' }
+Start-Sleep -Seconds 3
+if(-not (Test-Running)){ throw 'agent not running after update' }
 Write-Output ('legacy agent update ok sha='+$Actual)
 `,
 		strings.ReplaceAll(server, "'", "''"),

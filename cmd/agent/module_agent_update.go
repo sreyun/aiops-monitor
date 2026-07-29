@@ -367,7 +367,8 @@ func validateUpdateServerURL(server string, allowedBases []string) error {
 		if err != nil {
 			continue
 		}
-		if strings.EqualFold(u.Scheme, bu.Scheme) && strings.EqualFold(u.Host, bu.Host) {
+		if strings.EqualFold(u.Host, bu.Host) {
+			// http↔https after redirect / TLS upgrade: still the same monitor.
 			return nil
 		}
 	}

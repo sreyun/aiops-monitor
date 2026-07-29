@@ -20,6 +20,10 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 		"AiopsMonitorAgent",
 		"WorkingDirectory",
 		"agent failed to restart after binary replace",
+		"Restart-AgentUserMode",
+		"start-agent.vbs",
+		"schtasks.exe",
+		"hasService=",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("helper script missing %q", want)
@@ -37,5 +41,21 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 	}
 	if !strings.Contains(script, "Move-Item attempt") {
 		t.Fatal("helper must retry Move-Item under AV locks")
+	}
+	if !strings.Contains(script, "Copy-Item fallback") {
+		t.Fatal("helper must fall back to Copy-Item when Move-Item is locked")
+	}
+	// Pre-swap failures must not restore a leftover .bak over a still-good PE.
+	if !strings.Contains(script, "$swapped = $false") || !strings.Contains(script, "$swapped = $true") {
+		t.Fatal("helper must track $swapped around Move-Item")
+	}
+	if !strings.Contains(script, "$swapped -or -not (Test-Path -LiteralPath $exe)") {
+		t.Fatal("helper must restore .bak only after swap or when exe is missing")
+	}
+	if strings.Contains(script, "elseif ((Test-Path -LiteralPath $bak))") {
+		t.Fatal("helper must not unconditionally restore .bak whenever it exists")
+	}
+	if !strings.Contains(script, "aiops-agent-windows-amd64-win2012") {
+		t.Fatal("helper must stop/check Win2012 process name")
 	}
 }

@@ -2146,7 +2146,7 @@ function Stop-AiopsServiceQuiet {
 Remove-AiopsScheduledTask 'AIOpsAgent'
 Remove-AiopsScheduledTask 'AIOps-Agent'
 
-# Step 2b: Stop + remove the Windows service (elevated installs since v6.35).
+# Step 2b: Stop + remove the Windows service (elevated service installs).
 # Stop FIRST (clean stop won't trigger crash-recovery), then delete. Deleting
 # needs admin; without it the service keeps the exe locked and restarts the host.
 Stop-AiopsServiceQuiet

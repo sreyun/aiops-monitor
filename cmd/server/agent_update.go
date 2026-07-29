@@ -12,11 +12,11 @@ import (
 const (
 	agentUpdateMaxJobs     = 50
 	agentUpdateConcurrency = 3
-	agentUpdateTimeoutSec  = 180
-	agentUpdateMaxRetries  = 1
+	agentUpdateTimeoutSec  = 240
+	agentUpdateMaxRetries  = 2
 	// Cooldown after enqueue so success-before-version-ack cannot storm.
-	agentUpdateInFlightSec   = 1800 // hard cooldown after enqueue
-	agentUpdateSoftRetrySec  = 180  // if still behind, allow re-queue after this
+	agentUpdateInFlightSec  = 1800 // hard cooldown after enqueue
+	agentUpdateSoftRetrySec = 60   // if still behind, allow re-queue (Windows helper often needs a 2nd push)
 )
 
 type agentUpdateHostResult struct {
@@ -25,7 +25,7 @@ type agentUpdateHostResult struct {
 	OS       string `json:"os"`
 	Arch     string `json:"arch"`
 	FromVer  string `json:"from_version,omitempty"`
-	Status   string `json:"status"` // pending|running|success|failed|skipped
+	Status   string `json:"status"` // pending|running|success|failed|skipped|pending_verify
 	Method   string `json:"method,omitempty"` // module|script|rollback
 	Message  string `json:"message,omitempty"`
 	Updated  int64  `json:"updated_at,omitempty"`
@@ -434,6 +434,36 @@ func (s *Server) runAgentUpdateJob(job *agentUpdateJob) {
 		}()
 	}
 	wg.Wait()
+	// Windows helpers report "restart scheduled" before version bumps — keep the
+	// job open until pending_verify clears (or verify timeout), so the UI polls.
+	go s.finalizeAgentUpdateJobWhenVerified(job)
+}
+
+func (s *Server) finalizeAgentUpdateJobWhenVerified(job *agentUpdateJob) {
+	if job == nil {
+		return
+	}
+	deadline := time.Now().Add(6 * time.Minute)
+	for time.Now().Before(deadline) {
+		pending := 0
+		if s.agentUpdates != nil {
+			s.agentUpdates.mu.Lock()
+			j := s.agentUpdates.jobs[job.ID]
+			if j != nil {
+				for _, hr := range j.Hosts {
+					if hr != nil && hr.Status == "pending_verify" {
+						pending++
+					}
+				}
+			}
+			s.agentUpdates.mu.Unlock()
+		}
+		if pending == 0 {
+			s.agentUpdates.setJobStatus(job, "done", true)
+			return
+		}
+		time.Sleep(3 * time.Second)
+	}
 	s.agentUpdates.setJobStatus(job, "done", true)
 }
 
@@ -444,23 +474,25 @@ func (s *Server) finishHostInFlight(job *agentUpdateJob, hr *agentUpdateHostResu
 	switch hr.Status {
 	case "skipped", "failed":
 		s.agentUpdates.clearInFlight(hr.HostID)
-	case "success":
+	case "success", "pending_verify":
 		// Keep cooldown until the host actually reports the new version (or TTL).
 		s.agentUpdates.refreshInFlight(hr.HostID)
-		go s.waitVersionAckOrExpire(hr.HostID, job.TargetVer, job.Rollback)
+		go s.waitVersionAckOrExpire(job, hr.HostID, job.TargetVer, job.Rollback)
 	default:
 		s.agentUpdates.clearInFlight(hr.HostID)
 	}
 }
 
-func (s *Server) waitVersionAckOrExpire(hostID, target string, rollback bool) {
+func (s *Server) waitVersionAckOrExpire(job *agentUpdateJob, hostID, target string, rollback bool) {
 	if rollback || !isComparableAgentVer(target) {
 		// Rollback / uncomparable: keep short cooldown only.
 		time.Sleep(2 * time.Minute)
 		s.agentUpdates.clearInFlight(hostID)
 		return
 	}
-	deadline := time.Now().Add(time.Duration(agentUpdateInFlightSec) * time.Second)
+	// Give the helper a few report cycles to come back with the new version.
+	// Soft-retry (60s) can re-queue in parallel if still behind.
+	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		time.Sleep(5 * time.Second)
 		h := s.hostByID(hostID)
@@ -469,10 +501,57 @@ func (s *Server) waitVersionAckOrExpire(hostID, target string, rollback bool) {
 		}
 		if !agentVersionBehind(h.AgentVersion, target) {
 			s.agentUpdates.clearInFlight(hostID)
+			if job != nil {
+				s.markHostUpdateVerified(job, hostID, h.AgentVersion)
+			}
 			return
 		}
 	}
-	// TTL handled by tryMarkInFlight; leave stamp in place.
+	// Timed out without version ack — mark failed so UI/auto-retry can act.
+	if job != nil {
+		s.markHostUpdateVerifyFailed(job, hostID, target)
+	}
+	// Soft-retry path uses inFlight age; leave stamp so tryMarkInFlightOrSoftRetry can re-queue.
+}
+
+func (s *Server) markHostUpdateVerified(job *agentUpdateJob, hostID, ver string) {
+	if s.agentUpdates == nil || job == nil {
+		return
+	}
+	s.agentUpdates.mu.Lock()
+	defer s.agentUpdates.mu.Unlock()
+	j := s.agentUpdates.jobs[job.ID]
+	if j == nil {
+		return
+	}
+	for _, hr := range j.Hosts {
+		if hr != nil && hr.HostID == hostID && (hr.Status == "pending_verify" || hr.Status == "success") {
+			hr.Status = "success"
+			hr.Message = truncateRun("verified agent_version="+ver, 500)
+			hr.Updated = time.Now().Unix()
+			return
+		}
+	}
+}
+
+func (s *Server) markHostUpdateVerifyFailed(job *agentUpdateJob, hostID, target string) {
+	if s.agentUpdates == nil || job == nil {
+		return
+	}
+	s.agentUpdates.mu.Lock()
+	defer s.agentUpdates.mu.Unlock()
+	j := s.agentUpdates.jobs[job.ID]
+	if j == nil {
+		return
+	}
+	for _, hr := range j.Hosts {
+		if hr != nil && hr.HostID == hostID && hr.Status == "pending_verify" {
+			hr.Status = "failed"
+			hr.Message = truncateRun("restart scheduled but agent_version still behind "+target+" (helper may have failed; will soft-retry)", 500)
+			hr.Updated = time.Now().Unix()
+			return
+		}
+	}
 }
 
 func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHostResult) {
@@ -549,7 +628,14 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 			out, lastKind, lastErr = s.runLegacyAgentUpdateScriptKind(h, scriptBase, job.Force)
 		}
 		if lastErr == nil {
-			s.agentUpdates.setHostResult(hr, "success", method, truncateRun(out, 500))
+			msg := truncateRun(out, 500)
+			// Windows (and Unix detached helpers) report success as soon as restart
+			// is scheduled — keep pending_verify until agent_version actually catches up.
+			if strings.Contains(strings.ToLower(out), "restart scheduled") {
+				s.agentUpdates.setHostResult(hr, "pending_verify", method, msg)
+			} else {
+				s.agentUpdates.setHostResult(hr, "success", method, msg)
+			}
 			return
 		}
 		if attempt < agentUpdateMaxRetries && lastKind.retryable() {
@@ -704,8 +790,8 @@ func (s *Server) maybeAutoUpdateHost(hostID string) {
 	if ok, _ := s.remoteGateCheck(h.ID, "auto-update", false, false); !ok {
 		return
 	}
-	// Soft-retry: if still behind after ~3 minutes, re-queue (Windows helper often
-	// reported "success" while powershell/PATH/wrong-PE left the host on the old build).
+	// Soft-retry: if still behind after ~60s, re-queue (Windows helper often
+	// reported "restart scheduled" while powershell/PATH/wrong-PE left the host on the old build).
 	if !s.agentUpdates.tryMarkInFlightOrSoftRetry(h.ID, true) {
 		return
 	}

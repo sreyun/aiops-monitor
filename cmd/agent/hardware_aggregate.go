@@ -15,7 +15,7 @@ import (
 // 列表，内存里的告警评估集合就会被后到的一方整体覆盖，导致另一方的所有硬件
 // 告警每轮 fire→resolve→fire 抖动。按 target 合并后再上报即可根除。
 //
-// v6.15.0: map key 从 TargetName 改为 TargetURL。用户在 config.json 中改名后，
+// map key 从 TargetName 改为 TargetURL。用户在 config.json 中改名后，
 // TargetURL（BMC/存储控制器地址）不变，按 URL 去重可确保改名后的快照覆盖旧条目，
 // 而非并存。服务端同时做 target_url 迁移保证 PG 历史记录连续。
 type hardwareAggregator struct {

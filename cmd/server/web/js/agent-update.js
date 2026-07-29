@@ -121,7 +121,7 @@ function renderAgentUpdateBar() {
     const ok = hosts.filter(x => x.status === "success").length;
     const fail = hosts.filter(x => x.status === "failed").length;
     const skip = hosts.filter(x => x.status === "skipped").length;
-    const run = hosts.filter(x => x.status === "running" || x.status === "pending").length;
+    const run = hosts.filter(x => x.status === "running" || x.status === "pending" || x.status === "pending_verify").length;
     const stKey = "agent_update.status_" + (j.status || "queued");
     const stLabel = I18N.t(stKey, j.status || "queued");
     jobHtml = `<div class="agent-job" aria-live="polite">
@@ -207,7 +207,7 @@ function stopAgentUpdatePoll() {
 
 function pollAgentUpdateJob(id) {
   stopAgentUpdatePoll();
-  AGENT_UPDATE_POLL_LEFT = 150; // ~5 min at 2s
+  AGENT_UPDATE_POLL_LEFT = 200; // ~6.5 min at 2s (covers pending_verify)
   AGENT_UPDATE_TIMER = setInterval(async () => {
     AGENT_UPDATE_POLL_LEFT -= 1;
     if (AGENT_UPDATE_POLL_LEFT <= 0) {

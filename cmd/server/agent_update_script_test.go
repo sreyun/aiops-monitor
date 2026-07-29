@@ -26,7 +26,7 @@ func TestLegacyWindowsAgentUpdateScriptUsesInstallService(t *testing.T) {
 		u16[i] = uint16(raw[i*2]) | uint16(raw[i*2+1])<<8
 	}
 	ps := string(utf16.Decode(u16))
-	for _, want := range []string{"--install-service", "--config", "WorkingDirectory"} {
+	for _, want := range []string{"--install-service", "--config", "WorkingDirectory", "aiops-agent-windows-amd64-win2012", "hasSvc", "start-agent.vbs"} {
 		if !strings.Contains(ps, want) {
 			t.Fatalf("legacy windows script missing %q", want)
 		}

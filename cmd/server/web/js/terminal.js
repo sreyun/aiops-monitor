@@ -53,7 +53,7 @@ function ensureTermHeartbeatWorker() {
   }
 }
 
-// v6.1.5: 从其他应用切换回浏览器窗口时恢复终端焦点
+// 从其他应用切换回浏览器窗口时恢复终端焦点
 window.addEventListener("focus", () => {
   // 延迟 50ms 等浏览器完成焦点恢复流程
   setTimeout(_refocusActiveTermInput, 50);
@@ -74,11 +74,11 @@ document.addEventListener("visibilitychange", () => {
       }, 500);
     }
   }
-  // v6.1.5: 切回标签页时立即恢复活动终端的输入焦点
+  // 切回标签页时立即恢复活动终端的输入焦点
   _refocusActiveTermInput();
 });
 
-/* ---------- v6.1.5: 全局焦点守卫 — 防止终端输入焦点在各种操作中丢失 ---------- */
+/* ---------- 全局焦点守卫 — 防止终端输入焦点在各种操作中丢失 ---------- */
 // 当终端面板可见且焦点漂移到非终端元素时，自动恢复焦点。
 // 覆盖场景：窗口 resize 后、最大化/还原后、从 dock 展开后、WS 重连后、
 // 浏览器标签页切换回来后、用户点击终端区域但焦点未进入 textarea 等。
@@ -661,7 +661,7 @@ function createTermTab(id, name, tabName, opts) {
       input.focus({ preventScroll: true });
     }
   });
-  // v6.1.5: mousedown 兜底 — 点击终端区域时确保 textarea 获得焦点
+  // mousedown 兜底 — 点击终端区域时确保 textarea 获得焦点
   // 某些浏览器中 mouseup 可能被取消（如快速点击、拖拽操作），
   // 在 mousedown 阶段先设置一个延迟聚焦守卫。
   screen.addEventListener("mousedown", function() {
@@ -1104,7 +1104,7 @@ function expandTermFromDock(tabId) {
           modal.style.transition = "";
           modal.style.transform = "";
           modal.style.opacity = "";
-          // v6.1.5: 展开动画结束后 refit + 恢复焦点
+          // 展开动画结束后 refit + 恢复焦点
           termRefit();
           _refocusActiveTermInput();
         }, 250);
@@ -1455,7 +1455,7 @@ function termResizeSend(ws, cols, rows) {
   ws.send(framed);
 }
 // 重新测量终端并把新尺寸告知 PTY（放大/还原/窗口变化后调用）
-// v6.1.5: resize 后自动恢复输入焦点，防止光标丢失
+// resize 后自动恢复输入焦点，防止光标丢失
 function termRefit() {
   if (TERM_ACTIVE < 0 || !TERM_TABS[TERM_ACTIVE]) return;
   const tab = TERM_TABS[TERM_ACTIVE];
@@ -1468,7 +1468,7 @@ function termRefit() {
       termResizeSend(tab.ws, s.cols, s.rows);
     }
   }
-  // v6.1.5: 确保 resize 后焦点回到输入框
+  // 确保 resize 后焦点回到输入框
   _refocusActiveTermInput();
 }
 // 放大 / 还原 终端窗口
@@ -1476,7 +1476,7 @@ safeAddEventListener("termMaxBtn", "click", () => {
   const mask = $("termMask"); if (!mask) return;
   const max = mask.classList.toggle("maximized");
   const btn = $("termMaxBtn"); if (btn) btn.title = max ? I18N.t("ui.restore_size") : I18N.t("ui.maximize_window");
-  // v6.1.5: 等布局稳定后 refit + 恢复焦点（双层 rAF 确保浏览器完成布局）
+  // 等布局稳定后 refit + 恢复焦点（双层 rAF 确保浏览器完成布局）
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       termRefit();
