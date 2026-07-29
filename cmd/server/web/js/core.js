@@ -559,8 +559,15 @@ function releaseFocus(mask) {
   if (FOCUS_TRAP) { mask.removeEventListener("keydown", FOCUS_TRAP); FOCUS_TRAP = null; }
 }
 function closeMask(mask) {
+  if (!mask) return;
+  const wasConfirm = mask.id === "uiConfirmMask" && mask.classList.contains("show") && !!_uiConfirmResolve;
   mask.classList.remove("show");
   releaseFocus(mask);
+  if (wasConfirm) {
+    const r = _uiConfirmResolve;
+    _uiConfirmResolve = null;
+    if (r) r(false);
+  }
 }
 // P1-4: 统一模态弹窗打开函数（带焦点陷阱）
 function openMask(mask) {
@@ -655,6 +662,95 @@ function toast(msg, kind) {
   t._t = setTimeout(() => (t.className = "toast"), 2800);
 }
 
+/* ---------- 应用内确认对话框（替代原生 confirm） ---------- */
+let _uiConfirmResolve = null;
+
+function _finishUiConfirm(ok) {
+  const mask = $("uiConfirmMask");
+  const r = _uiConfirmResolve;
+  _uiConfirmResolve = null;
+  if (mask && mask.classList.contains("show")) {
+    mask.classList.remove("show");
+    releaseFocus(mask);
+  }
+  if (r) r(!!ok);
+}
+
+/**
+ * @param {object} opts
+ * @param {string} [opts.title]
+ * @param {string} [opts.message]
+ * @param {string} [opts.detail]
+ * @param {string} [opts.confirmText]
+ * @param {string} [opts.cancelText]
+ * @param {"danger"|"warn"|"neutral"} [opts.tone]
+ * @returns {Promise<boolean>}
+ */
+function uiConfirm(opts) {
+  opts = opts || {};
+  const mask = $("uiConfirmMask");
+  if (!mask) {
+    // Fallback if markup missing (tests / partial pages).
+    return Promise.resolve(!!window.confirm([opts.title, opts.message, opts.detail].filter(Boolean).join("\n\n")));
+  }
+  if (_uiConfirmResolve) {
+    const prev = _uiConfirmResolve;
+    _uiConfirmResolve = null;
+    prev(false);
+  }
+  return new Promise((resolve) => {
+    _uiConfirmResolve = resolve;
+    const tone = opts.tone === "danger" || opts.tone === "warn" ? opts.tone : "neutral";
+    const title = opts.title || (typeof I18N !== "undefined" ? I18N.t("ui.confirm_title", "请确认") : "请确认");
+    const msg = opts.message || "";
+    const detail = opts.detail || "";
+    const okText = opts.confirmText || (typeof I18N !== "undefined" ? I18N.t("ui.confirm_ok", "确定") : "确定");
+    const cancelText = opts.cancelText || (typeof I18N !== "undefined" ? I18N.t("ui.confirm_cancel", "取消") : "取消");
+
+    const titleEl = $("uiConfirmTitle");
+    const msgEl = $("uiConfirmMessage");
+    const detailEl = $("uiConfirmDetail");
+    const okBtn = $("uiConfirmOkBtn");
+    const cancelBtn = $("uiConfirmCancelBtn");
+    const modal = mask.querySelector(".modal");
+
+    if (titleEl) titleEl.textContent = title;
+    if (msgEl) {
+      msgEl.textContent = msg;
+      msgEl.style.display = msg ? "" : "none";
+    }
+    if (detailEl) {
+      detailEl.textContent = detail;
+      detailEl.hidden = !detail;
+    }
+    if (okBtn) {
+      okBtn.textContent = okText;
+      okBtn.className = "btn " + (tone === "danger" ? "danger" : tone === "warn" ? "warn" : "primary");
+    }
+    if (cancelBtn) cancelBtn.textContent = cancelText;
+    if (modal) {
+      modal.classList.remove("ui-confirm-danger", "ui-confirm-warn", "ui-confirm-neutral");
+      modal.classList.add("ui-confirm-" + tone);
+    }
+    mask.classList.add("show");
+    trapFocus(mask);
+    // Prefer cancel for high-risk; confirm for neutral.
+    const focusEl = tone === "neutral" ? okBtn : cancelBtn;
+    if (focusEl) setTimeout(() => focusEl.focus(), 0);
+  });
+}
+
+function initUiConfirm() {
+  if (window._uiConfirmReady) return;
+  window._uiConfirmReady = true;
+  const okBtn = $("uiConfirmOkBtn");
+  const cancelBtn = $("uiConfirmCancelBtn");
+  const closeBtn = $("uiConfirmCloseBtn");
+  if (okBtn) okBtn.addEventListener("click", () => _finishUiConfirm(true));
+  if (cancelBtn) cancelBtn.addEventListener("click", () => _finishUiConfirm(false));
+  if (closeBtn) closeBtn.addEventListener("click", () => _finishUiConfirm(false));
+}
+
 function icon(name) {
   const p = {
     host: '<path d="M4 4h16v10H4z"/><path d="M2 20h20M8 14v6M16 14v6"/>',
@@ -687,4 +783,60 @@ function animateValue(el, from, to, duration = 400) {
     if (p < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
+}
+
+/* ---------- 工具栏动作菜单（AI / 更多）：点击展开，减少主路径按钮噪音 ---------- */
+function closeAllActMenus(except) {
+  document.querySelectorAll(".act-menu.open").forEach(m => {
+    if (except && m === except) return;
+    m.classList.remove("open");
+    const btn = m.querySelector(".act-menu-trigger");
+    const panel = m.querySelector(".act-menu-panel");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    if (panel) panel.hidden = true;
+  });
+}
+function toggleActMenu(wrap, forceOpen) {
+  if (!wrap) return;
+  const btn = wrap.querySelector(".act-menu-trigger");
+  const panel = wrap.querySelector(".act-menu-panel");
+  if (!btn || !panel) return;
+  const willOpen = forceOpen != null ? !!forceOpen : !wrap.classList.contains("open");
+  closeAllActMenus(willOpen ? wrap : null);
+  wrap.classList.toggle("open", willOpen);
+  btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  panel.hidden = !willOpen;
+}
+function initActMenus() {
+  if (window._actMenusReady) return;
+  window._actMenusReady = true;
+  document.addEventListener("click", e => {
+    const trigger = e.target && e.target.closest ? e.target.closest(".act-menu-trigger") : null;
+    if (trigger) {
+      const wrap = trigger.closest(".act-menu");
+      if (!wrap) return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleActMenu(wrap);
+      return;
+    }
+    // 菜单项点击：先交给按钮自身 handler，再收起（不 stopPropagation）
+    if (e.target && e.target.closest && e.target.closest(".act-menu-panel")) {
+      if (e.target.closest("[role='menuitem'], button")) {
+        setTimeout(() => closeAllActMenus(), 0);
+      }
+      return;
+    }
+    if (!e.target.closest || !e.target.closest(".act-menu")) closeAllActMenus();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") closeAllActMenus();
+  });
+}
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initActMenus);
+  document.addEventListener("DOMContentLoaded", initUiConfirm);
+} else {
+  initActMenus();
+  initUiConfirm();
 }

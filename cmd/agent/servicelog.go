@@ -1,49 +1,69 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+
+	"aiops-monitor/shared"
 )
 
-// serviceLogMaxBytes caps a single log file before it is rotated to ".1".
-// Two generations of 4 MiB is enough to cover a crash loop's worth of history
-// without ever needing an operator to clean up the install directory.
-const serviceLogMaxBytes = 4 << 20
+// Agent runtime log retention (install directory):
+//   - active file + rotated backups = serviceLogMaxFiles
+//   - each file capped at serviceLogMaxBytes
+// Rolling overwrite keeps disk use bounded (~70 MiB worst case).
+const (
+	serviceLogMaxBytes = 10 << 20 // 10 MiB per file
+	serviceLogMaxFiles = 7        // agent.log + agent.log.1 .. agent.log.6
+)
 
-// startServiceFileLog mirrors slog output into <dir>/<name>.
-//
-// A Windows service and the desktop worker it spawns have no console: the SCM
-// discards stderr entirely. That turned every startup failure — unreachable
-// server, rejected token, invalid config — into "the installer said done and
-// nothing showed up in the dashboard", with nothing to look at on the machine.
-// systemd and launchd already capture stderr, so this only ever adds a file.
+// startServiceFileLog mirrors slog output into <dir>/<name> with size-based
+// rotation. Enabled on every platform: Windows services / hidden consoles have
+// no usable stderr, and Linux/macOS operators still need a stable on-disk trail
+// under the install directory (journald/launchd alone is easy to miss).
 func startServiceFileLog(dir, name string) {
-	if dir == "" {
+	if dir == "" || name == "" {
 		return
 	}
-	w := newRotatingFile(filepath.Join(dir, name), serviceLogMaxBytes)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, name)
+	w := newRotatingFile(path, serviceLogMaxBytes, serviceLogMaxFiles)
 	if w == nil {
 		return
 	}
-	slog.SetDefault(slog.New(newAgentTextHandler(io.MultiWriter(os.Stderr, w))))
+	slog.SetDefault(slog.New(newAgentTextHandler(io.MultiWriter(shared.NewConsoleAwareWriter(os.Stderr), w))))
+	slog.Info("运行日志已写入安装目录（滚动覆盖）",
+		"path", path,
+		"max_file_mb", serviceLogMaxBytes>>20,
+		"max_files", serviceLogMaxFiles)
 }
 
 // rotatingFile is a minimal size-capped writer. Log volume here is a handful of
 // lines per report cycle, so a mutex around a plain file is plenty and avoids
 // pulling in a logging dependency for what is purely a diagnostics aid.
 type rotatingFile struct {
-	mu   sync.Mutex
-	path string
-	max  int64
-	f    *os.File
-	n    int64
+	mu       sync.Mutex
+	path     string
+	maxBytes int64
+	maxFiles int // including the active file; backups are path.1 .. path.(maxFiles-1)
+	f        *os.File
+	n        int64
 }
 
-func newRotatingFile(path string, max int64) *rotatingFile {
-	r := &rotatingFile{path: path, max: max}
+func newRotatingFile(path string, maxBytes int64, maxFiles int) *rotatingFile {
+	if maxBytes < 1 {
+		maxBytes = serviceLogMaxBytes
+	}
+	if maxFiles < 1 {
+		maxFiles = 1
+	}
+	r := &rotatingFile{path: path, maxBytes: maxBytes, maxFiles: maxFiles}
 	if err := r.open(); err != nil {
 		return nil
 	}
@@ -77,7 +97,7 @@ func (r *rotatingFile) Write(p []byte) (int, error) {
 	if r.f == nil {
 		return len(p), nil // degraded: never fail a log write into a service crash
 	}
-	if r.n+int64(len(p)) > r.max {
+	if r.n+int64(len(p)) > r.maxBytes {
 		r.rotateLocked()
 	}
 	n, _ := r.f.Write(p)
@@ -89,11 +109,54 @@ func (r *rotatingFile) Write(p []byte) (int, error) {
 }
 
 func (r *rotatingFile) rotateLocked() {
-	_ = r.f.Close()
-	r.f = nil
-	_ = os.Remove(r.path + ".1")
-	_ = os.Rename(r.path, r.path+".1")
+	if r.f != nil {
+		_ = r.f.Close()
+		r.f = nil
+	}
+	// Drop the oldest backup, then shift .N-1 → .N … .1 → .2, active → .1.
+	if r.maxFiles > 1 {
+		oldest := r.backupPath(r.maxFiles - 1)
+		_ = os.Remove(oldest)
+		for i := r.maxFiles - 2; i >= 1; i-- {
+			from, to := r.backupPath(i), r.backupPath(i+1)
+			_ = os.Rename(from, to)
+		}
+		_ = os.Rename(r.path, r.backupPath(1))
+	} else {
+		_ = os.Remove(r.path)
+	}
 	if err := r.open(); err != nil {
 		r.f = nil
 	}
+}
+
+func (r *rotatingFile) backupPath(i int) string {
+	return r.path + "." + strconv.Itoa(i)
+}
+
+// Close implements io.Closer for tests; production leaves the FD open for the
+// process lifetime.
+func (r *rotatingFile) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.f == nil {
+		return nil
+	}
+	err := r.f.Close()
+	r.f = nil
+	return err
+}
+
+// rotatingFileNames lists the active log plus backup suffixes for uninstall /
+// docs (agent.log, agent.log.1, …).
+func rotatingFileNames(base string, maxFiles int) []string {
+	if maxFiles < 1 {
+		maxFiles = 1
+	}
+	out := make([]string, 0, maxFiles)
+	out = append(out, base)
+	for i := 1; i < maxFiles; i++ {
+		out = append(out, fmt.Sprintf("%s.%d", base, i))
+	}
+	return out
 }

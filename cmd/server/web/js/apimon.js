@@ -413,22 +413,171 @@ document.addEventListener("chart-forecast-toggle", (ev) => {
 /* ---------- 事件绑定 ---------- */
 safeAddEventListener("apimonAddBtn", "click", () => openAPISystemModal(null));
 safeAddEventListener("apimonEnvFilter", "change", e => { window.APIMON_ENV_FILTER = e.target.value; renderAPIMon(LAST_APIMON); });
-// OpenAPI / Swagger 一键导入
+// OpenAPI / Swagger 一键导入（支持 Knife4j doc.html 自动拉取）
+let API_IMPORT_GROUPS = [];
 safeAddEventListener("apimonImportBtn", "click", () => {
-  $("apiImportName").value = ""; $("apiImportBase").value = ""; $("apiImportSpec").value = "";
+  $("apiImportName").value = "";
+  $("apiImportBase").value = "";
+  $("apiImportSpec").value = "";
+  if ($("apiImportDocURL")) $("apiImportDocURL").value = "";
+  if ($("apiImportCommonHeaders")) $("apiImportCommonHeaders").value = "";
+  if ($("apiImportCommonBody")) $("apiImportCommonBody").value = "";
+  const adv = document.querySelector("#apiImportMask .api-import-advanced");
+  if (adv) adv.open = false;
+  API_IMPORT_GROUPS = [];
+  renderAPIImportGroups([]);
+  resetAPIImportMethods(["get"]);
+  const notes = $("apiImportFetchNotes");
+  if (notes) { notes.style.display = "none"; notes.textContent = ""; }
   $("apiImportMask").classList.add("show");
+});
+function parseHeaderLines(text) {
+  const headers = {};
+  String(text || "").split("\n").forEach(line => {
+    const i = line.indexOf(":");
+    if (i > 0) {
+      const k = line.slice(0, i).trim();
+      if (k) headers[k] = line.slice(i + 1).trim();
+    }
+  });
+  return headers;
+}
+function resetAPIImportMethods(selected) {
+  const wrap = $("apiImportMethodFilter");
+  if (!wrap) return;
+  const set = new Set((selected || []).map(s => String(s).toLowerCase()));
+  const wantAll = set.has("all") || set.size === 0;
+  wrap.querySelectorAll("[data-api-method]").forEach(btn => {
+    const m = (btn.dataset.apiMethod || "").toLowerCase();
+    btn.classList.toggle("active", wantAll ? m === "all" : set.has(m));
+  });
+  if (!wantAll && !wrap.querySelector(".chip-btn.active")) {
+    const getBtn = wrap.querySelector('[data-api-method="get"]');
+    if (getBtn) getBtn.classList.add("active");
+  }
+}
+function selectedAPIImportMethods() {
+  const wrap = $("apiImportMethodFilter");
+  if (!wrap) return ["get"];
+  if (wrap.querySelector('[data-api-method="all"].active')) return ["all"];
+  const ms = [...wrap.querySelectorAll("[data-api-method].active")]
+    .map(b => (b.dataset.apiMethod || "").toLowerCase())
+    .filter(m => m && m !== "all");
+  return ms.length ? ms : ["get"];
+}
+safeAddEventListener("apiImportMethodFilter", "click", e => {
+  const btn = e.target.closest("[data-api-method]");
+  if (!btn) return;
+  const wrap = $("apiImportMethodFilter");
+  if (!wrap) return;
+  const m = (btn.dataset.apiMethod || "").toLowerCase();
+  if (m === "all") {
+    wrap.querySelectorAll("[data-api-method]").forEach(b => b.classList.toggle("active", b === btn));
+    return;
+  }
+  const allBtn = wrap.querySelector('[data-api-method="all"]');
+  if (allBtn) allBtn.classList.remove("active");
+  btn.classList.toggle("active");
+  if (!wrap.querySelector('[data-api-method]:not([data-api-method="all"]).active')) {
+    const getBtn = wrap.querySelector('[data-api-method="get"]');
+    if (getBtn) getBtn.classList.add("active");
+  }
+});
+function renderAPIImportGroups(groups, selected) {
+  API_IMPORT_GROUPS = Array.isArray(groups) ? groups : [];
+  const wrap = $("apiImportGroupWrap");
+  const sel = $("apiImportGroup");
+  if (!wrap || !sel) return;
+  if (!API_IMPORT_GROUPS.length) {
+    wrap.style.display = "none";
+    sel.innerHTML = "";
+    return;
+  }
+  wrap.style.display = "";
+  const pick = (selected || "").trim();
+  sel.innerHTML = API_IMPORT_GROUPS.map((g, i) => {
+    const name = g.name || "";
+    const on = pick ? name === pick : i === 0;
+    return `<option value="${esc(name)}" data-url="${esc(g.url || "")}" ${on ? "selected" : ""}>${esc(name || g.url || ("分组" + (i + 1)))}</option>`;
+  }).join("");
+}
+async function fetchAPIImportSpec() {
+  const url = (($("apiImportDocURL") && $("apiImportDocURL").value) || "").trim();
+  if (!url) { toast("请填写文档地址（如 http://host:8080/doc.html#/home）", "err"); return; }
+  const group = (($("apiImportGroup") && $("apiImportGroup").value) || "").trim();
+  await withLoading("apiImportFetchBtn", async () => {
+    try {
+      // Do NOT send current base_url: it would freeze the previous group's base when switching groups.
+      const r = await fetch(`${API}/apimon/fetch-openapi`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, group })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (Array.isArray(j.groups) && j.groups.length) {
+        renderAPIImportGroups(j.groups, j.selected_group || group);
+      }
+      if (!r.ok) {
+        toast("拉取失败：" + (j.error || r.status), "err");
+        return;
+      }
+      if (j.spec) $("apiImportSpec").value = typeof j.spec === "string" ? j.spec : JSON.stringify(j.spec, null, 2);
+      // Always sync name/base with the selected group (user may still edit before import).
+      if ($("apiImportName")) {
+        $("apiImportName").value = (j.suggested_name || j.selected_group || "").trim();
+      }
+      if ($("apiImportBase")) {
+        $("apiImportBase").value = (j.suggested_base || "").trim();
+      }
+      if (j.selected_group && $("apiImportGroup")) {
+        $("apiImportGroup").value = j.selected_group;
+      }
+      const notes = $("apiImportFetchNotes");
+      if (notes) {
+        const parts = [];
+        if (j.source_url) parts.push("来源 " + j.source_url);
+        if (Array.isArray(j.notes) && j.notes.length) parts.push(j.notes.join(" · "));
+        notes.textContent = parts.join(" · ") || "已拉取规范";
+        notes.style.display = "";
+      }
+      toast("已拉取 OpenAPI 规范，确认后点击导入", "ok");
+    } catch (e) { toast("拉取失败：" + e, "err"); }
+  });
+}
+safeAddEventListener("apiImportFetchBtn", "click", fetchAPIImportSpec);
+safeAddEventListener("apiImportGroup", "change", () => {
+  // Re-fetch selected group when user switches.
+  if (($("apiImportDocURL") && $("apiImportDocURL").value || "").trim()) fetchAPIImportSpec();
 });
 safeAddEventListener("apiImportDoBtn", "click", async () => {
   const name = $("apiImportName").value.trim();
   const spec = $("apiImportSpec").value.trim();
-  if (!name) { toast("请填写业务系统名称", "err"); return; }
-  if (!spec) { toast("请粘贴 OpenAPI/Swagger JSON", "err"); return; }
+  const docURL = (($("apiImportDocURL") && $("apiImportDocURL").value) || "").trim();
+  if (!name && !docURL) { toast("请填写业务系统名称，或先拉取文档自动填充", "err"); return; }
+  if (!spec && !docURL) { toast("请粘贴 OpenAPI JSON，或填写文档地址并拉取", "err"); return; }
   await withLoading("apiImportDoBtn", async () => {
     try {
-      const r = await fetch(`${API}/apimon/import-openapi`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ system_name: name, base_url: $("apiImportBase").value.trim(), spec }) });
+      const body = {
+        system_name: name || undefined,
+        base_url: $("apiImportBase").value.trim(),
+        spec: spec || undefined,
+        spec_url: !spec && docURL ? docURL : undefined,
+        group: (($("apiImportGroup") && $("apiImportGroup").value) || "").trim() || undefined,
+        methods: selectedAPIImportMethods(),
+        common_headers: parseHeaderLines($("apiImportCommonHeaders") && $("apiImportCommonHeaders").value),
+        common_body: (($("apiImportCommonBody") && $("apiImportCommonBody").value) || "").trim() || undefined
+      };
+      const r = await fetch(`${API}/apimon/import-openapi`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
       const j = await r.json().catch(() => ({}));
       if (r.ok) { toast(`已导入 ${j.count} 个接口`, "ok"); $("apiImportMask").classList.remove("show"); loadAPIMon(); }
-      else { toast("导入失败：" + (j.error || ""), "err"); }
+      else {
+        if (Array.isArray(j.groups) && j.groups.length) renderAPIImportGroups(j.groups);
+        toast("导入失败：" + (j.error || ""), "err");
+      }
     } catch (e) { toast("导入失败：" + e, "err"); }
   });
 });

@@ -355,6 +355,14 @@ func hostSamplesToChatChart(samples []shared.Sample, metrics []string, title str
 		"series":  seriesDefs,
 		"title":   title,
 	}
+	if len(samples) > 0 {
+		chart["now_ts"] = samples[len(samples)-1].Timestamp
+		span := samples[len(samples)-1].Timestamp - samples[0].Timestamp
+		if span < 3600 {
+			span = 3600
+		}
+		chart["horizon_sec"] = span
+	}
 	if yMax > 0 {
 		chart["y_min"] = 0
 		chart["y_max"] = yMax
@@ -765,6 +773,49 @@ func (h *SreyunCore) execAnalyzeMetricTrend(args map[string]any) (string, error)
 	} else {
 		sum += "；整体波动平稳"
 	}
+	if chart != nil {
+		chart["now_ts"] = to
+		chart["horizon_sec"] = int64(hours) * 3600
+	}
+
+	// 预测触阈提醒：对 CPU/内存/磁盘做外推，文字提醒并触发提前预警
+	th := h.s.cfg.Thresholds()
+	step := (to - from) / 180
+	if step < 15 {
+		step = 15
+	}
+	warnParts := make([]string, 0)
+	for _, m := range metrics {
+		var thr float64
+		switch m {
+		case "cpu":
+			thr = th.CPUWarn
+		case "memory", "mem":
+			thr = th.MemWarn
+		case "disk":
+			thr = th.DiskWarn
+		default:
+			continue
+		}
+		hist := make([][2]float64, 0, len(samples))
+		for _, s := range samples {
+			if v, ok := sampleMetricValue(s, m); ok {
+				hist = append(hist, [2]float64{float64(s.Timestamp), v})
+			}
+		}
+		if len(hist) < 4 {
+			continue
+		}
+		if cross, ok := forecastCrossThreshold(hist, thr, step); ok && cross > to {
+			eta := cross - to
+			warnParts = append(warnParts, fmt.Sprintf("%s 约 %s 后触及 %.0f", metricLabel(m), formatHorizon(eta), thr))
+			h.s.raiseForecastEarlyWarning(hst.ID, hst.Hostname, m, thr, cross, to, hist[len(hist)-1][1])
+		}
+	}
+	if len(warnParts) > 0 {
+		sum += "。⚠️ 预测预警：" + strings.Join(warnParts, "；") + "——建议提前处置，将问题抹杀在摇篮中"
+	}
+
 	return capabilityJSON(capabilityResult{
 		OK:      true,
 		Summary: sum,
@@ -776,6 +827,7 @@ func (h *SreyunCore) execAnalyzeMetricTrend(args map[string]any) (string, error)
 			"trends":   trends,
 			"stats":    stats,
 			"points":   len(samples),
+			"forecast_warnings": warnParts,
 		},
 		UIActions: actions,
 	}), nil
@@ -797,9 +849,19 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 		threshold, hasThr = v, true
 	}
 
-	from, to, rangeLabel := parseChartRange(rangeRaw, 24)
+	metricKeyGuess := strings.ToLower(strings.TrimSpace(firstNonEmpty(metric, expr)))
+	isStorage := strings.Contains(metricKeyGuess, "disk") || strings.Contains(metricKeyGuess, "storage") ||
+		strings.Contains(metricKeyGuess, "filesystem") || strings.Contains(metricKeyGuess, "空间")
+	defaultHours := 24
+	if isStorage {
+		defaultHours = 72 // 存储类用更长历史，提升填满时间估算
+	}
+	from, to, rangeLabel := parseChartRange(rangeRaw, defaultHours)
 	rangeSec := to - from
 	horizonSec := rangeSec
+	if isStorage && horizonSec < 48*3600 {
+		horizonSec = 48 * 3600
+	}
 	if strings.TrimSpace(horizonRaw) != "" {
 		hf, ht, _ := parseChartRange(horizonRaw, 24)
 		if ht > hf {
@@ -814,6 +876,7 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 	var hist [][2]float64
 	title := "趋势预测"
 	metricKey := "cpu"
+	var hostID, hostname string
 	if strings.TrimSpace(expr) != "" {
 		series, ok := h.s.dashRangeSeries(strings.TrimSpace(ds), strings.TrimSpace(expr), from, to, step)
 		if !ok || len(series) == 0 || len(series[0].Points) == 0 {
@@ -821,6 +884,7 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 		}
 		hist = series[0].Points
 		title = trimLine(expr, 40) + " · 预测"
+		metricKey = sanitizeForecastLearnKey(expr)
 	} else {
 		hst := h.resolveHostRef(hostRef)
 		if hst == nil {
@@ -828,6 +892,7 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 		}
 		keys := normalizeMetricKeys(metric, "cpu")
 		metricKey = keys[0]
+		hostID, hostname = hst.ID, hst.Hostname
 		samples := h.loadHostSamples(hst.ID, from, to)
 		for _, s := range samples {
 			if v, ok := sampleMetricValue(s, metricKey); ok {
@@ -836,12 +901,25 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 		}
 		title = fmt.Sprintf("%s · %s 预测", hst.Hostname, metricLabel(metricKey))
 	}
+	if !hasThr && h.s != nil {
+		th := h.s.cfg.Thresholds()
+		switch metricKey {
+		case "cpu":
+			threshold, hasThr = th.CPUWarn, true
+		case "memory", "mem":
+			threshold, hasThr = th.MemWarn, true
+		case "disk":
+			threshold, hasThr = th.DiskWarn, true
+		}
+	}
 	if bias := h.s.forecastBiasHints(title+" "+metricKey, 2); bias != "" {
-		// included in summary below
 		_ = bias
 	}
-	// UI/chat path: empty learnKey + no calibration for deterministic overlays.
-	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, "")
+	learnKey := "ai:" + metricKey
+	if hostID != "" {
+		learnKey = "ai:" + hostID + ":" + metricKey
+	}
+	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, learnKey)
 	if errMsg != "" {
 		return capabilityJSON(capabilityResult{OK: false, Error: errMsg}), nil
 	}
@@ -879,28 +957,34 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 	for _, ts := range tsList {
 		rows = append(rows, tsMap[ts])
 	}
-	chart := map[string]any{"samples": rows, "series": seriesDefs, "title": title}
+	chart := map[string]any{"samples": rows, "series": seriesDefs, "title": title, "now_ts": to}
 
 	sum := fmt.Sprintf("已完成预测（%s，MAPE≈%.1f%%，R²≈%.2f，方法 %s，展望 %s）",
 		rangeLabel, mape, r2, method, formatHorizon(horizonSec))
 	if bias := h.s.forecastBiasHints(metricKey+" "+title, 2); bias != "" {
 		sum += "；已注入历史偏差修正提示"
 	}
+	lastVal := hist[len(hist)-1][1]
 	data := map[string]any{
 		"mape": mape, "r2": r2, "method": method,
 		"horizon_sec": horizonSec, "points": len(band),
 		"forecast_last": round3(band[len(band)-1].Value),
 		"forecast_hi":   round3(band[len(band)-1].Hi),
 		"forecast_lo":   round3(band[len(band)-1].Lo),
+		"metric":        metricKey,
 	}
 	if hasThr {
 		if cross, ok := forecastCrossThreshold(hist, threshold, step); ok {
 			data["cross_threshold_at"] = cross
 			data["cross_threshold_in"] = cross - to
-			sum += fmt.Sprintf("；按趋势预计约 %s 后触及阈值 %.2f", formatHorizon(cross-to), threshold)
-			// Persist soft bias anchor for later reflection
-			go h.s.rememberAI("forecast_bias", "forecast_anchor:"+metricKey,
-				fmt.Sprintf("预测锚点：%s 阈值 %.2f，预计穿越时间戳 %d，预测末端 %.2f", metricKey, threshold, cross, band[len(band)-1].Value))
+			data["threshold"] = threshold
+			sum += fmt.Sprintf("；⚠️ 按趋势预计约 %s 后触及阈值 %.2f，请提前关注", formatHorizon(cross-to), threshold)
+			if hostID != "" {
+				h.s.raiseForecastEarlyWarning(hostID, hostname, metricKey, threshold, cross, to, lastVal)
+			} else {
+				go h.s.rememberAI("forecast_bias", "forecast_anchor:"+metricKey,
+					fmt.Sprintf("预测锚点：%s 阈值 %.2f，预计穿越时间戳 %d，预测末端 %.2f", metricKey, threshold, cross, band[len(band)-1].Value))
+			}
 		} else {
 			sum += fmt.Sprintf("；在展望窗口内未必触及阈值 %.2f", threshold)
 		}

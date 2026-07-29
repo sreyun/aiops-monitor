@@ -8,14 +8,15 @@ import (
 	"strings"
 )
 
-const metricsForecastMaxSeries = 12
+const metricsForecastMaxSeries = 32
 
 // metricsForecastReq accepts already-aligned sample series (host/AI/SNMP/…).
 // Unlike /dashboards/query-forecast it does not require PromQL.
 type metricsForecastReq struct {
 	Series     []metricsForecastIn `json:"series"`
-	HorizonSec int64               `json:"horizon_sec"` // 0 = equal to history span
+	HorizonSec int64               `json:"horizon_sec"` // 0 = equal to max history span
 	Step       int64               `json:"step"`        // 0 = auto from median delta
+	NowTS      int64               `json:"now_ts"`      // optional client "now"; padded when series end earlier
 }
 
 type metricsForecastIn struct {
@@ -39,51 +40,104 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		req.Series = req.Series[:metricsForecastMaxSeries]
 	}
 
-	out := make([]forecastSeriesOut, 0, len(req.Series)*2)
-	meta := forecastMeta{Mode: "forecast", OK: false}
-	var bestMAPE float64 = 1e9
-	bestMethod := ""
-	var nowTS int64
-	anyOK := false
+	// Normalize + hold-forward every series to a shared "now" so sparse metrics
+	// (TCP/UDP transforms with trailing nulls) still get a future band aligned
+	// with denser series like CPU%.
+	type prepared struct {
+		name string
+		pts  [][2]float64
+		step int64
+		span int64
+	}
+	prep := make([]prepared, 0, len(req.Series))
+	var globalEnd int64
+	var maxSpan int64
+	stepHint := req.Step
 
 	for i, in := range req.Series {
 		name := strings.TrimSpace(in.Name)
 		if name == "" {
 			name = fmt.Sprintf("系列%d", i+1)
 		}
-		pts := in.Points
-		if len(pts) < 8 {
+		pts := cleanForecastPoints(in.Points)
+		if len(pts) < 4 {
 			continue
 		}
-		// History passthrough (caller may already have history drawn; still return for completeness)
-		out = append(out, forecastSeriesOut{
-			Name: name, Kind: "history", Points: pts,
-		})
-		step := req.Step
+		step := stepHint
 		if step <= 0 {
 			step = inferStep(pts)
 		}
 		span := int64(pts[len(pts)-1][0] - pts[0][0])
-		if span < step*8 {
+		minSpan := step * 2
+		if minSpan < 30 {
+			minSpan = 30
+		}
+		if span < minSpan && len(pts) < 6 {
 			continue
 		}
-		horizon := req.HorizonSec
-		if horizon <= 0 {
-			horizon = span
+		end := int64(pts[len(pts)-1][0])
+		if end > globalEnd {
+			globalEnd = end
 		}
-		if horizon > span*4 {
-			horizon = span * 4
+		if span > maxSpan {
+			maxSpan = span
 		}
-		if horizon > 90*24*3600 {
-			horizon = 90 * 24 * 3600
+		prep = append(prep, prepared{name: name, pts: pts, step: step, span: span})
+	}
+	if req.NowTS > globalEnd {
+		globalEnd = req.NowTS
+	}
+	for i := range prep {
+		prep[i].pts = holdForwardTo(prep[i].pts, globalEnd)
+	}
+
+	horizon := req.HorizonSec
+	if horizon <= 0 {
+		horizon = maxSpan
+	}
+	// 短历史时仍允许客户指定更长展望（AI 会话「近 6h」应对齐未来窗）
+	if maxSpan > 0 && req.HorizonSec <= 0 && horizon > maxSpan*4 {
+		horizon = maxSpan * 4
+	}
+	if req.HorizonSec > 0 && horizon > 90*24*3600 {
+		horizon = 90 * 24 * 3600
+	} else if horizon > 90*24*3600 {
+		horizon = 90 * 24 * 3600
+	}
+	if horizon < 1 && maxSpan > 0 {
+		horizon = maxSpan
+	}
+	// 历史很短时至少展望 30 分钟，保证图表右侧能看见虚线
+	if maxSpan > 0 && maxSpan < 1800 && horizon < 1800 {
+		horizon = 1800
+	}
+
+	out := make([]forecastSeriesOut, 0, len(prep)*2)
+	meta := forecastMeta{Mode: "forecast", OK: false, NowTS: globalEnd, HorizonSec: horizon}
+	var bestMAPE float64 = 1e9
+	bestMethod := ""
+	anyOK := false
+
+	for _, p := range prep {
+		pts := p.pts
+		out = append(out, forecastSeriesOut{
+			Name: p.name, Kind: "history", Points: pts,
+		})
+		step := p.step
+		if stepHint > 0 {
+			step = stepHint
 		}
 		fromTS := int64(pts[len(pts)-1][0])
-		if fromTS > nowTS {
-			nowTS = fromTS
+		// Ensure horizon reaches past the shared now even if this series was short.
+		hz := horizon
+		if globalEnd > fromTS {
+			hz += globalEnd - fromTS
 		}
-		// UI path: empty learnKey + no calibration so the same history yields the same
-		// forecast (learning still runs for PromQL/dashboard paths).
-		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, horizon, step, "")
+		if hz < step*8 {
+			hz = step * 8
+		}
+		learnKey := "metrics:" + sanitizeForecastLearnKey(p.name)
+		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, hz, step, learnKey)
 		if errMsg != "" || len(fc) == 0 {
 			continue
 		}
@@ -95,21 +149,18 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		}
 		fcPts := make([][2]float64, 0, len(fc)+1)
 		band := make([]forecastPoint, 0, len(fc)+1)
-		// Bridge last history point
 		fcPts = append(fcPts, last)
 		band = append(band, forecastPoint{TS: last[0], Value: last[1], Lo: last[1], Hi: last[1]})
-		for _, p := range fc {
-			fcPts = append(fcPts, [2]float64{p.TS, p.Value})
-			band = append(band, p)
+		for _, fp := range fc {
+			fcPts = append(fcPts, [2]float64{fp.TS, fp.Value})
+			band = append(band, fp)
 		}
 		out = append(out, forecastSeriesOut{
-			Name: name + " · 预测", Kind: "forecast", Points: fcPts, Band: band,
+			Name: p.name + " · 预测", Kind: "forecast", Points: fcPts, Band: band,
 		})
-		meta.HorizonSec = horizon
 		meta.Step = step
 	}
 
-	meta.NowTS = nowTS
 	if anyOK {
 		meta.OK = true
 		meta.Method = bestMethod
@@ -117,7 +168,7 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		meta.Message = fmt.Sprintf("左=实时 · 右=预测（%s，MAPE≈%.1f%%，%d 序列）",
 			bestMethod, bestMAPE, countForecastKinds(out))
 	} else {
-		meta.Message = "数据不足，暂无法预测（每条序列至少约 8 个采样点）"
+		meta.Message = "数据不足，暂无法预测（每条序列至少约 4 个采样点）"
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -135,6 +186,74 @@ func countForecastKinds(list []forecastSeriesOut) int {
 		}
 	}
 	return n
+}
+
+func sanitizeForecastLearnKey(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	if s == "" {
+		return "series"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-' || r == '.' || r == '%':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+		if b.Len() >= 48 {
+			break
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "series"
+	}
+	return out
+}
+
+func cleanForecastPoints(pts [][2]float64) [][2]float64 {
+	out := make([][2]float64, 0, len(pts))
+	for _, p := range pts {
+		if p[0] <= 0 {
+			continue
+		}
+		if p[1] != p[1] { // NaN
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) < 2 {
+		return out
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	dedup := out[:0]
+	for _, p := range out {
+		if len(dedup) > 0 && dedup[len(dedup)-1][0] == p[0] {
+			dedup[len(dedup)-1] = p
+			continue
+		}
+		dedup = append(dedup, p)
+	}
+	return dedup
+}
+
+// holdForwardTo appends the last value at endTS when the series ends earlier,
+// so multi-series forecast shares one "现在" boundary.
+func holdForwardTo(pts [][2]float64, endTS int64) [][2]float64 {
+	if len(pts) == 0 || endTS <= 0 {
+		return pts
+	}
+	last := pts[len(pts)-1]
+	if int64(last[0]) >= endTS {
+		return pts
+	}
+	out := make([][2]float64, len(pts)+1)
+	copy(out, pts)
+	out[len(pts)] = [2]float64{float64(endTS), last[1]}
+	return out
 }
 
 func inferStep(pts [][2]float64) int64 {

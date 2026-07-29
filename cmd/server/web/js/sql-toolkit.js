@@ -4,8 +4,14 @@ let SQL_CHANGES = [];
 let SQL_HISTORY = [];
 let SQL_SCHEMA = { databases: [], database: "", tables: [], table: "", columns: [] };
 let SQL_SLOW_REPORT = null;
+let SQL_SLOW_Q = "";
+let SQL_SLOW_TYPE = "";
+let SQL_SLOW_SORT = "avg_desc";
+let SQL_SLOW_PAGE = 1;
+let SQL_SLOW_SIZE = 20;
+let SQL_SLOW_VIEW = []; // filtered+sorted {it, idx} for current report
 let SQL_VERIFY_SQL = "";
-let SQL_LAST = { audit: null, optimize: null, explain: null, beautified: "" };
+let SQL_LAST = { audit: null, optimize: null, explain: null, beautified: "", query: null };
 
 function sqlT(k, fb) {
   return (typeof I18N !== "undefined" && I18N.t) ? (I18N.t(k, fb) || fb) : fb;
@@ -16,7 +22,12 @@ async function loadSQLToolkit() {
   renderSQLConnSelect();
   renderSQLHistory();
   const conn = $("sqlConnSel") && $("sqlConnSel").value;
-  if (conn) loadSQLSchema(conn);
+  if (conn) {
+    const c = sqlConnById(conn);
+    await loadSQLSchema(conn, "", (c && c.database) || "");
+  } else {
+    renderSQLDbSelectEmpty();
+  }
   const tab = document.querySelector("#sqlInnerTabs .tab.active");
   const name = tab && tab.dataset.sqlTab ? tab.dataset.sqlTab : "workbench";
   showSQLTab(name);
@@ -42,22 +53,105 @@ function renderSQLConnSelect() {
       const port = c.port || (c.driver === "postgres" ? 5432 : 3306);
       return `<option value="${esc(c.id)}">[${esc(c.env || "prod")}/${drv}] ${esc(c.name)} (${esc(c.host)}:${port})</option>`;
     }).join("");
-  if (prev && enabled.some(c => c.id === prev)) sel.value = prev;
+  if (prev && enabled.some(c => String(c.id) === String(prev))) sel.value = prev;
   if (!sel.dataset.sqlConnBound) {
     sel.dataset.sqlConnBound = "1";
     sel.addEventListener("change", () => {
       const id = sel.value;
       syncSQLDialectFromConn(id);
       syncSQLWorkbenchForDriver(id);
-      if (id) loadSQLSchema(id);
-      else renderSQLSchemaEmpty();
+      if (id) {
+        const c = sqlConnById(id);
+        const prefer = (c && c.database) || "";
+        loadSQLSchema(id, "", prefer || undefined).then(() => syncSQLDbSelect(id));
+      } else {
+        renderSQLSchemaEmpty();
+        renderSQLDbSelectEmpty();
+      }
     });
   }
   syncSQLDialectFromConn(sel.value);
   syncSQLWorkbenchForDriver(sel.value);
 }
 
-function sqlConnById(id) { return SQL_CONNS.find(c => c.id === id); }
+function sqlConnById(id) {
+  const key = String(id || "");
+  if (!key) return null;
+  return SQL_CONNS.find(c => String(c.id) === key) || null;
+}
+
+function sqlActiveSchema() {
+  const sel = $("sqlDbSel");
+  if (sel && sel.value) return String(sel.value).trim();
+  return (SQL_SCHEMA && SQL_SCHEMA.database) || "";
+}
+
+function renderSQLDbSelectEmpty(placeholder) {
+  const sel = $("sqlDbSel");
+  if (!sel) return;
+  sel.innerHTML = `<option value="">${esc(placeholder || sqlT("sql.db_pick", "选择数据库 / Schema"))}</option>`;
+  sel.disabled = true;
+}
+
+function syncSQLDbSelect(connId, prefer) {
+  const sel = $("sqlDbSel");
+  if (!sel) return;
+  const dbs = (SQL_SCHEMA && Array.isArray(SQL_SCHEMA.databases)) ? SQL_SCHEMA.databases.slice() : [];
+  const cur = prefer != null ? String(prefer).trim()
+    : (SQL_SCHEMA.database || (sqlConnById(connId) && sqlConnById(connId).database) || "");
+  if (cur && dbs.indexOf(cur) < 0) dbs.unshift(cur);
+  if (!dbs.length) {
+    // 连接自带默认库时仍展示，便于 EXPLAIN
+    if (cur) {
+      sel.innerHTML = `<option value="${esc(cur)}">${esc(cur)}</option>`;
+      sel.value = cur;
+      sel.disabled = false;
+      SQL_SCHEMA.database = cur;
+    } else {
+      renderSQLDbSelectEmpty(sqlT("sql.db_none", "暂无库（选择连接后自动加载）"));
+    }
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = `<option value="">${esc(sqlT("sql.db_pick", "选择数据库 / Schema"))}</option>` +
+    dbs.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  if (cur && dbs.indexOf(cur) >= 0) {
+    sel.value = cur;
+    SQL_SCHEMA.database = cur;
+  } else if (dbs.length === 1) {
+    sel.value = dbs[0];
+    SQL_SCHEMA.database = dbs[0];
+  }
+  if (!sel.dataset.sqlDbBound) {
+    sel.dataset.sqlDbBound = "1";
+    sel.addEventListener("change", () => {
+      const id = ($("sqlConnSel") && $("sqlConnSel").value) || "";
+      const db = sel.value || "";
+      SQL_SCHEMA.database = db;
+      if (id && db) loadSQLSchema(id, "", db);
+      else if (id) loadSQLSchema(id, "", "");
+    });
+  }
+}
+
+function setActiveSQLDatabase(db, opts) {
+  opts = opts || {};
+  const name = String(db || "").trim();
+  SQL_SCHEMA.database = name;
+  const sel = $("sqlDbSel");
+  if (sel) {
+    if (name && ![...sel.options].some(o => o.value === name)) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name + (opts.inferred ? "（推断）" : "");
+      sel.appendChild(opt);
+    }
+    sel.value = name;
+    sel.disabled = false;
+  }
+  const tag = $("sqlSchemaDb");
+  if (tag && name && !tag.querySelector("button")) tag.textContent = name;
+}
 
 function syncSQLDialectFromConn(id) {
   const c = sqlConnById(id);
@@ -83,44 +177,81 @@ function renderSQLSchemaEmpty() {
   const tb = $("sqlSchemaTables"); if (tb) tb.innerHTML = `<span class="hint">${esc(sqlT("sql.schema_pick_conn", "选择连接后浏览表"))}</span>`;
   const col = $("sqlSchemaColumns"); if (col) col.innerHTML = "";
   SQL_SCHEMA = { databases: [], database: "", tables: [], table: "", columns: [] };
+  renderSQLDbSelectEmpty();
 }
 
 async function loadSQLSchema(connId, table, database) {
   if (!connId) { renderSQLSchemaEmpty(); return; }
   try {
-    const params = new URLSearchParams();
-    const dbName = database != null ? database : (SQL_SCHEMA.database || "");
-    if (dbName) params.set("database", dbName);
-    if (table) params.set("table", table);
-    const q = params.toString() ? `?${params}` : "";
-    const j = await fetch(`${API}/sql/connections/${encodeURIComponent(connId)}/schema${q}`).then(r => r.json());
+    // 列详情
     if (table) {
+      const params = new URLSearchParams();
+      const dbName = (database != null && database !== "") ? database : (SQL_SCHEMA.database || sqlActiveSchema() || "");
+      if (dbName) params.set("database", dbName);
+      params.set("table", table);
+      const j = await fetch(`${API}/sql/connections/${encodeURIComponent(connId)}/schema?${params}`).then(r => r.json());
+      if (j && j.error) throw new Error(j.error);
       SQL_SCHEMA.table = table;
       SQL_SCHEMA.database = j.database || dbName || "";
       SQL_SCHEMA.columns = Array.isArray(j.columns) ? j.columns : [];
+      setActiveSQLDatabase(SQL_SCHEMA.database);
       renderSQLSchemaColumns(j);
-    } else if (Array.isArray(j.databases)) {
-      SQL_SCHEMA.databases = j.databases;
+      return;
+    }
+
+    // 先拉库列表（用于顶部 Database 下拉）
+    const listRes = await fetch(`${API}/sql/connections/${encodeURIComponent(connId)}/schema`).then(r => r.json());
+    if (listRes && listRes.error) throw new Error(listRes.error);
+    if (Array.isArray(listRes.databases)) {
+      SQL_SCHEMA.databases = listRes.databases;
+    } else if (listRes.database) {
+      // 连接已绑定默认库，接口直接回表列表
+      SQL_SCHEMA.databases = [listRes.database];
+      SQL_SCHEMA.tables = Array.isArray(listRes.tables) ? listRes.tables : [];
+      SQL_SCHEMA.database = listRes.database;
+      SQL_SCHEMA.table = "";
+      SQL_SCHEMA.columns = [];
+      setActiveSQLDatabase(listRes.database);
+      syncSQLDbSelect(connId, listRes.database);
+      renderSQLSchemaTables(connId, listRes);
+      return;
+    }
+
+    const c = sqlConnById(connId);
+    let dbName = (database != null && String(database).trim()) ? String(database).trim()
+      : (SQL_SCHEMA.database || (c && c.database) || "");
+    if (!dbName && SQL_SCHEMA.databases.length === 1) {
+      dbName = SQL_SCHEMA.databases[0];
+    }
+    syncSQLDbSelect(connId, dbName);
+
+    if (!dbName) {
       SQL_SCHEMA.database = "";
       SQL_SCHEMA.tables = [];
       SQL_SCHEMA.table = "";
       SQL_SCHEMA.columns = [];
-      renderSQLSchemaDatabases(connId, j.databases);
-    } else {
-      SQL_SCHEMA.tables = Array.isArray(j.tables) ? j.tables : [];
-      SQL_SCHEMA.database = j.database || dbName || "";
-      SQL_SCHEMA.table = "";
-      SQL_SCHEMA.columns = [];
-      renderSQLSchemaTables(connId, j);
+      renderSQLSchemaDatabases(connId, SQL_SCHEMA.databases);
+      return;
     }
+
+    const params = new URLSearchParams({ database: dbName });
+    const j = await fetch(`${API}/sql/connections/${encodeURIComponent(connId)}/schema?${params}`).then(r => r.json());
+    if (j && j.error) throw new Error(j.error);
+    SQL_SCHEMA.tables = Array.isArray(j.tables) ? j.tables : [];
+    SQL_SCHEMA.database = j.database || dbName;
+    SQL_SCHEMA.table = "";
+    SQL_SCHEMA.columns = [];
+    setActiveSQLDatabase(SQL_SCHEMA.database);
+    renderSQLSchemaTables(connId, j);
   } catch (e) {
     renderSQLSchemaEmpty();
+    if (typeof toast === "function") toast(String(e.message || e), "err");
   }
 }
 
 function renderSQLSchemaDatabases(connId, databases) {
   const db = $("sqlSchemaDb");
-  if (db) db.textContent = sqlT("sql.schema_all_dbs", "全部库");
+  if (db) db.textContent = sqlT("sql.schema_all_dbs", "全部库（请在上方选择）");
   const box = $("sqlSchemaTables");
   if (!box) return;
   const dbs = Array.isArray(databases) ? databases : [];
@@ -134,11 +265,12 @@ function renderSQLSchemaDatabases(connId, databases) {
   ).join("");
   box.querySelectorAll("[data-sqlschema-db]").forEach(btn => {
     btn.onclick = () => {
-      SQL_SCHEMA.database = btn.dataset.sqlschemaDb;
-      loadSQLSchema(connId, "", SQL_SCHEMA.database);
+      const name = btn.dataset.sqlschemaDb;
+      setActiveSQLDatabase(name);
+      loadSQLSchema(connId, "", name);
     };
   });
-  const col = $("sqlSchemaColumns"); if (col) col.innerHTML = `<span class="hint">${esc(sqlT("sql.schema_pick_db", "选择数据库后浏览表"))}</span>`;
+  const col = $("sqlSchemaColumns"); if (col) col.innerHTML = `<span class="hint">${esc(sqlT("sql.schema_pick_db", "请在上方 Database 下拉框选择库，或点击左侧库名"))}</span>`;
 }
 
 function renderSQLSchemaTables(connId, j) {
@@ -372,15 +504,357 @@ async function loadSQLSlowLatest() {
   if (!id) {
     if (panel) panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_need_conn", "请先添加并选择 MySQL 连接"))}</div>`;
     if (meta) meta.textContent = "";
+    setSQLSlowFiltersVisible(false);
+    SQL_SLOW_REPORT = null;
     return;
   }
+  SQL_SLOW_PAGE = 1;
   if (panel) panel.innerHTML = `<div class="hint">${esc(sqlT("ui.loading", "加载中…"))}</div>`;
   try {
     const j = await fetch(`${API}/sql/connections/${encodeURIComponent(id)}/slow-sql/latest`).then(r => r.json());
     SQL_SLOW_REPORT = j.report || null;
     renderSQLSlowReport(SQL_SLOW_REPORT);
   } catch (e) {
+    setSQLSlowFiltersVisible(false);
     if (panel) panel.innerHTML = `<div class="hint">${esc(String(e))}</div>`;
+  }
+}
+
+async function selectSQLWorkbenchConn(connId, schema) {
+  await loadSQLConnections();
+  renderSQLConnSelect();
+  const connSel = $("sqlConnSel");
+  if (!connSel) return false;
+  const id = String(connId || "").trim();
+  if (!id) {
+    toast(sqlT("sql.need_conn", "请先选择数据库连接"), "err");
+    return false;
+  }
+  const c = sqlConnById(id);
+  if (!c) {
+    toast(sqlT("sql.conn_missing", "连接不存在或已删除，请刷新后重选"), "err");
+    return false;
+  }
+  if (c.enabled === false) {
+    toast(sqlT("sql.conn_disabled", "连接已停用，请在「连接管理」中启用"), "err");
+    return false;
+  }
+  connSel.value = id;
+  syncSQLDialectFromConn(id);
+  syncSQLWorkbenchForDriver(id);
+  const db = (schema || c.database || "").trim();
+  await loadSQLSchema(id, "", db || "");
+  if (db) setActiveSQLDatabase(db, { inferred: !!schema && schema !== c.database });
+  syncSQLDbSelect(id, db || SQL_SCHEMA.database || "");
+  return true;
+}
+
+async function applySlowSQLToWorkbench(it) {
+  if (!it) return;
+  showSQLTab("workbench");
+  const slowSel = $("sqlSlowConnSel");
+  const connId = (slowSel && slowSel.value) || (SQL_SLOW_REPORT && SQL_SLOW_REPORT.connection_id) || "";
+  let schema = (it.schema || "").trim();
+  if (!schema) {
+    schema = inferSchemaFromSQLClient(it.sql || "");
+    if (schema) it.schema_inferred = true;
+  }
+  const ok = await selectSQLWorkbenchConn(connId, schema);
+  if (!ok) return;
+  const connSel = $("sqlConnSel");
+  if (connSel && connId) connSel.value = connId;
+  if (schema) setActiveSQLDatabase(schema, { inferred: !!it.schema_inferred });
+  setSQLText(String(it.sql || "").trim());
+  const stillPH = !!it.params_unresolved || sqlHasDigestPlaceholders(it.sql);
+  const truncated = !!it.sql_truncated;
+  const recovered = !!it.sql_recovered && !truncated && !stillPH;
+  const banner = $("sqlEditorHint");
+  if (banner) {
+    const notes = [];
+    if (schema) notes.push((it.schema_inferred ? "推断库 " : "库 ") + schema);
+    else notes.push("未识别库名：请在上方「库 / Schema」下拉框中选择后再 EXPLAIN");
+    if (recovered) notes.push("已从语句历史/缓存还原真实参数" + (it.recovery_source ? "（" + it.recovery_source + "）" : ""));
+    else if (it.sql_recovered && stillPH) notes.push("已尝试恢复，但仍含 DIGEST 占位");
+    if (stillPH && !truncated) notes.push("仍为 DIGEST 摘要（含 '?'），未能还原真实参数；EXPLAIN 将使用探测值");
+    if (truncated) notes.push("SQL 仍被 performance_schema 截断，无法 EXPLAIN；请粘贴完整语句或提高限额后重采");
+    banner.textContent = notes.length ? notes.join(" · ") : "";
+    banner.style.display = notes.length ? "" : "none";
+    banner.className = "hint" + (truncated || stillPH || !schema ? " sql-trunc-warn" : "");
+  }
+  renderSQLTruncActions({ truncated, stillPH, connId });
+  if (truncated) {
+    toast(sqlT("sql.truncated_warn", "慢 SQL 仍截断：请粘贴完整语句，或复制调参 SQL 提高限额后重采"), "err");
+  } else if (stillPH) {
+    toast(sqlT("sql.params_unresolved", "仍为 DIGEST 摘要：未能从语句历史还原真实参数；EXPLAIN 将使用探测值"), "warn");
+  } else if (!schema) {
+    toast(sqlT("sql.schema_needed", "已填入 SQL，但未识别到库名——请在上方「库 / Schema」中选择后再 EXPLAIN"), "err");
+  } else {
+    toast(sqlT("sql.applied", "已应用") + (it.sql_recovered ? " · 已还原全文" : "") + " · " + schema, "ok");
+  }
+}
+
+/** Detect MySQL DIGEST_TEXT placeholders: unbound ? / $n, or string literals that are exactly '?'. */
+function sqlHasDigestPlaceholders(sql) {
+  const s = String(sql || "");
+  if (!s) return false;
+  if (s.includes("'?'") || s.includes('"?"')) return true;
+  if (/\$\d+\b/.test(s)) return true;
+  // Strip quoted/backtick spans, then look for bare ?
+  const stripped = s.replace(/'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|`(?:``|[^`])*`/g, " ");
+  return /(^|[^:$])\?(?!\w)/.test(stripped);
+}
+
+function renderSQLTruncActions(opts) {
+  const box = $("sqlTruncActions");
+  if (!box) return;
+  const truncated = !!(opts && opts.truncated);
+  const connId = (opts && opts.connId) || "";
+  if (!truncated) {
+    box.hidden = true;
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const lim = (SQL_SLOW_REPORT && SQL_SLOW_REPORT.ps_limits) || null;
+  const hasRemedy = lim && lim.remedy_sql;
+  box.hidden = false;
+  box.style.display = "flex";
+  box.innerHTML = `
+    <button type="button" class="btn sm primary" id="sqlPasteFullFocusBtn">${esc(sqlT("sql.paste_full", "粘贴完整 SQL"))}</button>
+    <button type="button" class="btn sm" id="sqlCopyRemedyBtn" ${hasRemedy ? "" : "disabled"}>${esc(sqlT("sql.copy_remedy", "复制调参 SQL"))}</button>
+    <button type="button" class="btn sm ghost" id="sqlApplyRemedyBtn" ${connId ? "" : "disabled"}>${esc(sqlT("sql.apply_remedy", "尝试写入限额"))}</button>
+  `;
+  const focusBtn = $("sqlPasteFullFocusBtn");
+  if (focusBtn) focusBtn.onclick = () => {
+    const ed = $("sqlEditor");
+    if (ed) { ed.focus(); ed.select(); }
+    toast(sqlT("sql.paste_hint", "请粘贴完整 SQL 后重新 EXPLAIN"), "ok");
+  };
+  const copyBtn = $("sqlCopyRemedyBtn");
+  if (copyBtn) copyBtn.onclick = async () => {
+    const sql = (lim && lim.remedy_sql) || "";
+    if (!sql) return;
+    try {
+      await navigator.clipboard.writeText(sql);
+      toast(sqlT("sql.remedy_copied", "已复制调参 SQL（写入后多数版本需重启 mysqld）"), "ok");
+    } catch (_) {
+      toast(sql, "ok");
+    }
+  };
+  const applyBtn = $("sqlApplyRemedyBtn");
+  if (applyBtn) applyBtn.onclick = () => applySlowSQLPSLimits(connId);
+}
+
+async function applySlowSQLPSLimits(connId) {
+  if (!connId) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: sqlT("sql.apply_remedy_title", "提高 P_S 文本限额"),
+        message: sqlT("sql.apply_remedy_confirm", "将尝试 SET PERSIST 提高 max_digest_length / SQL_TEXT 限额到 8192。多数版本仍需重启 mysqld 后生效。继续？"),
+        detail: sqlT("sql.apply_remedy_detail", "需要目标库具备相应权限；写入失败时可复制调参 SQL 手工执行。"),
+        confirmText: sqlT("sql.apply_remedy", "尝试写入限额"),
+        tone: "warn"
+      })
+    : confirm(sqlT("sql.apply_remedy_confirm", "将尝试 SET PERSIST 提高 max_digest_length / SQL_TEXT 限额到 8192。多数版本仍需重启 mysqld 后生效。继续？"));
+  if (!ok) return;
+  try {
+    const r = await fetch(`${API}/sql/connections/${encodeURIComponent(connId)}/slow-sql/ps-limits/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, target: 8192 })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.error || "写入失败", "err"); return; }
+    if (SQL_SLOW_REPORT && j.limits) SQL_SLOW_REPORT.ps_limits = j.limits;
+    const notes = (j.notes || []).join("；");
+    toast((notes || "已提交") + (j.restart ? " · " + j.restart : ""), notes && notes.indexOf("失败") >= 0 ? "warn" : "ok");
+    renderSQLSlowPSLimitsBanner(SQL_SLOW_REPORT);
+  } catch (e) { toast(String(e), "err"); }
+}
+
+function renderSQLSlowPSLimitsBanner(rep) {
+  const meta = $("sqlSlowMeta");
+  let box = $("sqlSlowPSLimits");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "sqlSlowPSLimits";
+    box.className = "sql-ps-limits";
+    if (meta && meta.parentNode) meta.parentNode.insertBefore(box, meta.nextSibling);
+    else {
+      const panel = $("sqlSlowPanel");
+      if (panel && panel.parentNode) panel.parentNode.insertBefore(box, panel);
+    }
+  }
+  const lim = rep && rep.ps_limits;
+  if (!lim) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  box.style.display = "";
+  const connId = (rep && rep.connection_id) || (($("sqlSlowConnSel") && $("sqlSlowConnSel").value) || "");
+  box.innerHTML = `
+    <div><b>P_S 文本限额</b> · max_digest_length=${esc(String(lim.max_digest_length || "—"))}
+ · SQL_TEXT=${esc(String(lim.performance_schema_max_sql_text_length || "—"))}</div>
+    <div class="hint" style="margin:4px 0 0">${esc(lim.remedy_note || "")}</div>
+    <div class="sql-ps-limits-acts">
+      <button type="button" class="btn sm" id="sqlSlowCopyRemedyBtn" ${lim.remedy_sql ? "" : "disabled"}>${esc(sqlT("sql.copy_remedy", "复制调参 SQL"))}</button>
+      <button type="button" class="btn sm ghost" id="sqlSlowApplyRemedyBtn" ${connId ? "" : "disabled"}>${esc(sqlT("sql.apply_remedy", "尝试写入限额"))}</button>
+    </div>
+  `;
+  const copyBtn = $("sqlSlowCopyRemedyBtn");
+  if (copyBtn) copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(lim.remedy_sql || "");
+      toast(sqlT("sql.remedy_copied", "已复制调参 SQL（写入后多数版本需重启 mysqld）"), "ok");
+    } catch (_) { toast(lim.remedy_sql || "", "ok"); }
+  };
+  const applyBtn = $("sqlSlowApplyRemedyBtn");
+  if (applyBtn) applyBtn.onclick = () => applySlowSQLPSLimits(connId);
+}
+
+/** Infer schema.table qualifiers from SQL text (client-side, mirrors server). */
+function inferSchemaFromSQLClient(sql) {
+  const text = String(sql || "");
+  const re = /(?:from|join|update|into|table)\s+(?:`([a-zA-Z0-9_]+)`|([a-zA-Z0-9_]+))\s*\.\s*(?:`([a-zA-Z0-9_]+)`|([a-zA-Z0-9_]+))/ig;
+  const counts = {};
+  let m, best = "", bestN = 0;
+  const skip = { mysql:1, information_schema:1, performance_schema:1, sys:1 };
+  while ((m = re.exec(text))) {
+    const s = (m[1] || m[2] || "").trim();
+    if (!s || skip[s.toLowerCase()]) continue;
+    counts[s] = (counts[s] || 0) + 1;
+    if (counts[s] > bestN) { best = s; bestN = counts[s]; }
+  }
+  return best;
+}
+
+/** Classify SQL into select|insert|update|delete|other for Slow SQL filters. */
+function classifySlowSQLKind(sql) {
+  let s = String(sql || "").trim();
+  // strip leading comments / parentheses
+  for (let i = 0; i < 8; i++) {
+    const n = s.replace(/^\/\*[\s\S]*?\*\//, "").replace(/^--[^\n]*/, "").replace(/^\(+/, "").trim();
+    if (n === s) break;
+    s = n;
+  }
+  const m = s.match(/^(WITH|SELECT|INSERT|REPLACE|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|CALL|SHOW|SET|EXPLAIN|MERGE)\b/i);
+  if (!m) return "other";
+  const k = m[1].toUpperCase();
+  if (k === "SELECT" || k === "WITH" || k === "SHOW" || k === "EXPLAIN") return "select";
+  if (k === "INSERT" || k === "REPLACE") return "insert";
+  if (k === "UPDATE" || k === "MERGE") return "update";
+  if (k === "DELETE" || k === "TRUNCATE") return "delete";
+  return "other";
+}
+
+function slowSQLKindLabel(kind) {
+  const map = {
+    select: sqlT("sql.slow_kind_select", "查询"),
+    insert: sqlT("sql.slow_kind_insert", "写入"),
+    update: sqlT("sql.slow_kind_update", "更新"),
+    delete: sqlT("sql.slow_kind_delete", "删除"),
+    other: sqlT("sql.slow_kind_other", "其它")
+  };
+  return map[kind] || map.other;
+}
+
+function fmtSlowMs(ms) {
+  const n = Number(ms) || 0;
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + " s";
+  return n.toFixed(n >= 100 ? 0 : 1) + " ms";
+}
+
+function setSQLSlowFiltersVisible(on) {
+  const sum = $("sqlSlowSummary");
+  const fil = $("sqlSlowFilters");
+  if (sum) sum.style.display = on ? "" : "none";
+  if (fil) fil.style.display = on ? "" : "none";
+}
+
+function syncSQLSlowFilterControls() {
+  const search = $("sqlSlowSearch");
+  if (search && search.value !== SQL_SLOW_Q) search.value = SQL_SLOW_Q;
+  const sort = $("sqlSlowSort");
+  if (sort && sort.value !== SQL_SLOW_SORT) sort.value = SQL_SLOW_SORT;
+  const chips = $("sqlSlowTypeFilter");
+  if (chips) {
+    chips.querySelectorAll("[data-slow-type]").forEach(btn => {
+      btn.classList.toggle("active", (btn.dataset.slowType || "") === SQL_SLOW_TYPE);
+    });
+  }
+}
+
+function buildSQLSlowView(items) {
+  const q = (SQL_SLOW_Q || "").trim().toLowerCase();
+  const type = SQL_SLOW_TYPE || "";
+  let rows = (items || []).map((it, idx) => {
+    const kind = classifySlowSQLKind(it && it.sql);
+    return { it, idx, kind, schema: (it && it.schema) || "(unknown)" };
+  });
+  if (type) rows = rows.filter(r => r.kind === type);
+  if (q) {
+    rows = rows.filter(r => {
+      const it = r.it || {};
+      const hay = `${it.sql || ""} ${it.schema || ""} ${it.digest || ""} ${it.recovery_source || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  const cmpNum = (a, b) => (b - a) || 0;
+  rows.sort((a, b) => {
+    const x = a.it || {}, y = b.it || {};
+    switch (SQL_SLOW_SORT) {
+      case "sum_desc": return cmpNum(Number(x.sum_latency_ms || 0), Number(y.sum_latency_ms || 0));
+      case "count_desc": return cmpNum(Number(x.count_star || 0), Number(y.count_star || 0));
+      case "score_desc": return cmpNum(Number(x.score || 0), Number(y.score || 0));
+      case "len_desc": return cmpNum(String(x.sql || "").length, String(y.sql || "").length);
+      case "avg_desc":
+      default: return cmpNum(Number(x.avg_latency_ms || 0), Number(y.avg_latency_ms || 0));
+    }
+  });
+  return rows;
+}
+
+function renderSQLSlowSummary(allItems, view) {
+  const box = $("sqlSlowSummary");
+  if (!box) return;
+  const total = (allItems || []).length;
+  const n = (view || []).length;
+  let maxAvg = 0, sumLat = 0, sumCnt = 0;
+  const kindCnt = { select: 0, insert: 0, update: 0, delete: 0, other: 0 };
+  (allItems || []).forEach(it => {
+    const k = classifySlowSQLKind(it && it.sql);
+    kindCnt[k] = (kindCnt[k] || 0) + 1;
+  });
+  (view || []).forEach(r => {
+    const it = r.it || {};
+    maxAvg = Math.max(maxAvg, Number(it.avg_latency_ms || 0));
+    sumLat += Number(it.sum_latency_ms || 0);
+    sumCnt += Number(it.count_star || 0);
+  });
+  const filteredNote = n !== total
+    ? sqlT("sql.slow_filtered_of", "筛选 {n}/{total}").replace("{n}", String(n)).replace("{total}", String(total))
+    : String(total);
+  box.innerHTML = `
+    <div class="sec-stat"><div class="sec-stat-n">${esc(filteredNote)}</div><div class="sec-stat-l">${esc(sqlT("sql.slow_stat_count", "慢语句"))}</div></div>
+    <div class="sec-stat"><div class="sec-stat-n">${esc(fmtSlowMs(maxAvg))}</div><div class="sec-stat-l">${esc(sqlT("sql.slow_stat_max_avg", "最高均耗"))}</div></div>
+    <div class="sec-stat"><div class="sec-stat-n">${esc(fmtSlowMs(sumLat))}</div><div class="sec-stat-l">${esc(sqlT("sql.slow_stat_sum", "累计耗时"))}</div></div>
+    <div class="sec-stat"><div class="sec-stat-n">${esc(String(sumCnt))}</div><div class="sec-stat-l">${esc(sqlT("sql.slow_stat_exec", "执行次数"))}</div></div>
+    <div class="sec-stat"><div class="sec-stat-n" style="font-size:14px;line-height:1.35">${esc(`查${kindCnt.select} · 写${kindCnt.insert} · 更${kindCnt.update} · 删${kindCnt.delete}`)}</div><div class="sec-stat-l">${esc(sqlT("sql.slow_stat_kinds", "类型分布（全量）"))}</div></div>
+  `;
+  const chips = $("sqlSlowTypeFilter");
+  if (chips) {
+    chips.querySelectorAll("[data-slow-type]").forEach(btn => {
+      const t = btn.dataset.slowType || "";
+      const base = t === "" ? sqlT("sql.slow_kind_all", "全部")
+        : t === "select" ? sqlT("sql.slow_kind_select", "查询")
+        : t === "insert" ? sqlT("sql.slow_kind_insert", "写入")
+        : t === "update" ? sqlT("sql.slow_kind_update", "更新")
+        : t === "delete" ? sqlT("sql.slow_kind_delete", "删除")
+        : sqlT("sql.slow_kind_other", "其它");
+      const c = t === "" ? total : (kindCnt[t] || 0);
+      btn.textContent = `${base} ${c}`;
+    });
   }
 }
 
@@ -390,6 +864,8 @@ function renderSQLSlowReport(rep) {
   if (!panel) return;
   if (!rep) {
     if (meta) meta.textContent = "";
+    setSQLSlowFiltersVisible(false);
+    SQL_SLOW_VIEW = [];
     panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_empty", "尚无报告。点击「立即检查」从 performance_schema 拉取全库慢 SQL。"))}</div>`;
     return;
   }
@@ -401,25 +877,29 @@ function renderSQLSlowReport(rep) {
     }
     meta.textContent = t;
   }
+  renderSQLSlowPSLimitsBanner(rep);
   if (rep.status === "failed") {
+    setSQLSlowFiltersVisible(false);
     panel.innerHTML = `<div class="hint" style="color:var(--danger,#c00)">${esc(rep.error || "采集失败")}</div>`;
     return;
   }
   if (rep.status === "running") {
+    setSQLSlowFiltersVisible(false);
     panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_running", "正在检查…"))}</div>`;
     return;
   }
   const items = Array.isArray(rep.items) ? rep.items : [];
   if (!items.length) {
+    setSQLSlowFiltersVisible(false);
     panel.innerHTML = `<div class="hint">${esc(sqlT("sql.slow_none", "未发现达到阈值的慢语句摘要"))}</div>`;
     return;
   }
-  const bySchema = {};
-  items.forEach((it, idx) => {
-    const k = it.schema || "(unknown)";
-    if (!bySchema[k]) bySchema[k] = [];
-    bySchema[k].push({ it, idx });
-  });
+  setSQLSlowFiltersVisible(true);
+  SQL_SLOW_VIEW = buildSQLSlowView(items);
+  renderSQLSlowSummary(items, SQL_SLOW_VIEW);
+  syncSQLSlowFilterControls();
+  SQL_SLOW_PAGE = tblClampPage(SQL_SLOW_PAGE, SQL_SLOW_VIEW.length, SQL_SLOW_SIZE);
+
   const trendBadge = (tr) => {
     if (tr === "new") return `<span class="badge warn">NEW</span>`;
     if (tr === "worse") return `<span class="badge crit">WORSE</span>`;
@@ -430,49 +910,64 @@ function renderSQLSlowReport(rep) {
   if (rep.trend) {
     html += `<div class="hint" style="margin-bottom:8px">较上次报告：新增 ${rep.trend.new_digests || 0} · 消失 ${rep.trend.gone_digests || 0} · 恶化 ${rep.trend.worsened || 0} · 改善 ${rep.trend.improved || 0}</div>`;
   }
-  Object.keys(bySchema).sort().forEach(schema => {
-    html += `<div class="section-title" style="margin:14px 0 6px"><span>${esc(schema)}</span><span class="tag">${bySchema[schema].length}</span></div>`;
-    html += bySchema[schema].map(({ it, idx }) => {
-      const tip = (it.index_hints && it.index_hints[0] && (it.index_hints[0].ddl || it.index_hints[0].reason || it.index_hints[0].message)) ||
-        (it.suggestions && it.suggestions[0] && (it.suggestions[0].title || it.suggestions[0].detail)) ||
-        (it.findings && it.findings[0] && (it.findings[0].title || it.findings[0].detail)) ||
-        sqlT("sql.slow_no_tip", "暂无规则建议");
-      return `<div class="ds-card" style="margin-bottom:8px">
-        <div class="ds-info" style="flex:1;min-width:0">
-          <div class="ds-name mono" style="white-space:pre-wrap;word-break:break-all">${trendBadge(it.trend)} ${esc((it.sql || "").slice(0, 280))}</div>
-          <div class="ds-url"><span>avg ${Number(it.avg_latency_ms || 0).toFixed(1)} ms · sum ${Number(it.sum_latency_ms || 0).toFixed(0)} ms · ×${it.count_star || 0} · score ${it.score ?? "—"}</span></div>
-          <div class="hint" style="margin-top:4px">${esc(String(tip).slice(0, 180))}</div>
-        </div>
-        <div class="ds-actions">
-          <button type="button" class="btn sm" data-sqlslow="use" data-idx="${idx}">${esc(sqlT("sql.slow_use", "填入工作台"))}</button>
-          <button type="button" class="btn sm ai-assist-btn" data-sqlslow="ai" data-idx="${idx}"><span class="ai-assist-btn-ic">🤖</span>${esc(sqlT("sql.ai_optimize_short", "AI 深度优化"))}</button>
-        </div>
-      </div>`;
-    }).join("");
+  if (!SQL_SLOW_VIEW.length) {
+    html += `<div class="hint">${esc(sqlT("sql.slow_filter_empty", "当前筛选无匹配项，请调整搜索或类型"))}</div>`;
+    panel.innerHTML = html;
+    return;
+  }
+  const start = (SQL_SLOW_PAGE - 1) * SQL_SLOW_SIZE;
+  const pageRows = SQL_SLOW_VIEW.slice(start, start + SQL_SLOW_SIZE);
+  let lastSchema = null;
+  pageRows.forEach(row => {
+    const { it, idx, kind, schema } = row;
+    if (schema !== lastSchema) {
+      lastSchema = schema;
+      const schemaLabel = schema === "(unknown)"
+        ? sqlT("sql.schema_unknown", "未识别库（填入后将尝试推断）")
+        : schema;
+      const schemaCount = SQL_SLOW_VIEW.filter(r => r.schema === schema).length;
+      html += `<div class="section-title" style="margin:14px 0 6px"><span>${esc(schemaLabel)}</span><span class="tag">${schemaCount}</span></div>`;
+    }
+    const tip = (it.index_hints && it.index_hints[0] && (it.index_hints[0].ddl || it.index_hints[0].reason || it.index_hints[0].message)) ||
+      (it.suggestions && it.suggestions[0] && (it.suggestions[0].title || it.suggestions[0].detail)) ||
+      (it.findings && it.findings[0] && (it.findings[0].title || it.findings[0].detail)) ||
+      sqlT("sql.slow_no_tip", "暂无规则建议");
+    const flags = [];
+    flags.push(`<span class="badge">${esc(slowSQLKindLabel(kind))}</span>`);
+    if (it.schema_inferred) flags.push(`<span class="badge">库推断</span>`);
+    if (it.sql_recovered && !it.sql_truncated) flags.push(`<span class="badge ok">${esc(sqlT("sql.recovered_full", "已还原全文"))}</span>`);
+    else if (it.sql_recovered) flags.push(`<span class="badge ok">已恢复</span>`);
+    if (it.params_unresolved) flags.push(`<span class="badge warn">${sqlT("sql.params_badge", "参数未还原")}</span>`);
+    if (it.sql_truncated) flags.push(`<span class="badge crit">${esc(sqlT("sql.still_truncated", "文本仍截断"))}</span>`);
+    if (it.recovery_source) flags.push(`<span class="badge">${esc(it.recovery_source)}</span>`);
+    const sqlPreview = it.sql || "";
+    html += `<div class="ds-card" style="margin-bottom:8px">
+      <div class="ds-info" style="flex:1;min-width:0">
+        <div class="ds-name mono" style="white-space:pre-wrap;word-break:break-all">${trendBadge(it.trend)} ${flags.join(" ")} ${esc(sqlPreview.slice(0, 400))}${sqlPreview.length > 400 ? "…" : ""}</div>
+        <div class="ds-url"><span>avg ${Number(it.avg_latency_ms || 0).toFixed(1)} ms · sum ${Number(it.sum_latency_ms || 0).toFixed(0)} ms · ×${it.count_star || 0} · score ${it.score ?? "—"} · ${sqlPreview.length} 字符</span></div>
+        <div class="hint" style="margin-top:4px">${esc(String(tip).slice(0, 180))}</div>
+      </div>
+      <div class="ds-actions">
+        <button type="button" class="btn sm" data-sqlslow="use" data-idx="${idx}">${esc(sqlT("sql.slow_use", "填入工作台"))}</button>
+        <button type="button" class="btn sm ai-assist-btn" data-sqlslow="ai" data-idx="${idx}"><span class="ai-assist-btn-ic">🤖</span>${esc(sqlT("sql.ai_optimize_short", "AI 深度优化"))}</button>
+      </div>
+    </div>`;
   });
+  html += tblPager(SQL_SLOW_VIEW.length, SQL_SLOW_PAGE, SQL_SLOW_SIZE);
   panel.innerHTML = html;
   panel.querySelectorAll("[data-sqlslow]").forEach(btn => {
-    btn.onclick = () => {
+    btn.onclick = async () => {
       const idx = parseInt(btn.dataset.idx, 10);
       const it = items[idx];
       if (!it) return;
-      if (btn.dataset.sqlslow === "use") {
-        showSQLTab("workbench");
-        const connSel = $("sqlConnSel");
-        const slowSel = $("sqlSlowConnSel");
-        if (connSel && slowSel && slowSel.value) connSel.value = slowSel.value;
-        setSQLText(it.sql || "");
-        toast(sqlT("sql.applied", "已应用"), "ok");
-      } else if (btn.dataset.sqlslow === "ai") {
-        showSQLTab("workbench");
-        const connSel = $("sqlConnSel");
-        const slowSel = $("sqlSlowConnSel");
-        if (connSel && slowSel && slowSel.value) connSel.value = slowSel.value;
-        setSQLText(it.sql || "");
-        openSQLAI("sql_remediation");
-      }
+      await applySlowSQLToWorkbench(it);
+      if (btn.dataset.sqlslow === "ai") openSQLAI("sql_remediation");
     };
   });
+}
+
+function refreshSQLSlowList() {
+  if (SQL_SLOW_REPORT) renderSQLSlowReport(SQL_SLOW_REPORT);
 }
 
 async function runSQLSlowCheck() {
@@ -485,6 +980,7 @@ async function runSQLSlowCheck() {
       const j = await r.json().catch(() => ({}));
       if (r.status === 409) { toast(j.error || "检查进行中", "err"); return; }
       if (!r.ok && !j.status) { toast(j.error || "检查失败", "err"); return; }
+      SQL_SLOW_PAGE = 1;
       SQL_SLOW_REPORT = j;
       renderSQLSlowReport(j);
       if (j.status === "failed") toast(j.error || "采集失败", "err");
@@ -614,7 +1110,18 @@ async function runSQLAnalyze() {
     try {
       const body = { sql, dialect: sqlDialect() };
       const conn = $("sqlConnSel") && $("sqlConnSel").value;
-      if (conn) body.connection_id = conn;
+      if (conn) {
+        await loadSQLConnections();
+        const keep = conn;
+        renderSQLConnSelect();
+        if ($("sqlConnSel")) $("sqlConnSel").value = keep;
+        const c = sqlConnById(keep);
+        if (!c) { toast(sqlT("sql.conn_missing", "连接不存在或已删除，请刷新后重选"), "err"); return; }
+        if (c.enabled === false) { toast(sqlT("sql.conn_disabled", "连接已停用，请在「连接管理」中启用"), "err"); return; }
+        body.connection_id = keep;
+        const schema = sqlActiveSchema() || c.database || inferSchemaFromSQLClient(sql) || "";
+        if (schema) { body.schema = schema; body.database = schema; setActiveSQLDatabase(schema); }
+      }
       const r = await fetch(`${API}/sql/analyze`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -789,21 +1296,144 @@ async function runSQLOptimize() {
   });
 }
 
-async function runSQLExplain(connId, sqlOverride) {
+async function runSQLQuery(connId, sqlOverride) {
+  if (connId && typeof connId === "object") { connId = null; sqlOverride = null; }
   const sql = (sqlOverride != null ? String(sqlOverride) : sqlText()).trim();
-  const conn = connId || ($("sqlConnSel") && $("sqlConnSel").value);
-  if (!conn) { toast(sqlT("sql.need_conn", "EXPLAIN 需要选择 MySQL 连接"), "err"); return; }
+  let conn = String(connId || ($("sqlConnSel") && $("sqlConnSel").value) || "").trim();
   if (!sql) { toast(sqlT("sql.empty", "请先输入 SQL"), "err"); return; }
-  // Prefer SELECT/WITH for re-EXPLAIN after DDL (index DDL itself is not EXPLAIN-able).
-  const explainSQL = /^\s*(create|alter)\b/i.test(sql) ? sqlText().trim() || sql : sql;
-  await withLoading("sqlExplainBtn", async () => {
+  await loadSQLConnections();
+  renderSQLConnSelect();
+  const connSel = $("sqlConnSel");
+  if (connSel && conn) connSel.value = conn;
+  conn = String((connSel && connSel.value) || conn || "").trim();
+  if (!conn) { toast(sqlT("sql.need_conn_run", "运行需要选择数据库连接"), "err"); return; }
+  const c = sqlConnById(conn);
+  if (!c) { toast(sqlT("sql.conn_missing", "连接不存在或已删除，请刷新后重选"), "err"); return; }
+  if (c.enabled === false) { toast(sqlT("sql.conn_disabled", "连接已停用，请在「连接管理」中启用"), "err"); return; }
+  let schema = sqlActiveSchema() || c.database || "";
+  if (!schema) schema = inferSchemaFromSQLClient(sql);
+  if (!schema) {
+    toast(sqlT("sql.schema_needed", "未指定数据库：请在上方 Database 下拉框选择库后再运行"), "err");
+    const dbSel = $("sqlDbSel"); if (dbSel) dbSel.focus();
+    return;
+  }
+  setActiveSQLDatabase(schema);
+  await withLoading("sqlRunBtn", async () => {
     try {
-      const r = await fetch(`${API}/sql/connections/${encodeURIComponent(conn)}/explain`, {
+      const r = await fetch(`${API}/sql/connections/${encodeURIComponent(conn)}/query`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sql: explainSQL })
+        body: JSON.stringify({ sql, schema, database: schema, limit: 200, timeout_sec: 20 })
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { toast(j.error || "EXPLAIN 失败", "err"); return; }
+      if (!r.ok) {
+        toast(j.error || sqlT("sql.run_failed", "运行失败"), "err");
+        renderSQLQueryError(j);
+        return;
+      }
+      SQL_LAST.query = j;
+      renderSQLQueryResult(j);
+      const meta = `${j.row_count || 0} 行 · 执行 ${j.exec_ms ?? "—"} ms · 返回 ${j.fetch_ms ?? "—"} ms`;
+      toast(sqlT("sql.run_ok", "查询完成") + " · " + meta, "ok");
+    } catch (e) { toast(String(e), "err"); }
+  });
+}
+window.runSQLQuery = runSQLQuery;
+
+function renderSQLQueryError(j) {
+  const box = $("sqlResultPanel");
+  if (!box) return;
+  const timing = [];
+  if (j.exec_ms != null) timing.push(`执行 ${j.exec_ms} ms`);
+  if (j.fetch_ms != null) timing.push(`返回 ${j.fetch_ms} ms`);
+  if (j.total_ms != null) timing.push(`合计 ${j.total_ms} ms`);
+  box.innerHTML = `
+    <div class="hint sql-trunc-warn" style="display:block;margin:0 0 10px">${esc(j.error || sqlT("sql.run_failed", "运行失败"))}</div>
+    ${timing.length ? `<div class="sql-query-meta">${esc(timing.join(" · "))}</div>` : ""}
+    <div class="hint" style="margin-top:8px">${esc(sqlT("sql.run_hint", "仅允许只读 SELECT/WITH/SHOW；写操作请走变更单。"))}</div>`;
+}
+
+function renderSQLQueryResult(j) {
+  const box = $("sqlResultPanel");
+  if (!box) return;
+  const cols = Array.isArray(j.columns) ? j.columns : [];
+  const rows = Array.isArray(j.rows) ? j.rows : [];
+  const trunc = j.truncated
+    ? `<span class="badge warn">${esc(sqlT("sql.query_truncated", "已截断"))} ≤${j.limit || 200}</span>`
+    : "";
+  const schema = j.schema ? `<span class="badge">${esc(j.schema)}</span>` : "";
+  const meta = `
+    <div class="sql-query-meta">
+      ${schema}
+      <span><b>${rows.length}</b> ${esc(sqlT("sql.query_rows", "行"))}</span>
+      <span>${esc(sqlT("sql.exec_ms", "执行时长"))} <b>${j.exec_ms != null ? j.exec_ms : "—"}</b> ms</span>
+      <span>${esc(sqlT("sql.fetch_ms", "数据返回"))} <b>${j.fetch_ms != null ? j.fetch_ms : "—"}</b> ms</span>
+      <span>${esc(sqlT("sql.total_ms", "合计"))} <b>${j.total_ms != null ? j.total_ms : "—"}</b> ms</span>
+      ${trunc}
+    </div>`;
+  if (!cols.length) {
+    box.innerHTML = meta + `<div class="hint">${esc(sqlT("sql.query_empty", "查询成功，无返回列（或无结果集）"))}</div>`;
+    return;
+  }
+  const head = cols.map(c => `<th>${esc(c)}</th>`).join("");
+  const body = rows.map(row => {
+    const cells = cols.map(c => {
+      const v = row && Object.prototype.hasOwnProperty.call(row, c) ? row[c] : null;
+      const text = v == null ? "NULL" : String(v);
+      const cls = v == null ? " class=\"sql-null\"" : (typeof v === "number" ? " class=\"num\"" : "");
+      return `<td${cls} title="${esc(text)}">${esc(text.length > 200 ? text.slice(0, 200) + "…" : text)}</td>`;
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+  box.innerHTML = `${meta}
+    <div class="sql-query-wrap"><table class="sql-query-table">
+      <thead><tr>${head}</tr></thead>
+      <tbody>${body || `<tr><td colspan="${cols.length}">${esc(sqlT("sql.query_no_rows", "无数据行"))}</td></tr>`}</tbody>
+    </table></div>
+    ${cols.length > 6 ? `<div class="sql-query-hint">${esc(sqlT("sql.query_scroll_hint", "字段较多时可左右滚动查看；单元格悬停可看全文"))}</div>` : ""}`;
+}
+
+async function runSQLExplain(connId, sqlOverride) {
+  // 点击处理器会把 Event 当作第一参数传入，必须忽略
+  if (connId && typeof connId === "object") { connId = null; sqlOverride = null; }
+  const sql = (sqlOverride != null ? String(sqlOverride) : sqlText()).trim();
+  let conn = String(connId || ($("sqlConnSel") && $("sqlConnSel").value)
+    || ($("sqlSlowConnSel") && $("sqlSlowConnSel").value)
+    || (SQL_SLOW_REPORT && SQL_SLOW_REPORT.connection_id) || "").trim();
+  if (!sql) { toast(sqlT("sql.empty", "请先输入 SQL"), "err"); return; }
+  await loadSQLConnections();
+  renderSQLConnSelect();
+  const connSel = $("sqlConnSel");
+  if (connSel && conn) connSel.value = conn;
+  conn = String((connSel && connSel.value) || conn || "").trim();
+  if (!conn) { toast(sqlT("sql.need_conn", "EXPLAIN 需要选择数据库连接"), "err"); return; }
+  const c = sqlConnById(conn);
+  if (!c) { toast(sqlT("sql.conn_missing", "连接不存在或已删除，请刷新后重选"), "err"); return; }
+  if (c.enabled === false) { toast(sqlT("sql.conn_disabled", "连接已停用，请在「连接管理」中启用"), "err"); return; }
+  // Prefer SELECT/WITH for re-EXPLAIN after DDL (index DDL itself is not EXPLAIN-able).
+  const explainSQL = /^\s*(create|alter)\b/i.test(sql) ? sqlText().trim() || sql : sql;
+  let schema = sqlActiveSchema() || c.database || "";
+  if (!schema) schema = inferSchemaFromSQLClient(explainSQL);
+  if (!schema) {
+    toast(sqlT("sql.schema_needed", "未指定数据库：请在上方 Database 下拉框选择库后再 EXPLAIN"), "err");
+    const dbSel = $("sqlDbSel"); if (dbSel) dbSel.focus();
+    return;
+  }
+  setActiveSQLDatabase(schema);
+  await withLoading("sqlExplainBtn", async () => {
+    try {
+      const payload = { sql: explainSQL, schema, database: schema };
+      const r = await fetch(`${API}/sql/connections/${encodeURIComponent(conn)}/explain`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        toast(j.error || "EXPLAIN 失败", "err");
+        if (j.prepared_sql || (Array.isArray(j.prepare_notes) && j.prepare_notes.length)) {
+          renderSQLExplainError(j);
+        }
+        return;
+      }
       SQL_LAST.explain = j;
       renderSQLExplain(j);
     } catch (e) { toast(String(e), "err"); }
@@ -861,6 +1491,7 @@ function renderSQLExplain(j) {
   const box = $("sqlResultPanel");
   if (!box) return;
   const a = j.analysis || {};
+  const detail = j.detail || {};
   const hits = Array.isArray(a.table_access) ? a.table_access : [];
   const rows = hits.map(h => `<tr>
     <td>${esc(h.table || "")}</td>
@@ -875,14 +1506,133 @@ function renderSQLExplain(j) {
     ? `<details class="sql-raw" open><summary>PostgreSQL TEXT Plan</summary><pre class="mono">${esc(j.plan)}</pre></details>`
     : "";
   const jsonRaw = typeof j.raw === "string" ? j.raw : JSON.stringify(j.explain_json, null, 2);
+
+  const health = detail.health || "";
+  const healthLabel = health === "good" ? "较好" : (health === "poor" ? "较差" : (health === "caution" ? "需关注" : ""));
+  const healthBadge = health
+    ? `<span class="badge ${health === "good" ? "ok" : (health === "poor" ? "crit" : "warn")}">${esc(sqlT("sql.explain_health", "计划健康"))} · ${esc(healthLabel)}</span>`
+    : "";
+
+  const steps = Array.isArray(detail.steps) ? detail.steps : [];
+  const stepsHTML = steps.length
+    ? `<div class="sql-explain-steps">${steps.map((s, i) => `
+        <div class="sql-explain-step ${esc(s.severity || "info")}">
+          <div class="sql-explain-step-head">
+            <span class="sql-explain-step-n">${i + 1}</span>
+            <strong>${esc(s.verdict || s.access_type || "")}</strong>
+            ${s.table ? `<code class="mono">${esc(s.table)}</code>` : ""}
+            ${s.access_type ? `<span class="tag">${esc(s.access_type)}</span>` : ""}
+            ${s.rows != null && s.rows !== "" ? `<span class="tag">rows≈${esc(String(s.rows))}</span>` : ""}
+          </div>
+          <div class="sql-explain-step-body">${esc(s.analysis || "")}</div>
+          ${s.condition ? `<div class="sql-explain-step-cond"><span class="muted">条件</span> <code class="mono">${esc(s.condition)}</code></div>` : ""}
+          ${s.suggest ? `<div class="sql-finding-suggest">${esc(s.suggest)}</div>` : ""}
+        </div>`).join("")}</div>`
+    : `<div class="hint">${esc(sqlT("sql.no_explain_steps", "暂无逐步解析（无表访问节点）"))}</div>`;
+
+  const findings = Array.isArray(detail.findings) ? detail.findings
+    : (Array.isArray(j.findings) ? j.findings : []);
+  const findingsHTML = findings.map(f => {
+    const lv = f.level || "info";
+    return `<div class="sql-finding ${esc(lv)}">
+      <div class="sql-finding-head"><span class="sql-lv">${esc(lv)}</span><strong>${esc(f.title || f.id || "")}</strong></div>
+      <div class="sql-finding-detail">${esc(f.detail || "")}</div>
+      ${f.suggest ? `<div class="sql-finding-suggest">${esc(f.suggest)}</div>` : ""}
+    </div>`;
+  }).join("") || `<div class="hint">${esc(sqlT("sql.no_findings", "未发现问题"))}</div>`;
+
+  const hints = Array.isArray(detail.index_hints) ? detail.index_hints
+    : (Array.isArray(j.index_hints) ? j.index_hints : []);
+  const hintsHTML = hints.length
+    ? hints.map((h, i) => {
+        const cols = Array.isArray(h.columns) ? h.columns.join(", ") : "";
+        const ddl = h.ddl || "";
+        const id = `sqlExplainDdl_${i}`;
+        return `<div class="sql-index-card">
+          <div class="sql-index-card-head">
+            <strong>${esc(h.table || sqlT("sql.unknown_table", "表"))}</strong>
+            ${cols ? `<code class="mono">(${esc(cols)})</code>` : ""}
+            ${h.meta ? `<span class="tag">meta</span>` : ""}
+          </div>
+          <div class="sql-finding-detail">${esc(h.reason || "")}</div>
+          ${ddl ? `<pre class="mono sql-snippet" id="${id}">${esc(ddl)}</pre>
+            <div class="sql-index-card-acts">
+              <button type="button" class="btn sm" data-copy-ddl="${id}">${esc(sqlT("sql.copy", "复制"))}</button>
+              <button type="button" class="btn sm" data-apply-ddl="${id}">${esc(sqlT("sql.apply", "应用到编辑器"))}</button>
+            </div>` : ""}
+        </div>`;
+      }).join("")
+    : `<div class="hint">${esc(sqlT("sql.no_index_hint", "暂无明确索引建议（可能已有合适索引，或无法从条件推导列）"))}</div>`;
+
+  const suggestions = Array.isArray(detail.suggestions) ? detail.suggestions
+    : (Array.isArray(j.suggestions) ? j.suggestions : []);
+  const sugHTML = suggestions.map(s => `
+    <div class="sql-finding ${esc(s.level || "info")}">
+      <div class="sql-finding-head"><span class="sql-lv">${esc(s.level || "info")}</span><strong>${esc(s.title || s.id || "")}</strong></div>
+      <div class="sql-finding-detail">${esc(s.detail || "")}</div>
+      ${s.suggest ? `<div class="sql-finding-suggest">${esc(s.suggest)}</div>` : ""}
+    </div>`).join("") || `<div class="hint">—</div>`;
+
+  const overview = detail.overview || a.summary || (j.driver === "postgres" ? "PostgreSQL EXPLAIN" : "");
+
   box.innerHTML = `
-    <div class="sql-explain-summary">${esc(a.summary || (j.driver === "postgres" ? "PostgreSQL EXPLAIN" : ""))}</div>
+    ${Array.isArray(j.prepare_notes) && j.prepare_notes.length
+      ? `<div class="hint sql-prepare-notes">${esc(j.prepare_notes.join(" · "))}</div>` : ""}
+    <div class="sql-explain-summary">${esc(a.summary || "")} ${healthBadge}</div>
     <div class="table-wrap"><table class="data sql-explain-table">
       <thead><tr><th>table</th><th>type</th><th>key</th><th>possible_keys</th><th>rows</th><th>filtered</th><th></th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7">${esc(j.plan ? "见下方 TEXT Plan" : sqlT("sql.no_explain_rows", "无表访问节点"))}</td></tr>`}</tbody>
     </table></div>
     ${planBlock}
-    <details class="sql-raw"><summary>EXPLAIN JSON</summary><pre class="mono">${esc(jsonRaw || "")}</pre></details>`;
+    ${j.prepared_sql ? `<details class="sql-raw"><summary>${esc(sqlT("sql.prepared_sql", "实际 EXPLAIN 语句"))}</summary><pre class="mono">${esc(j.prepared_sql)}</pre></details>` : ""}
+    <details class="sql-raw"><summary>EXPLAIN JSON</summary><pre class="mono">${esc(jsonRaw || "")}</pre></details>
+
+    <div class="sql-opt-block sql-explain-detail">
+      <div class="sql-opt-head">${esc(sqlT("sql.explain_detail", "执行计划详细分析"))}${detail.metadata_used ? '<span class="tag">meta</span>' : ""}</div>
+      <div class="sql-explain-overview">${esc(overview)}</div>
+      ${stepsHTML}
+    </div>
+    <div class="sql-opt-block">
+      <div class="sql-opt-head">${esc(sqlT("sql.explain_findings", "风险与问题"))}</div>
+      ${findingsHTML}
+    </div>
+    <div class="sql-opt-block">
+      <div class="sql-opt-head">${esc(sqlT("sql.index_hints", "索引建议"))}</div>
+      ${hintsHTML}
+    </div>
+    <div class="sql-opt-block">
+      <div class="sql-opt-head">${esc(sqlT("sql.suggestions", "优化建议"))}</div>
+      ${sugHTML}
+    </div>`;
+
+  box.querySelectorAll("[data-copy-ddl]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const el = $(btn.getAttribute("data-copy-ddl"));
+      const text = el ? el.textContent : "";
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => toast(sqlT("sql.copied", "已复制"), "ok")).catch(() => toast("复制失败", "err"));
+    });
+  });
+  box.querySelectorAll("[data-apply-ddl]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const el = $(btn.getAttribute("data-apply-ddl"));
+      const text = el ? el.textContent : "";
+      if (!text) return;
+      setSQLText(text);
+      toast(sqlT("sql.applied", "已应用"), "ok");
+    });
+  });
+}
+
+function renderSQLExplainError(j) {
+  const box = $("sqlResultPanel");
+  if (!box) return;
+  const notes = Array.isArray(j.prepare_notes) ? j.prepare_notes.join(" · ") : "";
+  box.innerHTML = `
+    <div class="hint sql-trunc-warn" style="display:block;margin:0 0 10px">${esc(j.error || sqlT("sql.explain_failed", "EXPLAIN 失败"))}</div>
+    ${notes ? `<div class="hint sql-prepare-notes">${esc(notes)}</div>` : ""}
+    ${j.prepared_sql ? `<details class="sql-raw" open><summary>${esc(sqlT("sql.prepared_sql", "实际 EXPLAIN 语句"))}</summary><pre class="mono">${esc(j.prepared_sql)}</pre></details>
+      <div class="hint" style="margin-top:8px">${esc(sqlT("sql.explain_fail_hint", "上方为发送给数据库的规范化语句。请核对函数名/占位符探测值，或粘贴可执行的完整 SQL 后重试。"))}</div>` : ""}`;
 }
 
 function sqlAssistContext() {
@@ -1120,12 +1870,19 @@ safeAddEventListener("sqlInnerTabs", "click", e => {
   const t = e.target.closest("[data-sql-tab]"); if (!t) return;
   showSQLTab(t.dataset.sqlTab);
 });
-safeAddEventListener("sqlAnalyzeBtn", "click", runSQLAnalyze);
-safeAddEventListener("sqlBeautifyBtn", "click", runSQLBeautify);
-safeAddEventListener("sqlAuditBtn", "click", runSQLAudit);
-safeAddEventListener("sqlOptimizeBtn", "click", runSQLOptimize);
-safeAddEventListener("sqlExplainBtn", "click", runSQLExplain);
-safeAddEventListener("sqlSubmitChangeBtn", "click", submitSQLChangeFromEditor);
+safeAddEventListener("sqlAnalyzeBtn", "click", () => runSQLAnalyze());
+safeAddEventListener("sqlRunBtn", "click", () => runSQLQuery());
+safeAddEventListener("sqlBeautifyBtn", "click", () => runSQLBeautify());
+safeAddEventListener("sqlAuditBtn", "click", () => runSQLAudit());
+safeAddEventListener("sqlOptimizeBtn", "click", () => runSQLOptimize());
+safeAddEventListener("sqlExplainBtn", "click", () => runSQLExplain());
+safeAddEventListener("sqlEditor", "keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    runSQLQuery();
+  }
+});
+safeAddEventListener("sqlSubmitChangeBtn", "click", () => submitSQLChangeFromEditor());
 safeAddEventListener("sqlChangeRefreshBtn", "click", async () => { await loadSQLChangeRequests(); renderSQLChangeList(); });
 safeAddEventListener("sqlChangeList", "click", e => {
   const b = e.target.closest("[data-sqlchange]"); if (!b) return;
@@ -1141,6 +1898,37 @@ safeAddEventListener("sqlSlowRunBtn", "click", runSQLSlowCheck);
 safeAddEventListener("sqlProcessRefreshBtn", "click", loadSQLProcessLocks);
 safeAddEventListener("sqlSchemaHealthBtn", "click", loadSQLSchemaHealth);
 safeAddEventListener("sqlSlowRefreshBtn", "click", loadSQLSlowLatest);
+safeAddEventListener("sqlSlowSearch", "input", () => {
+  SQL_SLOW_Q = (($("sqlSlowSearch") && $("sqlSlowSearch").value) || "");
+  SQL_SLOW_PAGE = 1;
+  refreshSQLSlowList();
+});
+safeAddEventListener("sqlSlowSort", "change", () => {
+  SQL_SLOW_SORT = (($("sqlSlowSort") && $("sqlSlowSort").value) || "avg_desc");
+  SQL_SLOW_PAGE = 1;
+  refreshSQLSlowList();
+});
+safeAddEventListener("sqlSlowTypeFilter", "click", e => {
+  const btn = e.target.closest("[data-slow-type]");
+  if (!btn) return;
+  SQL_SLOW_TYPE = btn.dataset.slowType || "";
+  SQL_SLOW_PAGE = 1;
+  refreshSQLSlowList();
+});
+safeAddEventListener("sqlSlowPanel", "click", e => {
+  const b = e.target.closest("[data-pg]");
+  if (!b || !b.dataset.pg) return;
+  if (b.dataset.pg === "prev") SQL_SLOW_PAGE--;
+  else if (b.dataset.pg === "next") SQL_SLOW_PAGE++;
+  refreshSQLSlowList();
+});
+safeAddEventListener("sqlSlowPanel", "change", e => {
+  if (e.target && e.target.dataset && e.target.dataset.pg === "size") {
+    SQL_SLOW_SIZE = +e.target.value || 20;
+    SQL_SLOW_PAGE = 1;
+    refreshSQLSlowList();
+  }
+});
 safeAddEventListener("sqlConnList", "click", e => {
   const b = e.target.closest("[data-sqlconn]"); if (!b) return;
   const id = b.dataset.id;

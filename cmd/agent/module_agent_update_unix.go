@@ -168,3 +168,7 @@ func shellQuote(s string) string {
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
+
+// windowsPowerShellPath is a stub for non-Windows builds (CIM helpers compile
+// everywhere but only run under GOOS=windows switches).
+func windowsPowerShellPath() string { return "powershell" }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -337,6 +338,44 @@ func (s *Server) checkSlowDegradation(hostID string) {
 			s1.DiskPercent, s2.DiskPercent, s3.DiskPercent, th.DiskWarn))
 	}
 
+	// 预测触阈：用更长样本外推，覆盖「缓慢填满」但未连涨 3 点的情况
+	now := time.Now().Unix()
+	if len(samples) >= 12 {
+		build := func(get func(shared.Sample) float64) [][2]float64 {
+			out := make([][2]float64, 0, len(samples))
+			for _, sm := range samples {
+				out = append(out, [2]float64{float64(sm.Timestamp), get(sm)})
+			}
+			return out
+		}
+		step := int64(60)
+		if len(samples) >= 2 {
+			d := samples[len(samples)-1].Timestamp - samples[0].Timestamp
+			if d > 0 {
+				step = d / int64(len(samples)-1)
+				if step < 15 {
+					step = 15
+				}
+			}
+		}
+		type fcCheck struct {
+			key string
+			thr float64
+			hist [][2]float64
+		}
+		checks := []fcCheck{
+			{"cpu", th.CPUWarn, build(func(sm shared.Sample) float64 { return sm.CPUPercent })},
+			{"memory", th.MemWarn, build(func(sm shared.Sample) float64 { return sm.MemPercent })},
+			{"disk", th.DiskWarn, build(func(sm shared.Sample) float64 { return sm.DiskPercent })},
+		}
+		for _, c := range checks {
+			if cross, ok := forecastCrossThreshold(c.hist, c.thr, step); ok && cross > now {
+				last := c.hist[len(c.hist)-1][1]
+				s.raiseForecastEarlyWarning(hostID, "", c.key, c.thr, cross, now, last)
+			}
+		}
+	}
+
 	if len(issues) == 0 {
 		return
 	}
@@ -359,6 +398,56 @@ func (s *Server) checkSlowDegradation(hostID string) {
 		if created {
 			go s.rememberAI("alert", fmt.Sprintf("degradation:%s", hostID),
 				fmt.Sprintf("【趋势预警】%s\n%s", title, analysis))
+		}
+	}
+}
+
+// raiseForecastEarlyWarning raises a deduped incident when a metric is predicted
+// to cross its warn threshold within the look-ahead window (default ≤7d).
+func (s *Server) raiseForecastEarlyWarning(hostID, hostname, metricKey string, threshold float64, crossAt, now int64, lastVal float64) {
+	if s == nil || s.incidents == nil || hostID == "" || crossAt <= now {
+		return
+	}
+	eta := crossAt - now
+	if eta > 7*24*3600 {
+		return // too far to page; still useful in chat text
+	}
+	if hostname == "" {
+		if h := s.hostByID(hostID); h != nil {
+			hostname = h.Hostname
+		} else {
+			hostname = hostID
+		}
+	}
+	label := metricKey
+	switch metricKey {
+	case "cpu", "cpu_percent":
+		label = "CPU"
+	case "memory", "mem", "mem_percent":
+		label = "内存"
+	case "disk", "disk_percent", "storage":
+		label = "磁盘/存储"
+	case "load":
+		label = "负载"
+	}
+	sev := "warning"
+	if eta <= 6*3600 {
+		sev = "critical"
+	}
+	title := fmt.Sprintf("[预测预警] %s %s 预计 %s 后触及 %.0f（当前 %.1f）",
+		hostname, label, formatHorizon(eta), threshold, lastVal)
+	analysis := fmt.Sprintf("基于历史趋势外推：%s 当前 %.2f，预计在 Unix=%d（约 %s 后）触及阈值 %.2f。\n建议：提前扩容/清理/限流或排查异常增长进程，将问题抹杀在摇篮中。",
+		label, lastVal, crossAt, formatHorizon(eta), threshold)
+	key := fmt.Sprintf("forecast_cross:%s:%s", hostID, metricKey)
+	id, created := s.incidents.raise(key, title, sev, "AI预测预警", hostID, hostname, "forecast")
+	if id > 0 {
+		s.incidents.AddEvent(id, "ai_analysis", "AI", analysis)
+		s.store.MarkDirty()
+		if created {
+			go s.rememberAI("alert", fmt.Sprintf("forecast:%s:%s", hostID, metricKey),
+				fmt.Sprintf("【预测预警】%s\n%s", title, analysis))
+			go s.rememberAI("forecast_bias", "forecast_anchor:"+metricKey,
+				fmt.Sprintf("预测锚点：%s 阈值 %.2f，预计穿越 %d，当前 %.2f", metricKey, threshold, crossAt, lastVal))
 		}
 	}
 }
@@ -1338,6 +1427,9 @@ func (s *Server) handleGetAIConfig(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(c.MCPScopedTokensJSON) != "" {
 		c.MCPScopedTokensJSON = "****" // 作用域令牌 JSON 含密钥
 	}
+	if strings.TrimSpace(c.MCPClientsJSON) != "" {
+		c.MCPClientsJSON = maskMCPClientsJSONForAPI(c.MCPClientsJSON)
+	}
 	if c.WeKnoraAPIKey != "" {
 		c.WeKnoraAPIKey = "****"
 	}
@@ -1366,9 +1458,21 @@ func (s *Server) handleSetAIConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "启用 MCP Server 需设置至少 16 位的强随机访问令牌"})
 		return
 	}
+	if raw := strings.TrimSpace(c.MCPClientsJSON); raw != "" && raw != "****" {
+		if _, err := parseMCPClientsJSON(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 	if err := s.cfg.SetAIConfig(c); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if s.mcpClients != nil {
+		_ = s.mcpClients.Reload(s.cfg.AIConfig().MCPClientsJSON)
+	}
+	if s.sreyun != nil {
+		s.sreyun.reloadExternalMCPTools()
 	}
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("ai.config_saved")})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -1588,6 +1692,128 @@ func (s *Server) handleListWeKnoraKBs(w http.ResponseWriter, r *http.Request) {
 		"count": len(kbs), "knowledge_bases": kbs,
 		"ids": weknoraKBInfoIDs(kbs),
 	})
+}
+
+// handleTestMCPClient tests connectivity to one external MCP Server and lists tools.
+// POST /api/v1/ai/mcp-clients/test  body: MCPClientConfig (headers may be masked → merge from saved)
+func (s *Server) handleTestMCPClient(w http.ResponseWriter, r *http.Request) {
+	var c MCPClientConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	c = mergeOneMCPClientWithSaved(c, s.cfg.AIConfig().MCPClientsJSON)
+	normalizeMCPClient(&c)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(c.TimeoutSec+10)*time.Second)
+	defer cancel()
+	start := time.Now()
+	tools, err := TestAndListTools(ctx, c)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency, "id": c.ID})
+		return
+	}
+	allowed := 0
+	for _, t := range tools {
+		if !t.Blocked {
+			allowed++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "latency_ms": latency, "id": c.ID, "name": c.Name,
+		"tool_count": len(tools), "allowed_count": allowed, "tools": tools,
+	})
+}
+
+// handleSyncMCPClient refreshes tools/list and persists into AIConfig.MCPClientsJSON.
+// POST /api/v1/ai/mcp-clients/sync
+func (s *Server) handleSyncMCPClient(w http.ResponseWriter, r *http.Request) {
+	var c MCPClientConfig
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	savedAI := s.cfg.AIConfig()
+	c = mergeOneMCPClientWithSaved(c, savedAI.MCPClientsJSON)
+	normalizeMCPClient(&c)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(c.TimeoutSec+15)*time.Second)
+	defer cancel()
+	updated, err := SyncMCPClient(ctx, c)
+	list, _ := parseMCPClientsJSON(savedAI.MCPClientsJSON)
+	found := false
+	for i := range list {
+		if list[i].ID == updated.ID {
+			// Keep secrets from merged client
+			updated.Headers = c.Headers
+			list[i] = updated
+			found = true
+			break
+		}
+	}
+	if !found {
+		list = append(list, updated)
+	}
+	savedAI.MCPClientsJSON = encodeMCPClientsJSON(list)
+	if saveErr := s.cfg.SetAIConfig(savedAI); saveErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": saveErr.Error()})
+		return
+	}
+	if s.mcpClients != nil {
+		_ = s.mcpClients.Reload(s.cfg.AIConfig().MCPClientsJSON)
+	}
+	if s.sreyun != nil {
+		s.sreyun.reloadExternalMCPTools()
+	}
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": err.Error(), "client": maskOneMCPClient(updated),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "client": maskOneMCPClient(updated),
+		"tool_count": len(updated.SyncedTools),
+	})
+}
+
+func mergeOneMCPClientWithSaved(c MCPClientConfig, savedJSON string) MCPClientConfig {
+	normalizeMCPClient(&c)
+	saved, _ := parseMCPClientsJSON(savedJSON)
+	for _, old := range saved {
+		if old.ID != "" && old.ID == c.ID {
+			if c.Headers == nil {
+				c.Headers = map[string]string{}
+			}
+			for k, v := range c.Headers {
+				if v == "" || strings.Contains(v, "****") {
+					if ov := old.Headers[k]; ov != "" {
+						c.Headers[k] = ov
+					}
+				}
+			}
+			// If inbound omitted Authorization entirely, copy from saved.
+			for k, ov := range old.Headers {
+				if _, ok := c.Headers[k]; !ok && ov != "" {
+					c.Headers[k] = ov
+				}
+			}
+			break
+		}
+	}
+	return c
+}
+
+func maskOneMCPClient(c MCPClientConfig) MCPClientConfig {
+	out := c
+	out.Headers = map[string]string{}
+	for k, v := range c.Headers {
+		if headerLooksSecret(k) && v != "" {
+			out.Headers[k] = "****"
+		} else {
+			out.Headers[k] = v
+		}
+	}
+	return out
 }
 
 // handleAITerminalAccess 开启/关闭「AI 终端只读巡检」权限（独立开关）。
@@ -1826,7 +2052,8 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	sys += memText + skillText
 	if memKind == "diagnosis" {
 		wkText, wkCites := s.prefetchWeKnoraForDiagnosis(req.Message)
-		sys += diagnosisOrchestrationHint() + wkText
+		mcpText := s.prefetchExternalMCPForDiagnosis(req.Message, s.actorName(r))
+		sys += diagnosisOrchestrationHint() + wkText + mcpText
 		memCites = append(memCites, wkCites...)
 	}
 	deg := degM
@@ -2017,7 +2244,7 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 			"【优化重点】保留正确的 aiops_*；修错表达式/单位/图例；补黄金信号缺口；" +
 			"布局紧凑 KPI(stat h=3~4)→水位(gauge h=5)→趋势(timeseries h=6~8)→对比/明细；24 栏铺满；≥5 种 type。\n" +
 			"【图表升级】在 JSON 落地：水位数字 stat→gauge；Top-N→barchart/bargauge；流量路径→sankey；密度→heatmap；要点里点名「X 改为 Y」。\n" +
-			"【精细配置】利用率写 options.thresholds；文案映射写 mappings；时序写 chart_style/smooth/palette/legend。\n" +
+			"【精细配置】默认不要写 options.thresholds（阈值带关闭）；需要文案映射写 mappings；时序写 chart_style/smooth/palette/legend。\n" +
 			"【禁忌】概览/排行勿改成 instance=\"$instance\"；下钻用 instance=~\"$instance\"；聚合 legend 勿落成 value；勿臆造 node_*。\n" +
 			aiDashSchemaHint + "\n" + aiopsBuiltinMetricsHint + ctxBlock
 	case "audit_diagnosis":
@@ -2515,7 +2742,8 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 		memText, memHits, degM, memCites := s.retrieveMemoryWithCitations("diagnosis", ragQuery, 8)
 		skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(ragQuery, 4)
 		wkText, wkCites := s.prefetchWeKnoraForDiagnosis(ragQuery)
-		sys += diagnosisOrchestrationHint() + memText + skillText + wkText
+		mcpText := s.prefetchExternalMCPForDiagnosis(ragQuery, s.actorName(r))
+		sys += diagnosisOrchestrationHint() + memText + skillText + wkText + mcpText
 		deg := degM
 		if deg == "" {
 			deg = degS
@@ -2769,7 +2997,8 @@ func (s *Server) handleDiagnoseChatIncident(w http.ResponseWriter, r *http.Reque
 	memText, memHits, degM, memCites := s.retrieveMemoryWithCitations("diagnosis", req.Message, 8)
 	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(req.Message, 4)
 	wkText, wkCites := s.prefetchWeKnoraForDiagnosis(req.Message)
-	sys += diagnosisOrchestrationHint() + memText + skillText + wkText
+	mcpText := s.prefetchExternalMCPForDiagnosis(req.Message, s.actorName(r))
+	sys += diagnosisOrchestrationHint() + memText + skillText + wkText + mcpText
 	deg := degM
 	if deg == "" {
 		deg = degS

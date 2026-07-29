@@ -2239,7 +2239,7 @@ function renderPanelThresholdList() {
   const wrap = $("panelThresholdList");
   if (!wrap) return;
   if (!PANEL_THRESHOLDS_DRAFT.length) {
-    wrap.innerHTML = `<div class="dash-empty">尚未配置阈值（将使用类型默认色）</div>`;
+    wrap.innerHTML = `<div class="dash-empty">尚未配置阈值（默认关闭；点「还原默认」可填入 0/75/90）</div>`;
   } else {
     wrap.innerHTML = PANEL_THRESHOLDS_DRAFT.map((t, i) => `
       <div class="panel-threshold-row">
@@ -2326,7 +2326,7 @@ function openPanelEditor(p) {
   if ($("panelShowPoints")) $("panelShowPoints").checked = !!o.show_points;
   PANEL_THRESHOLDS_DRAFT = (o.thresholds && o.thresholds.length)
     ? o.thresholds.map(t => ({ value: t.value, color: t.color || "var(--ok)" }))
-    : defaultPanelThresholds(p ? p.unit : "");
+    : [];
   PANEL_TARGETS_DRAFT = p && p.targets ? p.targets.map(t => ({ expr: t.expr, legend: t.legend || "" })) : [{ expr: "", legend: "" }];
   renderPanelTargets();
   renderPanelThresholdList();

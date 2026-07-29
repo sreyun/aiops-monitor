@@ -4,7 +4,8 @@
  * Supports AbortSignal + isCurrent() so stale responses never paint a new canvas.
  * ============================================================================ */
 window._FC_ON = window._FC_ON || {};
-const FC_MAX_SERIES = 12;
+/** Host detail mounts many charts; keep headroom for CPU/mem/disk/net/conns/IO/… */
+const FC_MAX_SERIES = 32;
 
 function isChartForecastOn(scope) {
   return !!(window._FC_ON && window._FC_ON[scope]);
@@ -25,9 +26,24 @@ function _fcStillCurrent(opts) {
   return true;
 }
 
-/** Build request payload from Canvas samples + series defs (supports transform). */
+function _fcSampleTs(sm) {
+  if (!sm) return 0;
+  const ts = sm.timestamp != null ? sm.timestamp : sm.ts;
+  return ts ? Math.round(+ts) : 0;
+}
+
+/**
+ * Build request payload from Canvas samples + series defs (supports transform).
+ * Hold-forward each series to the global last timestamp so every forecast shares
+ * the same "now" boundary (avoids empty purple zones for sparse TCP/UDP/…).
+ */
 function buildForecastRequestSeries(samples, seriesDefs) {
   const use = (seriesDefs || []).filter(s => !s.kind || s.kind === "history").slice(0, FC_MAX_SERIES);
+  let globalLast = 0;
+  for (const sm of samples || []) {
+    const ts = _fcSampleTs(sm);
+    if (ts > globalLast) globalLast = ts;
+  }
   const out = [];
   for (const s of use) {
     const pts = [];
@@ -35,13 +51,22 @@ function buildForecastRequestSeries(samples, seriesDefs) {
       let v;
       try { v = typeof seriesVal === "function" ? seriesVal(s, sm) : sm[s.key]; } catch (_) { v = null; }
       if (v == null || !isFinite(+v)) continue;
-      const ts = sm.timestamp != null ? sm.timestamp : sm.ts;
+      const ts = _fcSampleTs(sm);
       if (!ts) continue;
-      pts.push([+ts, +v]);
+      pts.push([ts, +v]);
     }
-    if (pts.length >= 8) {
-      out.push({ name: String(s.key || s.label || ("s" + out.length)), points: pts });
+    if (pts.length < 4) continue;
+    // Dedup timestamps (keep last)
+    const dedup = [];
+    for (const p of pts) {
+      if (dedup.length && dedup[dedup.length - 1][0] === p[0]) dedup[dedup.length - 1] = p;
+      else dedup.push(p);
     }
+    const last = dedup[dedup.length - 1];
+    if (globalLast > last[0] + 1) {
+      dedup.push([globalLast, last[1]]);
+    }
+    out.push({ name: String(s.key || s.label || ("s" + out.length)), points: dedup });
   }
   return out;
 }
@@ -59,6 +84,16 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
   if (!reqSeries.length) {
     return Object.assign(base, { meta: { ok: false, message: "采样点不足，暂无法预测" } });
   }
+  let globalLast = 0;
+  let globalSpan = 0;
+  for (const s of reqSeries) {
+    const pts = s.points || [];
+    if (pts.length < 2) continue;
+    const a = +pts[0][0], b = +pts[pts.length - 1][0];
+    if (b > globalLast) globalLast = b;
+    const span = b - a;
+    if (span > globalSpan) globalSpan = span;
+  }
   let res;
   try {
     const fetchOpts = {
@@ -66,13 +101,18 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         series: reqSeries,
-        horizon_sec: opts.horizonSec || 0,
-        step: opts.step || 0
+        horizon_sec: opts.horizonSec || Math.max(0, Math.round(globalSpan)),
+        step: opts.step || 0,
+        now_ts: globalLast || 0
       })
     };
     if (opts.signal) fetchOpts.signal = opts.signal;
     const r = await fetch(`${API}/metrics/forecast`, fetchOpts);
     if (!_fcStillCurrent(opts)) return Object.assign(base, { stale: true });
+    if (!r.ok) {
+      const errTxt = await r.text().catch(() => "");
+      return Object.assign(base, { meta: { ok: false, message: "预测接口失败 HTTP " + r.status + (errTxt ? (": " + errTxt.slice(0, 80)) : "") } });
+    }
     res = await r.json();
   } catch (e) {
     if (e && (e.name === "AbortError" || (opts.signal && opts.signal.aborted))) {
@@ -87,12 +127,12 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
   const histDefs = (seriesDefs || []).filter(s => !s.kind || s.kind === "history");
   const tsMap = new Map();
   for (const sm of base.samples) {
-    const ts = Math.round(sm.timestamp != null ? sm.timestamp : sm.ts);
+    const ts = _fcSampleTs(sm);
     if (!ts) continue;
     tsMap.set(ts, Object.assign({}, sm, { timestamp: ts }));
   }
   const outSeries = histDefs.map(s => Object.assign({}, s, { kind: s.kind || "history" }));
-  let nowTs = (res.meta && (res.meta.now_ts || res.meta.NowTS)) || 0;
+  let nowTs = (res.meta && (res.meta.now_ts || res.meta.NowTS)) || globalLast || 0;
   for (const fs of res.series) {
     if (fs.kind !== "forecast") continue;
     const baseName = String(fs.name || "").replace(/\s*·\s*预测$/, "");
@@ -101,15 +141,15 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
     const color = (hist && hist.color) || "#4c8dff";
     const fmt = hist && hist.fmt;
     const fcKey = "fc_" + (hist && hist.key ? hist.key : baseName || outSeries.length);
-    for (const pt of (fs.points || [])) {
+    const pts = fs.points || [];
+    for (const pt of pts) {
       const ts = Math.round(+pt[0]);
+      if (!ts || !isFinite(+pt[1])) continue;
       let row = tsMap.get(ts);
       if (!row) { row = { timestamp: ts }; tsMap.set(ts, row); }
       row[fcKey] = +pt[1];
     }
-    if (!nowTs && (fs.points || []).length) {
-      nowTs = Math.round(+fs.points[0][0]);
-    }
+    if (!nowTs && pts.length) nowTs = Math.round(+pts[0][0]);
     outSeries.push({
       key: fcKey,
       label: (hist && hist.label ? hist.label : baseName) + " · 预测",
@@ -117,7 +157,7 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
     });
   }
   if (!nowTs && base.samples.length) {
-    nowTs = Math.round(base.samples[base.samples.length - 1].timestamp || base.samples[base.samples.length - 1].ts || 0);
+    nowTs = _fcSampleTs(base.samples[base.samples.length - 1]);
   }
   const merged = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
   return { samples: merged, series: outSeries, nowTs, meta: res.meta || null };
@@ -141,22 +181,75 @@ async function enrichSharedForecast(samples, allSeriesDefs, opts) {
   return enrichSamplesWithForecast(samples, uniq, Object.assign({}, opts, { forecast: true }));
 }
 
-/** Pick history + matching fc_* series for one chart from a shared enrich result. */
-function sliceForecastForChart(enriched, chartSeriesDefs) {
+/**
+ * Pick history + matching fc_* series for one chart from a shared enrich result.
+ * Critical: do NOT reuse the shared polluted future timeline for charts without
+ * their own forecast points — that creates empty purple zones + tooltip "—".
+ *
+ * @param {object} enriched shared enrich result
+ * @param {array} chartSeriesDefs this chart's history series defs
+ * @param {array} [originalSamples] this chart's original history samples (preferred)
+ */
+function sliceForecastForChart(enriched, chartSeriesDefs, originalSamples) {
   if (!enriched || enriched.stale) return null;
   const histDefs = (chartSeriesDefs || []).filter(s => !s.kind || s.kind === "history");
   const keys = new Set(histDefs.map(s => String(s.key)));
   const outSeries = [];
   for (const s of histDefs) outSeries.push(Object.assign({}, s, { kind: "history" }));
+  const fcSeries = [];
   for (const s of (enriched.series || [])) {
     if (s.kind !== "forecast") continue;
     const baseKey = String(s.key || "").replace(/^fc_/, "");
-    if (keys.has(baseKey)) outSeries.push(s);
+    if (keys.has(baseKey)) {
+      outSeries.push(s);
+      fcSeries.push(s);
+    }
   }
+  const nowTs = enriched.nowTs || 0;
+  const fcKeys = fcSeries.map(s => s.key);
+
+  // Base timeline = this chart's own history (not the shared mega-merge).
+  const histSrc = (originalSamples && originalSamples.length)
+    ? originalSamples
+    : (enriched.samples || []);
+  const tsMap = new Map();
+  for (const sm of histSrc) {
+    const ts = _fcSampleTs(sm);
+    if (!ts) continue;
+    // Drop foreign future rows that may have leaked into originalSamples
+    if (nowTs && ts > nowTs + 1 && fcKeys.length) {
+      let own = false;
+      for (const k of fcKeys) { if (sm[k] != null && isFinite(+sm[k])) { own = true; break; } }
+      if (!own) continue;
+    }
+    tsMap.set(ts, Object.assign({}, sm, { timestamp: ts }));
+  }
+
+  let hasFuture = false;
+  if (fcKeys.length && nowTs) {
+    for (const sm of (enriched.samples || [])) {
+      const ts = _fcSampleTs(sm);
+      if (!ts) continue;
+      let row = null;
+      for (const k of fcKeys) {
+        if (sm[k] == null || !isFinite(+sm[k])) continue;
+        if (!row) {
+          row = tsMap.get(ts);
+          if (!row) row = { timestamp: ts };
+          else row = Object.assign({}, row);
+        }
+        row[k] = +sm[k];
+        if (ts > nowTs + 1) hasFuture = true;
+      }
+      if (row) tsMap.set(ts, row);
+    }
+  }
+
+  const samples = [...tsMap.values()].sort((a, b) => a.timestamp - b.timestamp);
   return {
-    samples: enriched.samples,
+    samples,
     series: outSeries,
-    nowTs: enriched.nowTs || 0,
+    nowTs: (fcSeries.length && hasFuture) ? nowTs : 0,
     meta: enriched.meta
   };
 }
@@ -175,16 +268,37 @@ async function createChartWithForecast(canvasId, samples, series, yMin, yMax, op
       isCurrent: opts.isCurrent
     });
     if (en.stale || !_fcStillCurrent(opts)) return null;
-    sm = en.samples; ser = en.series; nowTs = en.nowTs || nowTs; meta = en.meta;
+    // Single-chart path: still slice so axis only opens when this chart has future pts.
+    const sliced = sliceForecastForChart(en, series, samples);
+    if (sliced) {
+      sm = sliced.samples; ser = sliced.series; nowTs = sliced.nowTs || 0; meta = sliced.meta;
+    } else {
+      sm = en.samples; ser = en.series; nowTs = en.nowTs || nowTs; meta = en.meta;
+    }
   } else if (opts.preEnriched) {
-    sm = opts.preEnriched.samples || samples;
-    ser = opts.preEnriched.series || series;
-    nowTs = opts.preEnriched.nowTs || nowTs;
-    meta = opts.preEnriched.meta;
+    const sliced = sliceForecastForChart(opts.preEnriched, series, samples);
+    if (sliced) {
+      sm = sliced.samples; ser = sliced.series; nowTs = sliced.nowTs || 0; meta = sliced.meta;
+    } else {
+      sm = opts.preEnriched.samples || samples;
+      ser = opts.preEnriched.series || series;
+      nowTs = opts.preEnriched.nowTs || nowTs;
+      meta = opts.preEnriched.meta;
+    }
   }
   if (!_fcStillCurrent(opts)) return null;
-  const state = createChart(canvasId, sm, ser, yMin, yMax, Object.assign({}, opts, { nowTs }));
-  if (state) state._fcMeta = meta;
+  const state = createChart(canvasId, sm, ser, yMin, yMax, Object.assign({}, opts, {
+    nowTs,
+    forecastScope: opts.forecastScope || "",
+    _fcBase: {
+      samples: samples, series: series, yMin, yMax, title: opts.title || "",
+      reload: (opts._fcBase && opts._fcBase.reload) || opts.reload || null
+    }
+  }));
+  if (state) {
+    state._fcMeta = meta;
+    if (opts.reload) state.reload = opts.reload;
+  }
   return state;
 }
 
@@ -227,7 +341,7 @@ async function mountChartsWithForecast(scope, specs, loadOpts) {
 
   for (const sp of list) {
     if (!isCurrent()) return out;
-    const sliced = sliceForecastForChart(en, sp.series);
+    const sliced = sliceForecastForChart(en, sp.series, sp.samples);
     const baseOpts = Object.assign({}, sp.opts || {}, { forecastScope: scope });
     if (sliced) {
       out[sp.id] = createChart(sp.id, sliced.samples, sliced.series, sp.yMin, sp.yMax,

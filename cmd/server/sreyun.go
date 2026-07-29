@@ -388,6 +388,7 @@ func (h *SreyunCore) registerTools() {
 	h.registerPanelTools()
 	h.registerSecurityTools()
 	h.registerEvolveTools()
+	h.registerExternalMCPTools()
 	h.cachedNativeToolDefs = nil // force rebuild after capability tools register
 }
 
@@ -1244,8 +1245,14 @@ func (h *SreyunCore) runLoop(ctx context.Context, cfg AIConfig, msgs []map[strin
 	}
 	const maxTurns = 8
 	toolSeen := map[string]bool{}
+	turnLimit := maxTurns
+	if v := ctx.Value(mcpPrefetchMaxTurnsKey{}); v != nil {
+		if n, ok := v.(int); ok && n > 0 && n < turnLimit {
+			turnLimit = n
+		}
+	}
 
-	for turn := 0; turn < maxTurns; turn++ {
+	for turn := 0; turn < turnLimit; turn++ {
 		if err := ctx.Err(); err != nil { // 客户端已断开：停止后续 LLM 调用与工具执行，避免用户离开后仍在主机上跑命令
 			return "", meta, err
 		}
@@ -1669,11 +1676,12 @@ func (h *SreyunCore) buildSystemPrompt(actor string) string {
 	b.WriteString("\n排查编排（按优先级，可跳过但勿颠倒）：\n")
 	b.WriteString("1) 先用 search_similar_cases，并优先套用已注入的历史记忆与【已掌握技能】；\n")
 	b.WriteString("2) 需要手册/规范/Wiki 时用 search_knowledge（WeKnora）；不可用则明确说明并改用本地经验；\n")
+	b.WriteString("2b) 若已配置外部 MCP Client：先 list_external_mcp_tools，再用 ext_* 或 call_external_mcp 拉取外部系统事实（工单/CMDB/业务库等），再与本平台指标/日志交叉验证；\n")
 	b.WriteString("3) 再用 query_metrics / search_logs / list_alerts / check_host_health 等核实现场；\n")
 	b.WriteString("4) 容器/K8s/虚拟机问题：先 locate_resource 定位硬件→VM→主机→容器/Pod，再用 query_containers / query_k8s / query_hyperv / query_hardware；\n")
 	b.WriteString("5) 仅在需要主机侧证据时使用 run_diagnostic（只读）。K8s 扩缩容用 k8s_scale（需 cluster_id），勿用服务端本机 kubectl。\n")
 	b.WriteString("\n看板与图表编排：\n")
-	b.WriteString("- 制作看板：create_dashboard（可先 list_dashboards / list_datasources）；\n")
+	b.WriteString("- 制作看板：create_dashboard（可先 list_dashboards / list_datasources；若外部 MCP 能提供业务指标/表结构，先用 ext_* 探查再建模）；\n")
 	b.WriteString("- 分析/优化看板：get_dashboard → analyze_dashboard / optimize_dashboard；确认后用 apply_dashboard_optimize（需审批）；\n")
 	b.WriteString("- 调用已有看板组件：list_dashboard_panels / query_dashboard_panel（按 panel_id 或标题渲染图/指标/表/日志）；\n")
 	b.WriteString("- 用户要看趋势/曲线/对比时，优先 render_chart / query_metric_range / query_promql_range / analyze_metric_trend；\n")

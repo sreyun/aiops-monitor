@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.18.45">
+<link rel="stylesheet" href="/style.css?v=0.19.44">
 <script src="/theme-init.js"></script>
 <script src="/js/vendor/echarts.min.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
@@ -858,11 +858,17 @@
             <span class="hint" data-i18n="sre.ai_hint">定时自动巡检系统健康并给出发现项；配置 AI Provider 后升级为智能体级研判，未配置则启发式兜底（开箱即用）。</span>
             <button class="btn sm admin-only" id="aiConfigBtn" data-i18n="sre.ai_settings">AI 设置</button>
             <button class="btn sm" id="aiChatBtn" style="background:var(--accent);color:#fff;border-color:var(--accent)" data-i18n="sre.ai_chat">🤖 AI 对话</button>
-            <button type="button" class="btn sm ai-assist-btn" id="skillsBtn" title="查看 AI 从经验中自动提炼的可复用技能(SOP)"><span class="ai-assist-btn-ic">🧠</span>技能库</button>
-            <button type="button" class="btn sm ai-assist-btn" id="memoryBtn" title="浏览 AI 沉淀的历史记忆（诊断/对话/经验）"><span class="ai-assist-btn-ic">📚</span>记忆库</button>
-            <button type="button" class="btn sm ai-assist-btn" id="dutyReportBtn" title="汇总未决事件/SLO/待审批修复/巡检，AI 生成值班晨报"><span class="ai-assist-btn-ic">🌅</span>值班晨报</button>
-            <button type="button" class="btn sm ai-assist-btn" id="copilotBtn" title="On-call Copilot：未决事件、待审批、技能提示与建议"><span class="ai-assist-btn-ic">🧭</span>值班助手</button>
             <button class="btn primary sm" id="aiInspectBtn" data-i18n="sre.inspect_now">立即巡检</button>
+            <div class="act-menu act-menu-ai">
+              <button type="button" class="btn sm ai-assist-btn act-menu-trigger" aria-haspopup="true" aria-expanded="false" title="技能库 / 记忆 / 值班"><span class="ai-assist-btn-ic">🧰</span><span data-i18n="ui.ai_tools_menu">AI 工具</span><span class="act-menu-caret">▾</span></button>
+              <div class="act-menu-panel" hidden role="menu">
+                <button type="button" role="menuitem" class="ai-assist-btn" id="skillsBtn" title="查看 AI 从经验中自动提炼的可复用技能(SOP)"><span class="ai-assist-btn-ic">🧠</span>技能库</button>
+                <button type="button" role="menuitem" class="ai-assist-btn" id="memoryBtn" title="浏览 AI 沉淀的历史记忆（诊断/对话/经验）"><span class="ai-assist-btn-ic">📚</span>记忆库</button>
+                <div class="act-menu-sep"></div>
+                <button type="button" role="menuitem" class="ai-assist-btn" id="dutyReportBtn" title="汇总未决事件/SLO/待审批修复/巡检，AI 生成值班晨报"><span class="ai-assist-btn-ic">🌅</span>值班晨报</button>
+                <button type="button" role="menuitem" class="ai-assist-btn" id="copilotBtn" title="On-call Copilot：未决事件、待审批、技能提示与建议"><span class="ai-assist-btn-ic">🧭</span>值班助手</button>
+              </div>
+            </div>
             <button class="btn sm" id="sreEffectRefreshBtn">效果看板</button>
           </div>
           <div class="subhead">效果 KPI</div>
@@ -1318,8 +1324,13 @@
           <div class="field"><label>查询语句</label><textarea id="dsQueryText" rows="2" spellcheck="false" style="resize:vertical;min-height:48px" placeholder='PromQL 如 node_load1；LogQL 如 {job=&quot;nginx&quot;} |= &quot;error&quot;'></textarea></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <button class="btn primary" id="dsRunQueryBtn">运行查询</button>
-            <button type="button" class="btn sm ai-assist-btn" id="dsAIGenBtn"><span class="ai-assist-btn-ic">🤖</span>AI 生成查询</button>
-            <button type="button" class="btn sm ai-assist-btn" id="dsAIAnalyzeBtn"><span class="ai-assist-btn-ic">🤖</span>AI 分析结果</button>
+            <div class="act-menu act-menu-ai">
+              <button type="button" class="btn sm ai-assist-btn act-menu-trigger" aria-haspopup="true" aria-expanded="false"><span class="ai-assist-btn-ic">🤖</span>AI<span class="act-menu-caret">▾</span></button>
+              <div class="act-menu-panel" hidden role="menu">
+                <button type="button" role="menuitem" class="ai-assist-btn" id="dsAIGenBtn"><span class="ai-assist-btn-ic">✨</span>生成查询</button>
+                <button type="button" role="menuitem" class="ai-assist-btn" id="dsAIAnalyzeBtn"><span class="ai-assist-btn-ic">📊</span>分析结果</button>
+              </div>
+            </div>
           </div>
           <pre id="dsQueryResult" class="cmd" style="margin-top:10px;max-height:340px;overflow:auto;white-space:pre-wrap"></pre>
         </div>
@@ -1340,17 +1351,25 @@
         </div>
         <div id="sqlWorkbench" class="sql-workbench">
           <div class="sql-toolbar">
-            <div class="field" style="margin:0;min-width:140px">
-              <label data-i18n="sql.dialect">方言</label>
-              <div class="select-wrap"><select id="sqlDialect">
-                <option value="mysql80">MySQL 8.0+</option>
-                <option value="mysql57">MySQL 5.7</option>
-                <option value="postgres">PostgreSQL</option>
-              </select></div>
-            </div>
-            <div class="field" style="margin:0;min-width:200px;flex:1">
-              <label data-i18n="sql.connection">数据库连接</label>
-              <div class="select-wrap"><select id="sqlConnSel"></select></div>
+            <div class="sql-toolbar-cluster" role="group" aria-label="连接与库">
+              <div class="field sql-field-dialect">
+                <label data-i18n="sql.dialect">库类型</label>
+                <div class="select-wrap"><select id="sqlDialect">
+                  <option value="mysql80">MySQL 8.0+</option>
+                  <option value="mysql57">MySQL 5.7</option>
+                  <option value="postgres">PostgreSQL</option>
+                </select></div>
+              </div>
+              <div class="field sql-field-conn">
+                <label data-i18n="sql.connection">链接地址</label>
+                <div class="select-wrap"><select id="sqlConnSel"></select></div>
+              </div>
+              <div class="field sql-field-db">
+                <label data-i18n="sql.database">库 / Schema</label>
+                <div class="select-wrap"><select id="sqlDbSel">
+                  <option value="">选择库</option>
+                </select></div>
+              </div>
             </div>
           </div>
           <div class="sql-split">
@@ -1368,23 +1387,38 @@
               </div>
               <div class="field" style="margin:0">
                 <label data-i18n="sql.editor">SQL</label>
+                <div id="sqlEditorHint" class="hint" style="display:none;margin:0 0 6px"></div>
+                <div id="sqlTruncActions" class="sql-trunc-actions" hidden style="display:none;gap:8px;flex-wrap:wrap;margin:0 0 8px"></div>
                 <textarea id="sqlEditor" class="mono sql-editor" rows="14" spellcheck="false" placeholder="SELECT id, name FROM users WHERE status = 1 LIMIT 100;"></textarea>
               </div>
               <div class="sql-actions">
-                <button type="button" class="btn primary" id="sqlAnalyzeBtn" data-i18n="sql.analyze">全面分析</button>
+                <button type="button" class="btn primary" id="sqlRunBtn" data-i18n="sql.run" title="Ctrl/⌘+Enter">运行</button>
+                <button type="button" class="btn" id="sqlAnalyzeBtn" data-i18n="sql.analyze">全面分析</button>
                 <button type="button" class="btn" id="sqlBeautifyBtn" data-i18n="sql.beautify">美化</button>
-                <button type="button" class="btn" id="sqlAuditBtn" data-i18n="sql.audit">审核</button>
-                <button type="button" class="btn" id="sqlOptimizeBtn" data-i18n="sql.optimize">优化</button>
                 <button type="button" class="btn" id="sqlExplainBtn" data-i18n="sql.explain">EXPLAIN</button>
                 <button type="button" class="btn danger" id="sqlSubmitChangeBtn" data-i18n="sql.submit_change">提交 DDL 变更单</button>
-                <button type="button" class="btn sm ai-assist-btn" id="sqlAIBeautifyBtn"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="sql.ai_beautify_short">AI 美化</span></button>
-                <button type="button" class="btn sm ai-assist-btn" id="sqlAIAuditBtn"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="sql.ai_audit_short">AI 审核</span></button>
-                <button type="button" class="btn sm ai-assist-btn" id="sqlAIOptimizeBtn"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="sql.ai_optimize_short">AI 深度优化</span></button>
+                <div class="act-menu">
+                  <button type="button" class="btn act-menu-trigger" aria-haspopup="true" aria-expanded="false" title="规则审核 / 优化"><span data-i18n="ui.more_actions">更多</span><span class="act-menu-caret">▾</span></button>
+                  <div class="act-menu-panel" hidden role="menu">
+                    <div class="act-menu-hint" data-i18n="sql.more_hint">本地规则引擎（不消耗 AI）</div>
+                    <button type="button" role="menuitem" id="sqlAuditBtn" data-i18n="sql.audit">审核</button>
+                    <button type="button" role="menuitem" id="sqlOptimizeBtn" data-i18n="sql.optimize">优化</button>
+                  </div>
+                </div>
+                <div class="act-menu act-menu-ai">
+                  <button type="button" class="btn sm ai-assist-btn act-menu-trigger" aria-haspopup="true" aria-expanded="false" title="AI 辅助：美化 / 审核 / 深度优化"><span class="ai-assist-btn-ic">🤖</span><span data-i18n="ui.ai_menu">AI</span><span class="act-menu-caret">▾</span></button>
+                  <div class="act-menu-panel" hidden role="menu">
+                    <div class="act-menu-hint" data-i18n="sql.ai_menu_hint">大模型增强（需配置 Provider）</div>
+                    <button type="button" role="menuitem" class="ai-assist-btn" id="sqlAIBeautifyBtn"><span class="ai-assist-btn-ic">✨</span><span data-i18n="sql.ai_beautify_short">AI 美化</span></button>
+                    <button type="button" role="menuitem" class="ai-assist-btn" id="sqlAIAuditBtn"><span class="ai-assist-btn-ic">🛡</span><span data-i18n="sql.ai_audit_short">AI 审核</span></button>
+                    <button type="button" role="menuitem" class="ai-assist-btn" id="sqlAIOptimizeBtn"><span class="ai-assist-btn-ic">⚡</span><span data-i18n="sql.ai_optimize_short">AI 优化闭环</span></button>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="sql-result-col">
-              <div class="section-title" style="margin-top:0"><span data-i18n="sql.results">结果</span><span class="tag" data-i18n="sql.results_hint">Findings · 改写 · EXPLAIN</span></div>
-              <div id="sqlResultPanel" class="sql-result-panel"><div class="hint" data-i18n="sql.results_empty">运行审核 / 优化 / EXPLAIN 后显示在此</div></div>
+              <div class="section-title" style="margin-top:0"><span data-i18n="sql.results">结果</span><span class="tag" data-i18n="sql.results_hint">数据 · Findings · EXPLAIN</span></div>
+              <div id="sqlResultPanel" class="sql-result-panel"><div class="hint" data-i18n="sql.results_empty">运行查询 / 审核 / 优化 / EXPLAIN 后显示在此</div></div>
             </div>
           </div>
         </div>
@@ -1401,12 +1435,33 @@
           </div>
           <p class="hint" data-i18n="sql.slow_hint">从 performance_schema 拉取全库慢语句摘要，并自动给出规则引擎优化建议（索引/改写/EXPLAIN）。默认定时每天一次，可在连接配置中调整。</p>
           <div id="sqlSlowMeta" class="hint" style="margin:8px 0"></div>
+          <div id="sqlSlowSummary" class="sec-stat-row compact" style="display:none" aria-live="polite"></div>
+          <div id="sqlSlowFilters" class="sql-slow-filters" style="display:none">
+            <input type="search" id="sqlSlowSearch" class="search" style="margin-left:0;flex:1;min-width:180px" placeholder="搜索 SQL / 库名 / digest…" autocomplete="off" data-i18n-placeholder="sql.slow_search_ph">
+            <div class="log-filter" id="sqlSlowTypeFilter" style="margin:0" role="group" aria-label="SQL 类型">
+              <button type="button" class="chip-btn active" data-slow-type="">全部</button>
+              <button type="button" class="chip-btn" data-slow-type="select">查询</button>
+              <button type="button" class="chip-btn" data-slow-type="insert">写入</button>
+              <button type="button" class="chip-btn" data-slow-type="update">更新</button>
+              <button type="button" class="chip-btn" data-slow-type="delete">删除</button>
+              <button type="button" class="chip-btn" data-slow-type="other">其它</button>
+            </div>
+            <div class="select-wrap sm">
+              <select id="sqlSlowSort" aria-label="排序">
+                <option value="avg_desc" selected>平均耗时 ↓</option>
+                <option value="sum_desc">总耗时 ↓</option>
+                <option value="count_desc">执行次数 ↓</option>
+                <option value="score_desc">评分 ↓</option>
+                <option value="len_desc">文本长度 ↓</option>
+              </select>
+            </div>
+          </div>
           <div id="sqlSlowPanel" class="sql-result-panel"></div>
         </div>
         <div id="sqlProcessManage" class="sql-conn-manage" style="display:none">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between;margin-bottom:12px">
             <div class="field" style="margin:0;min-width:220px;flex:1">
-              <label data-i18n="sql.connection">连接</label>
+              <label data-i18n="sql.connection">链接地址</label>
               <div class="select-wrap"><select id="sqlProcessConnSel"></select></div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -1588,15 +1643,30 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
           </button>
         </div>
-        <div class="hint" data-i18n="install.token_hint">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
         <div class="hint" id="installTokenMeta" style="margin-top:6px"></div>
-        <div class="grid2" style="margin-top:8px">
-          <div class="field"><label>最大使用次数（0=不限）</label><input type="number" id="installTokenMaxUses" min="0" placeholder="0"></div>
-          <div class="field"><label>过期时间（Unix 秒，0=永不过期）</label><input type="number" id="installTokenExpiresAt" min="0" placeholder="0"></div>
+      </div>
+      <div class="field log-collect" id="installTokenPolicySection">
+        <div class="log-collect-head" id="installTokenPolicyToggle" role="button" tabindex="0" aria-expanded="false">
+          <span data-i18n="install.token_policy_title">Token 策略</span>
+          <span class="lc-meta">
+            <span class="lc-badge" id="installTokenPolicyBadge" data-i18n="install.token_policy_badge_default">不限 · 永不过期</span>
+            <span class="lc-caret" id="installTokenPolicyCaret">▸</span>
+          </span>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-          <button class="btn sm" type="button" id="installTokenPolicyBtn">保存 Token 策略</button>
-          <button class="btn sm warn" type="button" id="revokeTokenBtn">吊销当前 Token</button>
+        <div id="installTokenPolicyBody" style="display:none">
+          <div class="hint" data-i18n="install.token_hint" style="margin:8px 0 10px">Token 已内置在下方命令里；重置后旧命令失效，需重新分发。默认脱敏展示，点击眼睛图标查看完整值。</div>
+          <div class="grid2">
+            <div class="field"><label data-i18n="install.max_uses_label">最大使用次数（0 = 不限）</label><input type="number" id="installTokenMaxUses" min="0" placeholder="0"></div>
+            <div class="field">
+              <label data-i18n="install.expires_label">过期时间（留空 = 永不过期）</label>
+              <input type="datetime-local" id="installTokenExpiresAt">
+              <div class="hint" style="margin-top:4px" data-i18n="install.expires_hint">按本机时区选择；保存后写入服务器策略。</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+            <button class="btn sm" type="button" id="installTokenPolicyBtn" data-i18n="install.save_token_policy">保存 Token 策略</button>
+            <button class="btn sm warn" type="button" id="revokeTokenBtn" data-i18n="install.revoke_token">吊销当前 Token</button>
+          </div>
         </div>
       </div>
       <div class="field log-collect" id="agentAutoUpdateSection">
@@ -2123,10 +2193,18 @@
   <div class="modal modal-wide">
     <div class="modal-head">
       <h3 id="chartZoomTitle">趋势放大</h3>
+      <div class="chart-zoom-tools" id="chartZoomTools"></div>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
-      <div class="zoom-hint">拖动框选可放大区间 · 双击还原 · 悬停查看数值</div>
+      <div class="chart-zoom-ranges" id="chartZoomRanges"></div>
+      <div class="chart-custom-range" id="chartZoomCustomPanel" hidden>
+        <input type="datetime-local" id="chartZoomCustomFrom" class="dt-input">
+        <span class="dt-sep">→</span>
+        <input type="datetime-local" id="chartZoomCustomTo" class="dt-input">
+        <button type="button" class="chip-btn primary" id="chartZoomCustomApply" data-i18n="time.custom_apply">应用</button>
+      </div>
+      <div class="zoom-hint">左=历史实时 · 右=预测（虚线，需打开预测开关） · 上方可切换时间范围 · 拖动框选可放大区间 · 双击还原 · 悬停查看数值</div>
       <div class="chart-wrap"><canvas id="chartZoomCanvas" width="1040" height="360"></canvas></div>
     </div>
   </div>
@@ -2458,14 +2536,53 @@
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body">
+      <div class="field">
+        <label>文档地址（推荐）</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input type="text" id="apiImportDocURL" class="mono" style="flex:1;min-width:220px" placeholder="http://host:8080/doc.html#/home 或 /v3/api-docs">
+          <button type="button" class="btn sm primary" id="apiImportFetchBtn">拉取规范</button>
+        </div>
+        <div class="hint" style="margin-top:6px">支持 Knife4j 3.x（含网关聚合 <code>doc.html#/home</code>）、Swagger UI、<code>/v3/api-docs/swagger-config</code>、<code>/swagger-resources</code>。无账号时由服务端直连拉取；多分组时在下方选择服务再导入。</div>
+      </div>
+      <div class="field" id="apiImportGroupWrap" style="display:none">
+        <label>API 分组</label>
+        <div class="select-wrap"><select id="apiImportGroup"></select></div>
+      </div>
       <div class="grid2">
-        <div class="field"><label>业务系统名称</label><input type="text" id="apiImportName" placeholder="如 订单服务"></div>
+        <div class="field"><label>业务系统名称</label><input type="text" id="apiImportName" placeholder="如 订单服务（拉取后可自动填充）"></div>
         <div class="field"><label>基址（可选，覆盖规范内推断）</label><input type="text" id="apiImportBase" placeholder="https://api.example.com/v1"></div>
       </div>
-      <div class="field"><label>OpenAPI 3 / Swagger 2 的 JSON</label>
-        <textarea id="apiImportSpec" rows="12" placeholder='粘贴 OpenAPI 3 或 Swagger 2 的 JSON 规范…' style="font-family:monospace; font-size:12px"></textarea>
+      <div class="field">
+        <label>导入方法</label>
+        <div class="log-filter" id="apiImportMethodFilter" style="margin:0" role="group" aria-label="HTTP 方法">
+          <button type="button" class="chip-btn" data-api-method="all">全部</button>
+          <button type="button" class="chip-btn active" data-api-method="get">GET</button>
+          <button type="button" class="chip-btn" data-api-method="post">POST</button>
+          <button type="button" class="chip-btn" data-api-method="put">PUT</button>
+          <button type="button" class="chip-btn" data-api-method="delete">DELETE</button>
+          <button type="button" class="chip-btn" data-api-method="patch">PATCH</button>
+          <button type="button" class="chip-btn" data-api-method="head">HEAD</button>
+        </div>
+        <div class="hint" style="margin-top:6px">默认仅 GET（适合探活）；可多选，或选「全部」导入规范内全部方法。</div>
       </div>
-      <div class="hint">从规范的 paths 批量生成接口（每个「路径 × 方法」一个）；基址优先用上面填写，其次从规范推断（servers / schemes+host+basePath）。导入后可逐个编辑 / 停用；路径参数如 /users/{id} 原样保留。单次最多导入 200 个接口。</div>
+      <details class="api-import-advanced">
+        <summary>公共请求头 / 请求体（可选，导入后应用到该业务系统全部接口）</summary>
+        <div class="field" style="margin-top:10px">
+          <label>公共请求头</label>
+          <textarea id="apiImportCommonHeaders" rows="3" placeholder="每行 Key: Value，如&#10;Authorization: Bearer eyJh...&#10;Content-Type: application/json" style="font-family:monospace; font-size:12px"></textarea>
+          <div class="hint">自动应用于导入的全部接口；之后可在业务系统编辑里修改。接口级请求头会覆盖同名公共头。</div>
+        </div>
+        <div class="field">
+          <label>公共请求体</label>
+          <textarea id="apiImportCommonBody" rows="3" placeholder='JSON 对象会与接口体按字段合并，如&#10;{"appId":"1001","token":"abc"}' style="font-family:monospace; font-size:12px"></textarea>
+          <div class="hint">JSON 对象与各接口体字段合并（接口体同名覆盖）；适合放 appId / token 等。合并 JSON 时通常需在公共请求头配 Content-Type: application/json。</div>
+        </div>
+      </details>
+      <div class="field"><label>OpenAPI 3 / Swagger 2 的 JSON</label>
+        <textarea id="apiImportSpec" rows="10" placeholder="可粘贴 JSON；或填写上方文档地址后点「拉取规范」自动填充…" style="font-family:monospace; font-size:12px"></textarea>
+      </div>
+      <div class="hint" id="apiImportFetchNotes" style="display:none;margin-bottom:8px"></div>
+      <div class="hint">按上方方法筛选后，从规范的 paths 批量生成接口（每个「路径 × 方法」一个）；基址优先用上面填写，其次从规范推断。导入后可逐个编辑 / 停用。单次最多导入 200 个接口。</div>
     </div>
     <div class="modal-foot">
       <button class="btn" data-close-btn>取消</button>
@@ -2942,7 +3059,16 @@
         <summary style="cursor:pointer;font-size:12px;color:var(--muted2)">版本历史（保存时自动快照）</summary>
         <div id="pbRevList" class="hint" style="margin-top:8px">加载中…</div>
       </details>
-      <button type="button" class="btn sm ai-assist-btn" id="pbAIGenBtn" style="margin:0 0 6px"><span class="ai-assist-btn-ic">🤖</span>AI 生成剧本（描述需求，自动生成步骤）</button>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 10px">
+        <div class="act-menu act-menu-ai">
+          <button type="button" class="btn sm ai-assist-btn act-menu-trigger" aria-haspopup="true" aria-expanded="false"><span class="ai-assist-btn-ic">🤖</span>AI<span class="act-menu-caret">▾</span></button>
+          <div class="act-menu-panel" hidden role="menu">
+            <button type="button" role="menuitem" class="ai-assist-btn" id="pbAIGenBtn" title="描述需求，自动生成步骤"><span class="ai-assist-btn-ic">✨</span>生成剧本</button>
+            <button type="button" role="menuitem" class="ai-assist-btn" id="pbPrecheckBtn" title="保存前用 AI 预检风险与完整性"><span class="ai-assist-btn-ic">🔎</span>AI 预检</button>
+          </div>
+        </div>
+        <span class="hint" style="margin:0">或从下方模板快速填充步骤</span>
+      </div>
       <div id="pbTemplateBar" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px">
         <span style="font-size:12px;color:var(--muted);align-self:center">只读模板：</span>
         <button type="button" class="btn sm" data-pb-tpl="deep">深度主机巡检</button>
@@ -2993,8 +3119,7 @@
       </div>
     </div>
     <div class="modal-foot">
-      <button type="button" class="btn sm ai-assist-btn" id="pbPrecheckBtn" style="margin-right:auto"><span class="ai-assist-btn-ic">🤖</span>AI 预检</button>
-      <button class="btn primary" id="pbSaveBtn" data-i18n="playbook.save">保存剧本</button>
+      <button class="btn primary" id="pbSaveBtn" data-i18n="playbook.save" style="margin-left:auto">保存剧本</button>
     </div>
   </div>
 </div>
@@ -3248,21 +3373,20 @@
     <div class="modal-head ai-settings-head">
       <div class="ai-settings-title-block">
         <h3 data-i18n="sre.ai_settings">AI 设置</h3>
-        <p class="ai-settings-sub">Provider · RAG · 成本观测 · 安全授权</p>
+        <p class="ai-settings-sub" data-i18n="sre.ai_settings_sub">Provider · RAG · 研判 · MCP · 观测 · 安全</p>
       </div>
       <div class="ai-settings-head-actions">
-        <label class="switch ai-enable-switch"><input type="checkbox" id="aiEnabled"> <span>启用 Provider</span></label>
         <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
       </div>
     </div>
     <div class="ai-settings-shell">
       <nav class="ai-settings-nav" aria-label="AI 设置分区">
-        <button type="button" class="ai-nav-item active" data-ai-tab="provider"><span class="ai-nav-k">01</span><span class="ai-nav-t">Provider</span><span class="ai-nav-d">对话模型</span></button>
-        <button type="button" class="ai-nav-item" data-ai-tab="rag"><span class="ai-nav-k">02</span><span class="ai-nav-t">RAG</span><span class="ai-nav-d">向量 / WeKnora</span></button>
-        <button type="button" class="ai-nav-item" data-ai-tab="quality"><span class="ai-nav-k">03</span><span class="ai-nav-t">研判与成本</span><span class="ai-nav-d">MoA / 单价</span></button>
-        <button type="button" class="ai-nav-item" data-ai-tab="integrate"><span class="ai-nav-k">04</span><span class="ai-nav-t">集成</span><span class="ai-nav-d">MCP Server</span></button>
-        <button type="button" class="ai-nav-item" data-ai-tab="observe"><span class="ai-nav-k">05</span><span class="ai-nav-t">调用观测</span><span class="ai-nav-d">用量 / 费用</span></button>
-        <button type="button" class="ai-nav-item" data-ai-tab="security"><span class="ai-nav-k">06</span><span class="ai-nav-t">安全授权</span><span class="ai-nav-d">终端巡检</span></button>
+        <button type="button" class="ai-nav-item active" data-ai-tab="provider"><span class="ai-nav-k">01</span><span class="ai-nav-main"><span class="ai-nav-t">Provider</span><span class="ai-nav-dot" data-ai-nav-dot="provider" hidden></span></span><span class="ai-nav-d">对话模型</span></button>
+        <button type="button" class="ai-nav-item" data-ai-tab="rag"><span class="ai-nav-k">02</span><span class="ai-nav-main"><span class="ai-nav-t">RAG</span><span class="ai-nav-dot" data-ai-nav-dot="rag" hidden></span></span><span class="ai-nav-d">向量 / WeKnora</span></button>
+        <button type="button" class="ai-nav-item" data-ai-tab="quality"><span class="ai-nav-k">03</span><span class="ai-nav-main"><span class="ai-nav-t">研判与成本</span><span class="ai-nav-dot" data-ai-nav-dot="quality" hidden></span></span><span class="ai-nav-d">MoA / 单价</span></button>
+        <button type="button" class="ai-nav-item" data-ai-tab="integrate"><span class="ai-nav-k">04</span><span class="ai-nav-main"><span class="ai-nav-t">集成</span><span class="ai-nav-dot" data-ai-nav-dot="integrate" hidden></span></span><span class="ai-nav-d">MCP 集成</span></button>
+        <button type="button" class="ai-nav-item" data-ai-tab="observe"><span class="ai-nav-k">05</span><span class="ai-nav-main"><span class="ai-nav-t">调用观测</span><span class="ai-nav-dot" data-ai-nav-dot="observe" hidden></span></span><span class="ai-nav-d">用量 / 费用</span></button>
+        <button type="button" class="ai-nav-item" data-ai-tab="security"><span class="ai-nav-k">06</span><span class="ai-nav-main"><span class="ai-nav-t">安全授权</span><span class="ai-nav-dot" data-ai-nav-dot="security" hidden></span></span><span class="ai-nav-d">终端巡检</span></button>
       </nav>
       <div class="ai-settings-main">
 
@@ -3271,51 +3395,79 @@
           <header class="ai-panel-head">
             <div>
               <h4 data-i18n="sre.ai_chat_model">对话模型</h4>
-              <p data-i18n="sre.ai_chat_model_desc">用于 AI 诊断、智能对话。按 Endpoint 自动识别 OpenAI 兼容或 Anthropic。</p>
+              <p data-i18n="sre.ai_chat_model_desc">用于 AI 诊断与智能对话；按 Endpoint 自动识别 OpenAI 兼容或 Anthropic。</p>
             </div>
+            <span class="ai-card-summary" id="providerPanelSummary"></span>
           </header>
           <div class="ai-panel-body">
-            <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></div>
-            <div class="ai-preset-row">
-              <span class="ai-preset-label">OpenAI 兼容</span>
-              <div class="ai-preset-btns">
-                <button class="btn sm" data-act="ai-preset" data-preset="bailian" type="button" title="阿里云百炼 OpenAI 兼容模式">百炼</button>
-                <button class="btn sm" data-act="ai-preset" data-preset="openai" type="button" title="OpenAI">OpenAI</button>
-                <button class="btn sm" data-act="ai-preset" data-preset="deepseek" type="button" title="DeepSeek">DeepSeek</button>
-                <button class="btn sm" data-act="ai-preset" data-preset="ollama" type="button" title="本地 Ollama">Ollama</button>
+            <div class="ai-card ai-card-collapsible" id="providerChatCard" data-ai-card="providerChat">
+              <div class="ai-card-header ai-card-header-clickable" id="providerChatCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="providerChatCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title" data-i18n="sre.ai_provider_chat_title">对话模型</span>
+                  <span class="ai-card-desc"><span data-i18n="sre.ai_provider_chat_desc">Endpoint · Key · 模型 · 巡检</span><span class="ai-card-summary" id="providerChatCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="providerChatCardArrow" aria-hidden="true">▸</span>
               </div>
-              <span class="ai-preset-label">Anthropic</span>
-              <div class="ai-preset-btns">
-                <button class="btn sm" data-act="ai-preset" data-preset="claude" type="button" title="Claude（百炼 Anthropic 兼容端点）">Claude</button>
+              <div class="ai-card-body" id="providerChatCardBody">
+                <div class="field"><label class="switch"><input type="checkbox" id="aiEnabled"> <span data-i18n="sre.ai_enable_provider">启用 Provider</span></label></div>
+                <div class="field"><label data-i18n="sre.ai_endpoint">Endpoint</label><input type="text" id="aiEndpoint" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"></div>
+                <div class="ai-preset-row">
+                  <span class="ai-preset-label">OpenAI 兼容</span>
+                  <div class="ai-preset-btns">
+                    <button class="btn sm ai-preset-btn" data-act="ai-preset" data-preset="bailian" type="button" title="阿里云百炼 OpenAI 兼容模式">百炼</button>
+                    <button class="btn sm ai-preset-btn" data-act="ai-preset" data-preset="openai" type="button" title="OpenAI">OpenAI</button>
+                    <button class="btn sm ai-preset-btn" data-act="ai-preset" data-preset="deepseek" type="button" title="DeepSeek">DeepSeek</button>
+                    <button class="btn sm ai-preset-btn" data-act="ai-preset" data-preset="ollama" type="button" title="本地 Ollama">Ollama</button>
+                  </div>
+                  <span class="ai-preset-label">Anthropic</span>
+                  <div class="ai-preset-btns">
+                    <button class="btn sm ai-preset-btn" data-act="ai-preset" data-preset="claude" type="button" title="Claude（百炼 Anthropic 兼容端点）">Claude</button>
+                  </div>
+                </div>
+                <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
+                <div class="grid2" style="align-items:end">
+                  <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span class="ai-inline-meta" id="aiModelInfo"></span></label>
+                    <div class="ai-model-wrap">
+                      <input type="text" id="aiModel" placeholder="选择或输入模型名" autocomplete="off">
+                      <button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button>
+                      <button class="btn sm ghost" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button>
+                      <div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div>
+                    </div>
+                  </div>
+                  <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
+                </div>
+                <div class="ai-card-test">
+                  <span class="ai-test-result" id="aiChatTestResult"></span>
+                  <button class="btn sm" id="aiChatTestBtn" type="button" data-i18n="sre.ai_test_chat">测试对话模型</button>
+                </div>
+                <p class="ai-footnote" data-i18n="sre.ai_provider_footnote">未启用时使用内置启发式引擎。</p>
               </div>
             </div>
-            <div class="field"><label data-i18n="sre.ai_key">API Key</label><input type="password" id="aiKey" autocomplete="off" placeholder="sk-…"></div>
-            <div class="grid2" style="align-items:end">
-              <div class="field"><label><span data-i18n="sre.ai_model">模型</span> <span class="ai-inline-meta" id="aiModelInfo"></span></label>
-                <div class="ai-model-wrap"><input type="text" id="aiModel" placeholder="选择或输入模型名" autocomplete="off"><button class="btn sm" id="aiModelCaretBtn" type="button" tabindex="-1" title="展开可用模型">▾</button><button class="btn sm" id="aiModelRefreshBtn" type="button" title="从 Provider 自动获取可用模型">刷新</button><div id="aiModelDropdown" class="ai-model-dropdown" style="display:none"></div></div>
-              </div>
-              <div class="field"><label data-i18n="sre.ai_interval">巡检间隔（分钟）</label><input type="text" id="aiInterval" class="mono" value="30"></div>
-            </div>
-            <div class="ai-card-test">
-              <span class="ai-test-result" id="aiChatTestResult"></span>
-              <button class="btn sm" id="aiChatTestBtn" type="button" data-i18n="sre.ai_test_chat">测试对话模型</button>
-            </div>
-            <p class="ai-footnote">未启用时使用内置启发式引擎。填好 Endpoint + Key 后可拉取可用模型，也可手动输入。</p>
 
-            <div class="ai-section-block" style="margin-top:18px">
-              <div class="ai-section-label">语音输入 / 播报（可选）</div>
-              <p class="ai-footnote" style="margin-top:0">默认使用浏览器/系统语音。配置 OpenAI 兼容 STT/TTS 后，可优先走云端模型（手机端也可经同一代理）。Endpoint / Key 留空则复用上方 Provider。</p>
-              <div class="field"><label class="switch"><input type="checkbox" id="speechPreferCloud"> <span>优先使用云端语音模型</span></label></div>
-              <div class="field"><label>语音 Endpoint</label><input type="text" id="speechEndpoint" placeholder="留空=复用 Provider（自动取 /v1 根）"></div>
-              <div class="field"><label>语音 API Key</label><input type="password" id="speechKey" autocomplete="off" placeholder="留空=复用 Provider API Key"></div>
-              <div class="grid2" style="align-items:end">
-                <div class="field"><label>STT 识别模型</label><input type="text" id="speechSTTModel" placeholder="whisper-1 / gpt-4o-mini-transcribe"></div>
-                <div class="field"><label>TTS 播报模型</label><input type="text" id="speechTTSModel" placeholder="tts-1 / gpt-4o-mini-tts"></div>
+            <div class="ai-card ai-card-collapsible" id="providerSpeechCard" data-ai-card="providerSpeech">
+              <div class="ai-card-header ai-card-header-clickable" id="providerSpeechCardHeader" role="button" tabindex="0" aria-expanded="false" aria-controls="providerSpeechCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title" data-i18n="sre.ai_speech_title">语音输入 / 播报（可选）</span>
+                  <span class="ai-card-desc"><span data-i18n="sre.ai_speech_desc">默认系统语音；可改用云端 STT/TTS</span><span class="ai-card-summary" id="providerSpeechCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow" id="providerSpeechCardArrow" aria-hidden="true">▸</span>
               </div>
-              <div class="field"><label>TTS 音色</label><input type="text" id="speechTTSVoice" placeholder="alloy / nova / shimmer / sage"></div>
-              <div class="ai-card-test">
-                <span class="ai-test-result" id="aiSpeechTestResult"></span>
-                <button class="btn sm" id="aiSpeechTestBtn" type="button">测试语音</button>
+              <div class="ai-card-body" id="providerSpeechCardBody" style="display:none">
+                <div class="field"><label class="switch"><input type="checkbox" id="speechPreferCloud"> <span>优先使用云端语音模型</span></label></div>
+                <div class="field"><label>语音 Endpoint</label><input type="text" id="speechEndpoint" placeholder="留空=复用 Provider"></div>
+                <div class="field"><label>语音 API Key</label><input type="password" id="speechKey" autocomplete="off" placeholder="留空=复用 Provider API Key"></div>
+                <div class="grid2" style="align-items:end">
+                  <div class="field"><label>STT 识别模型</label><input type="text" id="speechSTTModel" placeholder="whisper-1 / gpt-4o-mini-transcribe"></div>
+                  <div class="field"><label>TTS 播报模型</label><input type="text" id="speechTTSModel" placeholder="tts-1 / gpt-4o-mini-tts"></div>
+                </div>
+                <div class="field"><label>TTS 音色</label><input type="text" id="speechTTSVoice" placeholder="alloy / nova / shimmer / sage"></div>
+                <div class="ai-card-test">
+                  <span class="ai-test-result" id="aiSpeechTestResult"></span>
+                  <button class="btn sm" id="aiSpeechTestBtn" type="button">测试语音</button>
+                </div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">手机端也可经同一代理。Endpoint / Key 留空则复用上方 Provider（自动取 /v1 根）。</p>
+                </details>
               </div>
             </div>
           </div>
@@ -3325,20 +3477,21 @@
         <section class="ai-panel" data-ai-panel="rag">
           <header class="ai-panel-head">
             <div>
-              <h4>RAG 检索</h4>
-              <p>本地向量记忆 / 可选重排，以及外部 WeKnora 文档知识库。留空的嵌入字段将复用 Provider。</p>
+              <h4 data-i18n="sre.ai_rag_title">RAG 检索</h4>
+              <p data-i18n="sre.ai_rag_desc">本地向量记忆、可选重排，以及外部 WeKnora 文档库。留空字段复用 Provider。</p>
             </div>
+            <span class="ai-card-summary" id="ragPanelSummary"></span>
           </header>
           <div class="ai-panel-body">
-            <div class="ai-card" id="embedCard">
-              <div class="ai-card-header" id="embedCardHeader">
+            <div class="ai-card ai-card-collapsible" id="embedCard" data-ai-card="embed">
+              <div class="ai-card-header ai-card-header-clickable" id="embedCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="embedCardBody">
                 <div class="ai-card-header-text">
                   <span class="ai-card-title" data-i18n="sre.ai_embed_model">向量化模型</span>
                   <span class="ai-card-desc"><span data-i18n="sre.ai_embed_model_desc">用于 RAG 智能记忆与检索</span><span class="ai-card-summary" id="embedCardSummary"></span></span>
                 </div>
+                <span class="ai-card-arrow open" id="embedCardArrow" aria-hidden="true">▸</span>
               </div>
               <div class="ai-card-body" id="embedCardBody">
-                <div class="hint">走 OpenAI 兼容 <code>/embeddings</code>。模型须输出 <b>1536</b> 维。百炼主端点且此处全空时，自动沿用 text-embedding-v2。</div>
                 <div class="field"><label>嵌入 Endpoint</label><input type="text" id="embedEndpoint" placeholder="留空=复用 Provider Endpoint"></div>
                 <div class="field"><label>嵌入 API Key</label><input type="password" id="embedKey" autocomplete="off" placeholder="留空=复用 Provider API Key"></div>
                 <div class="grid2" style="align-items:end">
@@ -3349,17 +3502,20 @@
                   <span class="ai-test-result" id="aiEmbedTestResult"></span>
                   <button class="btn sm" id="aiEmbedTestBtn" type="button" data-i18n="sre.ai_test_embed">测试向量化模型</button>
                 </div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">走 OpenAI 兼容 <code>/embeddings</code>。模型须输出 <b>1536</b> 维。百炼主端点且此处全空时，自动沿用 text-embedding-v2。</p>
+                </details>
               </div>
             </div>
-            <div class="ai-card" id="rerankCard">
-              <div class="ai-card-header" id="rerankCardHeader">
+            <div class="ai-card ai-card-collapsible" id="rerankCard" data-ai-card="rerank">
+              <div class="ai-card-header ai-card-header-clickable" id="rerankCardHeader" role="button" tabindex="0" aria-expanded="false" aria-controls="rerankCardBody">
                 <div class="ai-card-header-text">
                   <span class="ai-card-title" data-i18n="sre.ai_rerank_model">重排模型（可选）</span>
-                  <span class="ai-card-desc"><span data-i18n="sre.ai_rerank_model_desc">RAG 精排，进一步提升召回相关性</span><span class="ai-card-summary" id="rerankCardSummary"></span></span>
+                  <span class="ai-card-desc"><span data-i18n="sre.ai_rerank_model_desc">RAG 精排，提升召回相关性</span><span class="ai-card-summary" id="rerankCardSummary"></span></span>
                 </div>
+                <span class="ai-card-arrow" id="rerankCardArrow" aria-hidden="true">▸</span>
               </div>
-              <div class="ai-card-body" id="rerankCardBody">
-                <div class="hint">配置后先向量召回再 rerank Top-K。兼容 Jina / Cohere / 百炼 / SiliconFlow 等 <code>/rerank</code>。留空=不启用。</div>
+              <div class="ai-card-body" id="rerankCardBody" style="display:none">
                 <div class="field"><label>rerank Endpoint</label><input type="text" id="rerankEndpoint" placeholder="留空=复用嵌入 / Provider"></div>
                 <div class="field"><label>rerank API Key</label><input type="password" id="rerankKey" autocomplete="off" placeholder="留空=复用嵌入 / Provider"></div>
                 <div class="field"><label>rerank 模型</label><input type="text" id="rerankModel" placeholder="BAAI/bge-reranker-v2-m3 / gte-rerank"></div>
@@ -3367,34 +3523,32 @@
                   <span class="ai-test-result" id="aiRerankTestResult"></span>
                   <button class="btn sm" id="aiRerankTestBtn" type="button" data-i18n="sre.ai_test_rerank">测试重排模型</button>
                 </div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">配置后先向量召回再 rerank Top-K。兼容 Jina / Cohere / 百炼 / SiliconFlow 等 <code>/rerank</code>。</p>
+                </details>
               </div>
             </div>
-            <div class="ai-card" id="weknoraCard">
-              <div class="ai-card-header" id="weknoraCardHeader">
+            <div class="ai-card ai-card-collapsible" id="weknoraCard" data-ai-card="weknora">
+              <div class="ai-card-header ai-card-header-clickable" id="weknoraCardHeader" role="button" tabindex="0" aria-expanded="false" aria-controls="weknoraCardBody">
                 <div class="ai-card-header-text">
                   <span class="ai-card-title">WeKnora 文档知识库</span>
                   <span class="ai-card-desc">外部文档 RAG（手册 / Wiki / PDF）<span class="ai-card-summary" id="weknoraCardSummary"></span></span>
                 </div>
+                <span class="ai-card-arrow" id="weknoraCardArrow" aria-hidden="true">▸</span>
               </div>
-              <div class="ai-card-body" id="weknoraCardBody">
-                <div class="hint">文档入库与解析在 <a href="https://github.com/Tencent/WeKnora" target="_blank" rel="noopener">WeKnora</a> 完成；本平台通过 <code>GET /knowledge-bases</code> 枚举可见库，再调用 <code>POST /knowledge-search</code>（必要时按库 <code>hybrid-search</code> 回退），供 AI 工具 <code>search_knowledge</code> 使用。认证头 <code>X-API-Key</code>。</div>
+              <div class="ai-card-body" id="weknoraCardBody" style="display:none">
                 <div class="field"><label class="switch"><input type="checkbox" id="weknoraEnabled"> <span>启用 WeKnora 文档检索</span></label></div>
                 <div class="field"><label>API URL</label><input type="text" id="weknoraURL" placeholder="http://weknora-host:8080 或 …/api/v1"></div>
-                <div class="field"><label>API Key</label><input type="password" id="weknoraKey" autocomplete="off" placeholder="WeKnora 账户信息页获取的 X-API-Key"></div>
-                <div class="field"><label>限定知识库 ID</label><input type="text" id="weknoraKBIDs" placeholder="留空 = 自动检索全部可见库；也可填 kb-xxx, kb-yyy"></div>
-                <p class="ai-footnote">WeKnora 未传库 ID 时通常不会搜全库。留空后本平台会先拉取可见知识库列表再跨库检索；填写则只搜指定库。</p>
-                <div class="field"><label class="switch"><input type="checkbox" id="disablePublicChatMemory"> <span>敏感模式：对话不写入公共向量记忆</span></label></div>
-                <p class="ai-footnote">开启后聊天/助手闲聊不再进公共库；结案、诊断采纳、避坑沉淀仍会写入。</p>
-                <div class="field"><label class="switch"><input type="checkbox" id="allowUnverifiedAIOutputLearning"> <span>高级：允许未采纳的 AI 对话输出参与长期学习（不推荐）</span></label></div>
-                <p class="ai-footnote">默认关闭以防提示注入或幻觉污染长期记忆。推荐仅让人工采纳、点赞、真实执行成功和结案结果进入学习闭环。</p>
-                <div class="field"><label class="switch"><input type="checkbox" id="autoDefendEnabled"> <span>自动安全防御：撞库 / MCP 滥用等事件自动留痕、沉淀记忆并开事件单</span></label></div>
-                <div class="field"><label class="switch"><input type="checkbox" id="selfEvolveEnabled"> <span>自我进化：每日记忆优化后额外写成长日记并提炼技能总结</span></label></div>
-                <p class="ai-footnote">开启后 AI 对话可调度任意界面与看板组件；防御与进化均受配额与审批策略约束，不执行破坏性写操作。</p>
+                <div class="field"><label>API Key</label><input type="password" id="weknoraKey" autocomplete="off" placeholder="X-API-Key"></div>
+                <div class="field"><label>限定知识库 ID</label><input type="text" id="weknoraKBIDs" placeholder="留空=全部可见库；或 kb-xxx, kb-yyy"></div>
                 <div class="ai-card-test">
                   <span class="ai-test-result" id="aiWeKnoraTestResult"></span>
                   <button class="btn sm ghost" id="aiWeKnoraListBtn" type="button">拉取知识库列表</button>
                   <button class="btn sm" id="aiWeKnoraTestBtn" type="button">测试 WeKnora 检索</button>
                 </div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">文档入库在 <a href="https://github.com/Tencent/WeKnora" target="_blank" rel="noopener">WeKnora</a> 完成；本平台枚举知识库并检索，供工具 <code>search_knowledge</code> 使用。留空库 ID 时会先拉列表再跨库检索。</p>
+                </details>
               </div>
             </div>
           </div>
@@ -3404,34 +3558,66 @@
         <section class="ai-panel" data-ai-panel="quality">
           <header class="ai-panel-head">
             <div>
-              <h4>研判质量与成本单价</h4>
-              <p>仅作用于诊断等高价值场景；日常对话不受 MoA 影响。单价用于观测费用估算。</p>
+              <h4 data-i18n="sre.ai_quality_title">研判质量与成本</h4>
+              <p data-i18n="sre.ai_quality_desc">仅作用于诊断等高价值场景；单价用于观测费用估算。</p>
             </div>
+            <span class="ai-card-summary" id="qualityPanelSummary"></span>
           </header>
           <div class="ai-panel-body">
-            <div class="ai-section-block">
-              <div class="ai-section-label">诊断增强</div>
-              <div class="field">
-                <label class="switch"><input type="checkbox" id="aiSelfVerify"> <span>自我校验：诊断后追加独立复核（多一次调用）</span></label>
+            <div class="ai-card ai-card-collapsible" id="qualityDiagCard" data-ai-card="qualityDiag">
+              <div class="ai-card-header ai-card-header-clickable" id="qualityDiagCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="qualityDiagCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">诊断增强</span>
+                  <span class="ai-card-desc">自我校验 · MoA 多模型研判<span class="ai-card-summary" id="qualityDiagCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="qualityDiagCardArrow" aria-hidden="true">▸</span>
               </div>
-              <div class="field"><label>集成研判模型（MoA）</label><input type="text" id="aiMoAModels" placeholder="deepseek-chat, qwen-max — 逗号分隔，留空关闭"></div>
-              <p class="ai-footnote">开启后诊断走多模型并行提案再综合，成本随模型数增长。</p>
-            </div>
-            <div class="ai-section-block">
-              <div class="ai-section-label">成本估算</div>
-              <p class="ai-footnote" style="margin-top:0">单位：每 100 万 Token。留空则只统计 Token、不估算费用。数据永久写入 PostgreSQL。</p>
-              <div class="grid3">
-                <div class="field"><label>输入单价 / 1M</label><input type="number" id="aiInputPrice" step="0.01" min="0" placeholder="1.00"></div>
-                <div class="field"><label>输出单价 / 1M</label><input type="number" id="aiOutputPrice" step="0.01" min="0" placeholder="2.00"></div>
-                <div class="field"><label>币种</label><input type="text" id="aiCostCurrency" placeholder="CNY" value="CNY"></div>
+              <div class="ai-card-body" id="qualityDiagCardBody">
+                <div class="field">
+                  <label class="switch"><input type="checkbox" id="aiSelfVerify"> <span>自我校验：诊断后追加独立复核（多一次调用）</span></label>
+                </div>
+                <div class="field"><label>集成研判模型（MoA）</label><input type="text" id="aiMoAModels" placeholder="deepseek-chat, qwen-max — 逗号分隔，留空关闭"></div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">开启后诊断走多模型并行提案再综合，成本随模型数增长。</p>
+                </details>
               </div>
             </div>
-            <div class="ai-section-block">
-              <div class="ai-section-label">任务模型路由</div>
-              <p class="ai-footnote" style="margin-top:0">轻量任务可用廉价模型；也可按任务覆盖。JSON 例：{"promql":"qwen-turbo","chart_analysis":"qwen-plus"}</p>
-              <div class="field"><label>廉价模型（摘要/查询类）</label><input type="text" id="aiCheapModel" placeholder="留空=主模型"></div>
-              <div class="field"><label>任务→模型映射（JSON）</label><textarea id="aiTaskModels" rows="3" class="mono" placeholder='{"promql":"qwen-turbo"}'></textarea></div>
-              <div class="field"><label>活跃 A/B 实验 ID</label><input type="text" id="aiActiveExperiment" placeholder="可选"></div>
+            <div class="ai-card ai-card-collapsible" id="qualityCostCard" data-ai-card="qualityCost">
+              <div class="ai-card-header ai-card-header-clickable" id="qualityCostCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="qualityCostCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">成本估算</span>
+                  <span class="ai-card-desc">每 100 万 Token 单价<span class="ai-card-summary" id="qualityCostCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="qualityCostCardArrow" aria-hidden="true">▸</span>
+              </div>
+              <div class="ai-card-body" id="qualityCostCardBody">
+                <div class="grid3">
+                  <div class="field"><label>输入单价 / 1M</label><input type="number" id="aiInputPrice" step="0.01" min="0" placeholder="1.00"></div>
+                  <div class="field"><label>输出单价 / 1M</label><input type="number" id="aiOutputPrice" step="0.01" min="0" placeholder="2.00"></div>
+                  <div class="field"><label>币种</label><input type="text" id="aiCostCurrency" placeholder="CNY" value="CNY"></div>
+                </div>
+                <p class="ai-footnote">留空则只统计 Token、不估算费用。</p>
+              </div>
+            </div>
+            <div class="ai-card ai-card-collapsible" id="qualityRouteCard" data-ai-card="qualityRoute">
+              <div class="ai-card-header ai-card-header-clickable" id="qualityRouteCardHeader" role="button" tabindex="0" aria-expanded="false" aria-controls="qualityRouteCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">任务模型路由</span>
+                  <span class="ai-card-desc">廉价模型 · 任务映射 · A/B<span class="ai-card-summary" id="qualityRouteCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow" id="qualityRouteCardArrow" aria-hidden="true">▸</span>
+              </div>
+              <div class="ai-card-body" id="qualityRouteCardBody" style="display:none">
+                <div class="field"><label>廉价模型（摘要/查询类）</label><input type="text" id="aiCheapModel" placeholder="留空=主模型"></div>
+                <div class="field"><label>任务→模型映射（JSON）</label><textarea id="aiTaskModels" rows="3" class="mono" placeholder='{"promql":"qwen-turbo"}'></textarea></div>
+                <div class="field">
+                  <label>活跃 A/B 实验 ID <button type="button" class="btn link sm" id="aiJumpObserveAbBtn" data-i18n="sre.ai_jump_observe_ab">在观测页管理 →</button></label>
+                  <input type="text" id="aiActiveExperiment" placeholder="可选，填写后路由到对应实验">
+                </div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">JSON 例：{"promql":"qwen-turbo","chart_analysis":"qwen-plus"}。实验 CRUD 在「调用观测」分区。</p>
+                </details>
+              </div>
             </div>
           </div>
         </section>
@@ -3440,34 +3626,79 @@
         <section class="ai-panel" data-ai-panel="integrate">
           <header class="ai-panel-head">
             <div>
-              <h4>MCP Server</h4>
-              <p>把只读运维工具暴露给外部 Agent。只读、可逆，关闭即撤除。</p>
+              <h4 data-i18n="sre.mcp_integrate_title">MCP 集成</h4>
+              <p data-i18n="sre.mcp_integrate_desc">对外暴露只读工具，或接入外部 MCP 供对话 / 诊断 / 看板使用。</p>
             </div>
             <span class="ai-card-summary" id="mcpCardSummary"></span>
           </header>
           <div class="ai-panel-body">
-            <div class="ai-card" id="mcpCard">
-              <div class="ai-card-header" id="mcpCardHeader" style="display:none"></div>
-              <div class="ai-card-body" id="mcpCardBody">
-                <div class="field"><label class="switch"><input type="checkbox" id="mcpEnabled"> <span>启用 MCP：暴露指标 / 日志 / 告警 / 硬件 / 流量 / 值班诊断等只读工具</span></label></div>
-                <div class="field"><label>主访问令牌（Bearer Token，全量 scope）</label>
+            <div class="ai-card ai-card-collapsible" id="mcpServerCard" data-ai-card="mcpServer">
+              <div class="ai-card-header ai-card-header-clickable" id="mcpServerCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="mcpServerCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title" data-i18n="sre.mcp_server_title">MCP Server（对外暴露）</span>
+                  <span class="ai-card-desc"><span data-i18n="sre.mcp_server_card_desc">把本平台只读工具暴露给 Cursor / Claude</span><span class="ai-card-summary" id="mcpServerCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="mcpServerCardArrow" aria-hidden="true">▸</span>
+              </div>
+              <div class="ai-card-body" id="mcpServerCardBody">
+                <div class="field"><label class="switch"><input type="checkbox" id="mcpEnabled"> <span data-i18n="sre.mcp_server_enable">启用 MCP Server</span></label></div>
+                <div class="field"><label data-i18n="sre.mcp_token">主访问令牌（Bearer）</label>
                   <div class="token-gen-row"><input type="password" id="mcpToken" autocomplete="off" placeholder="至少 16 位强随机令牌"><button class="btn sm" id="mcpGenTokenBtn" type="button" title="生成高强度随机令牌并自动填入">生成</button></div>
                 </div>
-                <div class="field"><label>每分钟限流（0=默认 60）</label>
+                <div class="field"><label data-i18n="sre.mcp_rate">每分钟限流（0=默认 60）</label>
                   <input type="number" id="mcpRateLimit" min="0" max="6000" step="1" placeholder="60">
                 </div>
-                <div class="field"><label>作用域令牌 JSON（可选）</label>
-                  <textarea id="mcpScopedTokens" rows="4" spellcheck="false" placeholder='[{"name":"sre-ro","token":"...","scopes":["sre","alerts"]},{"name":"metrics","token":"...","scopes":["metrics"]}]'></textarea>
-                  <p class="ai-footnote">scopes：<code>metrics</code> <code>logs</code> <code>sql</code> <code>hardware</code> <code>infra</code> <code>knowledge</code> <code>alerts</code> <code>sre</code> <code>ai</code> <code>all</code>。已配置时回显为 <code>****</code>，原样保存可保留。</p>
+                <div class="field"><label data-i18n="sre.mcp_scoped">作用域令牌 JSON（可选）</label>
+                  <textarea id="mcpScopedTokens" rows="3" spellcheck="false" placeholder='[{"name":"sre-ro","token":"...","scopes":["sre","alerts"]}]'></textarea>
                 </div>
-                <div class="field"><label>客户端配置（Cursor / Claude）</label>
-                  <textarea id="mcpClientConfig" rows="8" readonly spellcheck="false"></textarea>
+                <div class="field"><label data-i18n="sre.mcp_client_cfg">客户端配置（Cursor / Claude）</label>
+                  <textarea id="mcpClientConfig" rows="6" readonly spellcheck="false"></textarea>
                   <div class="token-gen-row" style="margin-top:6px">
-                    <button class="btn sm" id="mcpCopyClientCfgBtn" type="button">复制配置</button>
-                    <button class="btn sm ghost" id="mcpRefreshClientCfgBtn" type="button">刷新预览</button>
+                    <button class="btn sm" id="mcpCopyClientCfgBtn" type="button" data-i18n="sre.mcp_copy_cfg">复制配置</button>
+                    <button class="btn sm ghost" id="mcpRefreshClientCfgBtn" type="button" data-i18n="sre.mcp_refresh_cfg">刷新预览</button>
                   </div>
                 </div>
-                <p class="ai-footnote">端点 <code>GET/POST /api/v1/mcp</code>（Streamable HTTP：JSON-RPC + SSE）。客户端携带 <code>Authorization: Bearer &lt;令牌&gt;</code>。</p>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">端点 <code>GET/POST /api/v1/mcp</code>。scopes：metrics / logs / sql / hardware / infra / knowledge / alerts / sre / ai / all。已配置令牌回显为 ****。</p>
+                </details>
+              </div>
+            </div>
+
+            <div class="ai-card ai-card-collapsible" id="mcpClientsCard" data-ai-card="mcpClients">
+              <div class="ai-card-header ai-card-header-clickable" id="mcpClientsCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="mcpClientsCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title" data-i18n="sre.mcp_clients_title">MCP Clients（接入外部）</span>
+                  <span class="ai-card-desc"><span data-i18n="sre.mcp_clients_card_desc">接入外部 MCP，供对话 / 诊断 / 看板调用</span><span class="ai-card-summary" id="mcpClientsCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="mcpClientsCardArrow" aria-hidden="true">▸</span>
+              </div>
+              <div class="ai-card-body" id="mcpClientsCardBody">
+                <p class="hint" style="margin:0 0 10px" data-i18n="sre.mcp_clients_hint">危险名工具默认拦截，可在 allowlist 放行。</p>
+                <div id="mcpClientsList" class="mcp-clients-list hint">暂无外部 MCP Client</div>
+                <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap;margin:10px 0 12px">
+                  <button class="btn sm primary" id="mcpClientAddBtn" type="button" data-i18n="sre.mcp_client_add">添加 Client</button>
+                </div>
+                <div class="ai-card" id="mcpClientEditor" hidden style="border:1px solid var(--line);padding:12px;border-radius:10px;margin-bottom:8px">
+                  <input type="hidden" id="mcpClientEditId">
+                  <div class="grid2">
+                    <div class="field"><label data-i18n="sre.mcp_client_name">名称</label><input type="text" id="mcpClientName" placeholder="如 Jira / CMDB"></div>
+                    <div class="field"><label class="switch" style="margin-top:22px"><input type="checkbox" id="mcpClientEnabled" checked> <span data-i18n="sre.mcp_client_enabled">启用</span></label></div>
+                    <div class="field" style="grid-column:1/-1"><label>URL</label><input type="text" id="mcpClientURL" class="mono" placeholder="https://example.com/mcp"></div>
+                    <div class="field"><label data-i18n="sre.mcp_client_auth">Authorization</label><input type="password" id="mcpClientAuth" autocomplete="off" placeholder="Bearer …（脱敏为 ****）"></div>
+                    <div class="field"><label data-i18n="sre.mcp_client_timeout">超时（秒）</label><input type="number" id="mcpClientTimeout" min="5" max="300" value="30"></div>
+                    <div class="field"><label data-i18n="sre.mcp_client_allow">Allowlist（逗号分隔，可选）</label><input type="text" id="mcpClientAllow" class="mono" placeholder="search,get_issue"></div>
+                    <div class="field"><label data-i18n="sre.mcp_client_block">Blocklist（逗号分隔，可选）</label><input type="text" id="mcpClientBlock" class="mono" placeholder="delete_issue"></div>
+                  </div>
+                  <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap;margin-top:8px">
+                    <button class="btn sm" id="mcpClientTestBtn" type="button" data-i18n="sre.mcp_client_test">测试连接</button>
+                    <button class="btn sm" id="mcpClientSyncBtn" type="button" data-i18n="sre.mcp_client_sync">同步工具并保存</button>
+                    <button class="btn sm primary" id="mcpClientSaveBtn" type="button" data-i18n="sre.mcp_client_save">写入列表（需再点底部保存）</button>
+                    <button class="btn sm ghost" id="mcpClientCancelBtn" type="button" data-i18n="ui.cancel">取消</button>
+                  </div>
+                  <div id="mcpClientTestResult" class="ai-test-result" style="margin-top:8px"></div>
+                  <div id="mcpClientToolsPreview" class="hint" style="margin-top:8px"></div>
+                </div>
+                <textarea id="mcpClientsJSON" hidden></textarea>
               </div>
             </div>
           </div>
@@ -3478,7 +3709,7 @@
           <header class="ai-panel-head">
             <div>
               <h4>调用观测与成本</h4>
-              <p>PostgreSQL 永久落库 · 历史组合曲线 · 用户成本分析</p>
+              <p>PostgreSQL 永久落库 · 用量曲线 · 用户成本。刷新即时生效。</p>
             </div>
             <div class="ai-panel-tools">
               <div class="select-wrap"><select id="aiStatsRange">
@@ -3493,7 +3724,7 @@
           <div class="ai-panel-body" id="aiStatsCard">
             <div id="aiStatsBody"><div class="hint">打开本分区时自动加载…</div></div>
             <div class="subhead" style="margin-top:16px">A/B 实验管理</div>
-            <div class="hint">定义分流变体与模型覆盖；在「模型路由」中设置活跃实验 ID 后生效。</div>
+            <p class="hint" data-i18n="sre.ai_ab_observe_hint">定义分流变体与模型覆盖后，到「研判与成本 → 任务模型路由」填写活跃实验 ID 即可生效。</p>
             <div class="grid2">
               <div class="field"><label>实验 ID</label><input type="text" id="abExpId" class="mono" placeholder="exp-assist-v1"></div>
               <div class="field"><label>名称</label><input type="text" id="abExpName" placeholder="助手模型对比"></div>
@@ -3505,6 +3736,7 @@
             <div class="mfa-foot" style="gap:8px;display:flex;flex-wrap:wrap;margin-bottom:8px">
               <button class="btn primary sm" id="abExpSaveBtn" type="button">保存实验</button>
               <button class="btn sm" id="abExpRefreshBtn" type="button">刷新列表</button>
+              <button type="button" class="btn link sm" id="aiJumpQualityRouteBtn" data-i18n="sre.ai_jump_quality_route">去研判页填写活跃 ID →</button>
             </div>
             <div id="abExpList" class="hint">打开观测页后加载…</div>
           </div>
@@ -3514,31 +3746,69 @@
         <section class="ai-panel" data-ai-panel="security">
           <header class="ai-panel-head">
             <div>
-              <h4>AI 治理</h4>
-              <p>配额、脱敏与写工具审批；终端只读巡检需二次密码。</p>
+              <h4 data-i18n="sre.ai_security_title">AI 治理</h4>
+              <p data-i18n="sre.ai_security_desc">配额、脱敏、写工具审批、记忆治理；终端只读巡检需二次密码。</p>
             </div>
-            <b id="aiTermStateLabel" class="ai-term-state off">未开启</b>
+            <span class="ai-card-summary" id="securityPanelSummary"></span>
           </header>
           <div class="ai-panel-body">
-            <div class="grid2" style="margin-bottom:14px">
-              <div class="field"><label>每用户每日调用配额（0=不限）</label><input type="number" id="aiDailyQuota" min="0" placeholder="0"></div>
-              <div class="field" style="display:flex;flex-direction:column;gap:8px;justify-content:center">
-                <label class="switch"><input type="checkbox" id="aiWriteToolsApproval" checked> <span>写工具默认需审批</span></label>
-                <label class="switch"><input type="checkbox" id="aiRedactSensitive"> <span>敏感字段轻量脱敏</span></label>
+            <div class="ai-card ai-card-collapsible" id="securityQuotaCard" data-ai-card="securityQuota">
+              <div class="ai-card-header ai-card-header-clickable" id="securityQuotaCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="securityQuotaCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">配额与策略</span>
+                  <span class="ai-card-desc">日配额 · 写工具审批 · 脱敏<span class="ai-card-summary" id="securityQuotaCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="securityQuotaCardArrow" aria-hidden="true">▸</span>
+              </div>
+              <div class="ai-card-body" id="securityQuotaCardBody">
+                <div class="field"><label>每用户每日调用配额（0=不限）</label><input type="number" id="aiDailyQuota" min="0" placeholder="0"></div>
+                <div class="field"><label class="switch"><input type="checkbox" id="aiWriteToolsApproval" checked> <span>写工具默认需审批</span></label></div>
+                <div class="field"><label class="switch"><input type="checkbox" id="aiRedactSensitive"> <span>敏感字段轻量脱敏</span></label></div>
               </div>
             </div>
-            <div class="ai-term-access">
-              <div class="ai-term-head">
-                <span>AI 终端只读巡检</span>
-                <button class="btn sm" id="aiTermToggleBtn" type="button">开启</button>
+
+            <div class="ai-card ai-card-collapsible" id="securityMemoryCard" data-ai-card="securityMemory">
+              <div class="ai-card-header ai-card-header-clickable" id="securityMemoryCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="securityMemoryCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">记忆与治理</span>
+                  <span class="ai-card-desc">公共记忆 · 学习闭环 · 自动防御<span class="ai-card-summary" id="securityMemoryCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="securityMemoryCardArrow" aria-hidden="true">▸</span>
               </div>
-              <div class="hint ai-term-warn">开启后 AI 可执行 top / df / ps / 日志等只读命令替代人工排查；不做任何增删改。开启需输入终端连接密码。</div>
-              <div id="aiTermPwRow" class="ai-term-pw" style="display:none">
-                <input type="password" id="aiTermPw" autocomplete="off" placeholder="输入终端连接密码以开启">
-                <button class="btn primary sm" id="aiTermConfirmBtn" type="button">确认开启</button>
-                <button class="btn ghost sm" id="aiTermCancelBtn" type="button">取消</button>
+              <div class="ai-card-body" id="securityMemoryCardBody">
+                <div class="field"><label class="switch"><input type="checkbox" id="disablePublicChatMemory"> <span>敏感模式：对话不写入公共向量记忆</span></label></div>
+                <div class="field"><label class="switch"><input type="checkbox" id="allowUnverifiedAIOutputLearning"> <span>高级：允许未采纳的 AI 输出参与长期学习（不推荐）</span></label></div>
+                <div class="field"><label class="switch"><input type="checkbox" id="autoDefendEnabled"> <span>自动安全防御：撞库 / MCP 滥用等自动留痕并开事件单</span></label></div>
+                <div class="field"><label class="switch"><input type="checkbox" id="selfEvolveEnabled"> <span>自我进化：每日记忆优化后写成长日记并提炼技能</span></label></div>
+                <details class="ai-more"><summary data-i18n="sre.ai_more_tech">技术说明</summary>
+                  <p class="ai-footnote">敏感模式仍允许结案、诊断采纳、避坑沉淀写入。未验证学习默认关闭以防幻觉污染。防御与进化受配额与审批约束，不执行破坏性写操作。</p>
+                </details>
               </div>
-              <div id="aiTermMsg" class="ai-term-msg"></div>
+            </div>
+
+            <div class="ai-card ai-card-collapsible" id="securityTermCard" data-ai-card="securityTerm">
+              <div class="ai-card-header ai-card-header-clickable" id="securityTermCardHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="securityTermCardBody">
+                <div class="ai-card-header-text">
+                  <span class="ai-card-title">AI 终端只读巡检</span>
+                  <span class="ai-card-desc">即时生效 · 需终端连接密码<span class="ai-card-summary" id="securityTermCardSummary"></span></span>
+                </div>
+                <span class="ai-card-arrow open" id="securityTermCardArrow" aria-hidden="true">▸</span>
+              </div>
+              <div class="ai-card-body" id="securityTermCardBody">
+                <div class="ai-term-access" style="margin-top:0">
+                  <div class="ai-term-head">
+                    <span id="aiTermStateLabel" class="ai-term-state off">未开启</span>
+                    <button class="btn sm" id="aiTermToggleBtn" type="button">开启</button>
+                  </div>
+                  <div class="hint ai-term-warn">开启后 AI 可执行 top / df / ps / 日志等只读命令；不做任何增删改。</div>
+                  <div id="aiTermPwRow" class="ai-term-pw" style="display:none">
+                    <input type="password" id="aiTermPw" autocomplete="off" placeholder="输入终端连接密码以开启">
+                    <button class="btn primary sm" id="aiTermConfirmBtn" type="button">确认开启</button>
+                    <button class="btn ghost sm" id="aiTermCancelBtn" type="button">取消</button>
+                  </div>
+                  <div id="aiTermMsg" class="ai-term-msg"></div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -3546,8 +3816,14 @@
       </div>
     </div>
     <div class="modal-foot ai-settings-foot">
-      <span class="ai-settings-foot-hint">修改后点击保存写入配置；观测与终端授权即时生效。</span>
-      <button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button>
+      <div class="ai-settings-foot-hint">
+        <span class="ai-foot-chip" data-i18n="sre.ai_save_need_chip">配置项需保存</span>
+        <span class="ai-foot-chip muted" data-i18n="sre.ai_save_instant_chip">终端授权 / 观测刷新即时生效</span>
+      </div>
+      <div class="ai-settings-foot-acts">
+        <button class="btn ghost" id="aiConfigSaveCloseBtn" type="button" data-i18n="sre.ai_save_close">保存并关闭</button>
+        <button class="btn primary" id="aiConfigSaveBtn" data-i18n="ui.save">保存</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3902,14 +4178,30 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div class="mask" id="uiConfirmMask" role="dialog" aria-modal="true" aria-labelledby="uiConfirmTitle">
+  <div class="modal ui-confirm-modal ui-confirm-neutral">
+    <div class="modal-head">
+      <h3 id="uiConfirmTitle">请确认</h3>
+      <button type="button" class="btn ghost close" id="uiConfirmCloseBtn" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p id="uiConfirmMessage" class="ui-confirm-msg"></p>
+      <p id="uiConfirmDetail" class="hint ui-confirm-detail" hidden></p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="uiConfirmCancelBtn">取消</button>
+      <button type="button" class="btn primary" id="uiConfirmOkBtn">确定</button>
+    </div>
+  </div>
+</div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.18.45"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.18.45"></script>
-<script src="/i18n-dashboard.js?v=0.18.45"></script>
+<script src="/i18n-dashboard.en.js?v=0.19.44"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.19.44"></script>
+<script src="/i18n-dashboard.js?v=0.19.44"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.18.45" defer></script>
+<script src="/app.js?v=0.19.44" defer></script>
 </body>
 </html>

@@ -51,9 +51,9 @@ func installAgentService(exePath, cfgPath string) error {
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>/var/log/aiops-monitor-agent.log</string>
+	<string>/dev/null</string>
 	<key>StandardErrorPath</key>
-	<string>/var/log/aiops-monitor-agent.log</string>
+	<string>/dev/null</string>
 </dict>
 </plist>
 `, agentServiceName, exePath, cfgPath)

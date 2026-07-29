@@ -7,17 +7,14 @@ import (
 	"aiops-monitor/cmd/server/sqltoolkit"
 )
 
-func TestDesensitizeSQL(t *testing.T) {
-	in := "SELECT * FROM users WHERE email = 'secret@example.com' AND id = 12345678"
-	out := desensitizeSQL(in)
-	if strings.Contains(out, "secret@example.com") {
-		t.Fatalf("email not redacted: %s", out)
+func TestSQLHistoryKeepsLiterals(t *testing.T) {
+	in := "SELECT * FROM users WHERE email = 'secret@example.com' AND id = 12345678 AND tel='17301655949'"
+	out := storeSQLForHistory(in)
+	if !strings.Contains(out, "secret@example.com") || !strings.Contains(out, "17301655949") || !strings.Contains(out, "12345678") {
+		t.Fatalf("history must keep full literals: %s", out)
 	}
-	if !strings.Contains(out, "'?'") {
-		t.Fatalf("expected literal placeholder: %s", out)
-	}
-	if strings.Contains(out, "12345678") {
-		t.Fatalf("long number not redacted: %s", out)
+	if strings.Contains(out, "'?'") {
+		t.Fatalf("must not desensitize: %s", out)
 	}
 }
 

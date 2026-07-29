@@ -278,8 +278,7 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	`  "vars": [{"name":"instance","label":"实例","type":"query","query":"label_values(aiops_cpu_percent, instance)"}],` + "\n" +
 	`  "panels": [{"title":"面板标题","type":"<见选型矩阵>","unit":"percent|percentunit|bytes|Bps|s|ms|reqps|short|cores|none","w":12,"h":8,"min":0,"max":100,` + "\n" +
 	`     "options":{"palette":"classic|warm|cool|traffic|mono","legend":"top|bottom|right|hidden","sort":"desc|asc|none","limit":10,` + "\n" +
-	`       "chart_style":"line|area|bar","smooth":false,"stacked":false,"show_points":false,"threshold_mode":"absolute",` + "\n" +
-	`       "thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}],` + "\n" +
+	`       "chart_style":"line|area|bar","smooth":false,"stacked":false,"show_points":false},` + "\n" +
 	`       "mappings":[{"type":"value","value":"0","text":"正常","color":"var(--ok)"}]},` + "\n" +
 	`     "targets":[{"expr":"<PromQL>","legend":"{{标签}}"}]}]` + "\n" +
 	"}\n" +
@@ -295,8 +294,8 @@ const aiDashSchemaHint = "严格只输出一个 JSON 对象（可放在 ```json 
 	"叙事节奏：顶部 KPI(stat/gauge) → 趋势(timeseries) → 对比/构成(pie/bar/bargauge/radar/sankey) → 明细(table/heatmap) → 告警(alertlist)。" +
 	"高质量看板须混用至少 5 种不同 type，且至少包含 1 个 text 说明区。切忌全是 timeseries。" +
 	"未知/不会画的类型不要硬造——可输出该 type（平台会占位），或回退 timeseries。" +
-	"⑥ 【fieldConfig/options】利用率类务必带 thresholds（0/75/90 + var(--ok/warn/crit)）；需要文案替换时写 mappings；" +
-	"时序可设 chart_style/smooth/stacked/show_points；配色用 palette。不要只给默认空 options。" +
+	"⑥ 【fieldConfig/options】默认【不要】写 thresholds / threshold_mode（阈值带默认关闭，用户可在面板编辑里手动开启）；" +
+	"需要文案替换时写 mappings；时序可设 chart_style/smooth/stacked/show_points；配色用 palette。不要只给默认空 options。" +
 	"⑦ 【专业布局·24 栏栅格·紧凑密度】黄金信号分区、自上而下、同行等高、每行合计 w=24 铺满；禁止 KPI/水位占过高空白：" +
 	"首行 3~4 个紧凑 stat（w=6 或 8，h=3~4）→ 次区 timeseries（w=12、h=6~8）→ " +
 	"再区对比组件（pie/bar/table w=12 h=6~7；gauge w=8 h=5；radar 8×8；sankey 12×10；nodegraph 16×12；clock 6×4）→ 底部 table/alertlist。" +
@@ -786,6 +785,9 @@ func sanitizeAIDash(spec aiDashSpec, name, source string) (Dashboard, []string) 
 			warns = append(warns, "面板「"+panel.Title+"」无有效查询，已跳过")
 			continue
 		}
+		// AI 生成/优化默认关闭阈值带：配置能力保留在面板编辑器，此处剥离 LLM 注入的 thresholds。
+		panel.Options.Thresholds = nil
+		panel.Options.ThresholdMode = ""
 		d.Panels = append(d.Panels, panel)
 		id++
 	}
@@ -1520,6 +1522,33 @@ func isAIDashboardSource(source string) bool {
 	return s == "ai" || strings.HasPrefix(s, "ai-") || strings.HasPrefix(s, "ai:")
 }
 
+// isStockAIThresholdLadder 判断是否为 AI/模板常见的默认阈值阶梯（0/75/90 或 0/0.75/0.9）。
+// 用于存量 AI 看板惰性关闭阈值带；用户手改过的阶梯不匹配则保留。
+func isStockAIThresholdLadder(th []DashThreshold) bool {
+	if len(th) != 3 {
+		return false
+	}
+	vals := [3]float64{th[0].Value, th[1].Value, th[2].Value}
+	stock := (vals[0] == 0 && vals[1] == 75 && vals[2] == 90) ||
+		(vals[0] == 0 && vals[1] == 0.75 && vals[2] == 0.9)
+	if !stock {
+		return false
+	}
+	for _, t := range th {
+		c := strings.ToLower(strings.TrimSpace(t.Color))
+		if c == "" {
+			continue
+		}
+		if strings.Contains(c, "ok") || strings.Contains(c, "warn") || strings.Contains(c, "crit") ||
+			c == "green" || c == "yellow" || c == "orange" || c == "red" ||
+			strings.HasPrefix(c, "#") || strings.HasPrefix(c, "var(") {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // normalizeAISectionWidths 保留给测试/兼容调用；新布局器不再依赖它做装箱。
 func normalizeAISectionWidths(panels []DashPanel) {
 	for i := range panels {
@@ -1654,11 +1683,11 @@ const builtinHostGoldenDashJSON = `{
   "panels": [
     {"title":"在线主机数","type":"stat","unit":"short","w":6,"h":4,"targets":[{"expr":"count(aiops_cpu_percent)"}],"options":{"legend":"hidden"}},
     {"title":"集群 CPU 均值","type":"stat","unit":"percent","w":6,"h":4,"min":0,"max":100,"targets":[{"expr":"avg(aiops_cpu_percent)"}],
-      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden"}},
     {"title":"集群内存均值","type":"stat","unit":"percent","w":6,"h":4,"min":0,"max":100,"targets":[{"expr":"avg(aiops_mem_percent)"}],
-      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden"}},
     {"title":"集群磁盘均值","type":"stat","unit":"percent","w":6,"h":4,"min":0,"max":100,"targets":[{"expr":"avg(aiops_disk_percent)"}],
-      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden"}},
     {"title":"CPU 使用率趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,
       "targets":[{"expr":"aiops_cpu_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],
       "options":{"legend":"bottom","chart_style":"area","smooth":true}},
@@ -1677,7 +1706,7 @@ const builtinHostGoldenDashJSON = `{
     {"title":"CPU Top10","type":"barchart","unit":"percent","w":8,"h":7,"targets":[{"expr":"topk(10, aiops_cpu_percent)","legend":"{{instance}}"}],
       "options":{"legend":"hidden","sort":"desc","limit":10}},
     {"title":"内存 Top10","type":"bargauge","unit":"percent","w":8,"h":7,"min":0,"max":100,"targets":[{"expr":"topk(10, aiops_mem_percent)","legend":"{{instance}}"}],
-      "options":{"legend":"hidden","sort":"desc","limit":10,"thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden","sort":"desc","limit":10}},
     {"title":"磁盘卷水位","type":"table","unit":"percent","w":8,"h":7,"targets":[{"expr":"aiops_disk_vol_percent","legend":"{{instance}}"}],
       "options":{"legend":"hidden"}},
     {"title":"当前告警","type":"alertlist","w":12,"h":6,"targets":[],"options":{"legend":"hidden"}},
@@ -1706,11 +1735,11 @@ const builtinCapacityDashJSON = `{
   "vars": [{"name":"instance","label":"实例","type":"query","query":"label_values(aiops_disk_percent, instance)"}],
   "panels": [
     {"title":"磁盘均值","type":"gauge","unit":"percent","w":8,"h":5,"min":0,"max":100,"targets":[{"expr":"avg(aiops_disk_percent)"}],
-      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden"}},
     {"title":"内存均值","type":"gauge","unit":"percent","w":8,"h":5,"min":0,"max":100,"targets":[{"expr":"avg(aiops_mem_percent)"}],
-      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden"}},
     {"title":"CPU 均值","type":"gauge","unit":"percent","w":8,"h":5,"min":0,"max":100,"targets":[{"expr":"avg(aiops_cpu_percent)"}],
-      "options":{"legend":"hidden","thresholds":[{"value":0,"color":"var(--ok)"},{"value":75,"color":"var(--warn)"},{"value":90,"color":"var(--crit)"}]}},
+      "options":{"legend":"hidden"}},
     {"title":"磁盘使用趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,"targets":[{"expr":"aiops_disk_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom","chart_style":"area"}},
     {"title":"内存使用趋势","type":"timeseries","unit":"percent","w":12,"h":7,"min":0,"max":100,"targets":[{"expr":"aiops_mem_percent{instance=~\"$instance\"}","legend":"{{instance}}"}],"options":{"legend":"bottom","chart_style":"area"}},
     {"title":"磁盘 Top10","type":"bargauge","unit":"percent","w":12,"h":7,"min":0,"max":100,"targets":[{"expr":"topk(10, aiops_disk_percent)","legend":"{{instance}}"}],"options":{"legend":"hidden","sort":"desc"}},

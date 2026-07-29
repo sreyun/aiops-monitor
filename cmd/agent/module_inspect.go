@@ -129,6 +129,10 @@ func moduleHostInspect(args map[string]string) ([]byte, int) {
 			profile = "standard"
 		}
 	}
+	if runtime.GOOS == "windows" {
+		// One PowerShell cold-start for disk/mem/cpu/model/boot before collectors fan out.
+		winEnsureBasics()
+	}
 	b := &inspectBuilder{
 		profile: profile,
 		rep: inspectReport{
@@ -373,16 +377,13 @@ func uptimeDays() int {
 			}
 		}
 	case "windows":
-		// Prefer CIM (Win11/Server 2025 drop wmic). Fall back to wmic for older hosts.
-		ps := `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='SilentlyContinue'; $t=$null; try { $t=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime } catch {}; if (-not $t) { try { $t=(Get-WmiObject Win32_OperatingSystem).LastBootUpTime } catch {} }; if ($t) { if ($t -is [datetime]) { $t.ToString('yyyyMMddHHmmss') } else { [string]$t } }`
-		out := string(cmdOutRaw(8, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps))
-		out = strings.TrimSpace(strings.ReplaceAll(out, "\r", ""))
-		if len(out) >= 14 {
-			if t, err := time.Parse("20060102150405", out[:14]); err == nil {
+		// Prefer batched CIM (same PowerShell as disk/mem/cpu). Fall back to wmic.
+		if stamp := winCollectBootStamp(); len(stamp) >= 14 {
+			if t, err := time.Parse("20060102150405", stamp[:14]); err == nil {
 				return int(time.Since(t).Hours() / 24)
 			}
 		}
-		out = cmdOut(5, "cmd", "/c", "wmic os get lastbootuptime /value")
+		out := cmdOut(5, "cmd", "/c", "wmic os get lastbootuptime /value")
 		for _, ln := range strings.Split(out, "\n") {
 			ln = strings.TrimSpace(ln)
 			if strings.HasPrefix(ln, "LastBootUpTime=") {
@@ -424,12 +425,8 @@ func detectVirt() string {
 			return strings.TrimSpace(string(raw))
 		}
 	case "windows":
-		if out := cmdOut(3, "cmd", "/c", "wmic computersystem get model /value"); out != "" {
-			for _, ln := range strings.Split(out, "\n") {
-				if strings.HasPrefix(strings.TrimSpace(ln), "Model=") {
-					return strings.TrimPrefix(strings.TrimSpace(ln), "Model=")
-				}
-			}
+		if m := winCollectComputerModel(); m != "" {
+			return m
 		}
 	case "darwin":
 		if out := cmdOut(2, "sysctl", "-n", "machdep.cpu.brand_string"); out != "" {
@@ -518,14 +515,7 @@ func (b *inspectBuilder) collectCPU() {
 			}
 		}
 	case "windows":
-		if out := cmdOut(5, "cmd", "/c", "wmic cpu get loadpercentage /value"); out != "" {
-			for _, ln := range strings.Split(out, "\n") {
-				ln = strings.TrimSpace(ln)
-				if strings.HasPrefix(ln, "LoadPercentage=") {
-					cpuPct, _ = strconv.ParseFloat(strings.TrimPrefix(ln, "LoadPercentage="), 64)
-				}
-			}
-		}
+		cpuPct = winCollectCPULoadPct()
 	}
 
 	b.rep.Metrics.CPUUsagePct = round1(cpuPct)
@@ -633,19 +623,7 @@ func (b *inspectBuilder) collectMem() {
 		}
 		memAvail = freePages * pageSize
 	case "windows":
-		out := cmdOut(5, "cmd", "/c", "wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /value")
-		var freeKB, totalKB uint64
-		for _, ln := range strings.Split(out, "\n") {
-			ln = strings.TrimSpace(ln)
-			if strings.HasPrefix(ln, "FreePhysicalMemory=") {
-				freeKB, _ = strconv.ParseUint(strings.TrimPrefix(ln, "FreePhysicalMemory="), 10, 64)
-			}
-			if strings.HasPrefix(ln, "TotalVisibleMemorySize=") {
-				totalKB, _ = strconv.ParseUint(strings.TrimPrefix(ln, "TotalVisibleMemorySize="), 10, 64)
-			}
-		}
-		memTotal = totalKB * 1024
-		memAvail = freeKB * 1024
+		memTotal, memAvail = winCollectMemBytes()
 	}
 
 	if memTotal > 0 {
@@ -693,24 +671,14 @@ func (b *inspectBuilder) collectDisk() {
 	var rows []diskRow
 	switch runtime.GOOS {
 	case "windows":
-		out := cmdOut(8, "cmd", "/c", "wmic logicaldisk where DriveType=3 get DeviceID,FreeSpace,Size /format:csv")
-		for i, ln := range strings.Split(out, "\n") {
-			ln = strings.TrimSpace(ln)
-			if i == 0 || ln == "" || strings.HasPrefix(ln, "Node,") {
-				continue
-			}
-			f := strings.Split(ln, ",")
-			if len(f) < 4 {
-				continue
-			}
-			id, freeS, sizeS := f[len(f)-3], f[len(f)-2], f[len(f)-1]
-			free, _ := strconv.ParseUint(freeS, 10, 64)
-			size, _ := strconv.ParseUint(sizeS, 10, 64)
+		for _, r := range winCollectDiskRows() {
+			free, size := r.Free, r.Size
 			if size == 0 {
 				continue
 			}
 			used := size - free
 			pct := float64(used) / float64(size) * 100
+			id := r.ID
 			rows = append(rows, diskRow{mount: id, size: humanBytes(size), used: humanBytes(used), avail: humanBytes(free), pct: fmt.Sprintf("%.0f%%", pct)})
 			ist := "ok"
 			if pct >= b.rep.Thresholds.DiskWarn+10 {

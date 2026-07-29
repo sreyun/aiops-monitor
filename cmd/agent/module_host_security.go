@@ -263,7 +263,7 @@ func detectDistroPkgMgr() (distro, mgr string) {
 		if have("winget") {
 			return "windows", "winget"
 		}
-		return "windows", "wmic"
+		return "windows", "get-package"
 	}
 	d := detectLinuxDistro()
 	distro = d.ID

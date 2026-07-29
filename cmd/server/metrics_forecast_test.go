@@ -175,9 +175,80 @@ func TestHandleMetricsForecastRejectsEmpty(t *testing.T) {
 	}
 }
 
-func TestInferStepMedian(t *testing.T) {
-	pts := [][2]float64{{0, 1}, {15, 2}, {30, 3}, {45, 4}, {60, 5}}
-	if s := inferStep(pts); s != 15 {
-		t.Fatalf("inferStep=%d want 15", s)
+func TestHandleMetricsForecastStaggeredEnds(t *testing.T) {
+	srv, _ := newTestServer(t)
+	now := time.Now().Unix()
+	step := int64(60)
+	mk := func(n int, endSkew int64, base float64) [][2]float64 {
+		pts := make([][2]float64, 0, n)
+		for i := 0; i < n; i++ {
+			pts = append(pts, [2]float64{
+				float64(now - endSkew - int64(n-i)*step),
+				base + float64(i)*0.2,
+			})
+		}
+		return pts
+	}
+	// Dense CPU ends at `now`; sparse TCP ends 10 minutes earlier.
+	body := map[string]any{
+		"series": []map[string]any{
+			{"name": "cpu_percent", "points": mk(40, 0, 20)},
+			{"name": "conn_tcp", "points": mk(30, 10*step, 800)},
+		},
+		"horizon_sec": 20 * step,
+		"step":        step,
+		"now_ts":      now,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/forecast", bytes.NewReader(raw))
+	rr := httptest.NewRecorder()
+	srv.handleMetricsForecast(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var res struct {
+		OK     bool `json:"ok"`
+		Series []struct {
+			Name   string       `json:"name"`
+			Kind   string       `json:"kind"`
+			Points [][2]float64 `json:"points"`
+		} `json:"series"`
+		Meta forecastMeta `json:"meta"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected ok meta=%+v", res.Meta)
+	}
+	if res.Meta.NowTS < now-step {
+		t.Fatalf("now_ts should align near global end, got %d want ~%d", res.Meta.NowTS, now)
+	}
+	for _, s := range res.Series {
+		if s.Kind != "forecast" {
+			continue
+		}
+		lastTS := int64(s.Points[len(s.Points)-1][0])
+		if lastTS <= res.Meta.NowTS {
+			t.Fatalf("forecast %q lastTS=%d must extend past now_ts=%d", s.Name, lastTS, res.Meta.NowTS)
+		}
+		// First forecast bridge should be at/near shared now
+		bridge := int64(s.Points[0][0])
+		if bridge < res.Meta.NowTS-step || bridge > res.Meta.NowTS+step {
+			t.Fatalf("forecast %q bridge=%d not near now_ts=%d", s.Name, bridge, res.Meta.NowTS)
+		}
 	}
 }
+
+func TestHoldForwardTo(t *testing.T) {
+	pts := [][2]float64{{100, 1}, {160, 2}, {220, 3}}
+	got := holdForwardTo(pts, 400)
+	if len(got) != 4 || got[3][0] != 400 || got[3][1] != 3 {
+		t.Fatalf("holdForwardTo=%v", got)
+	}
+	same := holdForwardTo(pts, 220)
+	if len(same) != 3 {
+		t.Fatalf("no-op holdForwardTo changed length: %v", same)
+	}
+}
+

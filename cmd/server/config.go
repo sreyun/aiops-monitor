@@ -1666,6 +1666,8 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	if strings.Contains(a.MCPScopedTokensJSON, "****") {
 		a.MCPScopedTokensJSON = cs.cfg.AI.MCPScopedTokensJSON
 	}
+	// 外部 MCP Client：整段脱敏或单条 header 脱敏时与已保存配置合并。
+	a.MCPClientsJSON = mergeMCPClientsJSON(a.MCPClientsJSON, cs.cfg.AI.MCPClientsJSON)
 	// WeKnora API Key：空或脱敏占位时保留原值。
 	if a.WeKnoraAPIKey == "" || strings.Contains(a.WeKnoraAPIKey, "****") {
 		a.WeKnoraAPIKey = cs.cfg.AI.WeKnoraAPIKey

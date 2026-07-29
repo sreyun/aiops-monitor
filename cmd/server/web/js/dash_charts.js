@@ -631,7 +631,8 @@
       value: ((+s.value - min) / ((max - min) || 1)) * 100,
       color: resolveColor(s.color, t)
     })).filter(s => !isNaN(s.value)).sort((a, b) => a.value - b.value);
-    let axisColors = [[0.75, t.ok], [0.9, t.warn], [1, t.crit]];
+    // 未配置阈值时不画 75/90 默认色带，整环使用主题色，保持「阈值默认关闭」。
+    let axisColors = [[1, col || t.accent]];
     if (steps.length) {
       axisColors = steps.map(s => [Math.max(0, Math.min(1, s.value / 100)), s.color]);
       if (axisColors[axisColors.length - 1][0] < 1) axisColors.push([1, axisColors[axisColors.length - 1][1]]);

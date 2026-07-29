@@ -670,22 +670,27 @@ async function executePlaybook(id) {
 }
 
 async function pollExecution(execId, pbId) {
-  $("execResultTitle").textContent = I18N.t("ui.running");
+  $("execResultTitle").textContent = translateExecStatus("running");
   $("execResultBody").innerHTML = `<div class="empty-line">${I18N.t("ui.executing")}</div>`;
   $("execResultMask").classList.add("show");
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 2000));
+  // Long playbooks (host_inspect / security) can run several minutes — keep
+  // polling until terminal status or ~30 minutes, with mild backoff.
+  let delay = 1500;
+  const deadline = Date.now() + 30 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, delay));
     try {
       const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(execId)}`).then(r => r.json());
       renderExecResult(exec);
       if (exec.status !== "running") break;
+      if (delay < 4000) delay += 250;
     } catch (e) {}
   }
 }
 
 function renderExecResult(exec) {
   window._lastExecResult = exec; // 供「AI 复盘」按钮取用
-  $("execResultTitle").textContent = `${I18N.t("ui.execute")}${translateExecStatus(exec.status)}`;
+  $("execResultTitle").textContent = translateExecStatus(exec.status);
   // 有任何主机未成功 → 显示「AI 复盘」按钮（执行中不显示）
   const rb = $("execRetroBtn");
   if (rb) {
@@ -783,24 +788,18 @@ const PB_READONLY_TEMPLATES = {
     steps: [
       {
         name: "深度主机巡检", module: "host_inspect", target: "all",
-        timeout_sec: 180, register: "inspect", ignore_exit: true,
+        timeout_sec: 150, register: "inspect", ignore_exit: true,
         args: { profile: "standard" },
       },
     ]
   },
   sys: {
     name: "系统巡检（只读）",
-    description: "采集主机基础信息、磁盘/内存/负载/进程（只读，不变更系统）",
+    description: "单步 host_inspect（quick）：磁盘/内存/CPU/进程等一次采集，避免多步重复拉起 PowerShell",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
-      { name: "磁盘用量", module: "disk_usage", target: "all", timeout_sec: 30 },
-      { name: "内存概况", module: "mem_info", target: "all", timeout_sec: 30 },
-      { name: "CPU负载", module: "cpu_load", target: "all", timeout_sec: 30 },
-      { name: "进程占用", module: "process_top", target: "all", timeout_sec: 45 },
-      { name: "运行时长", module: "uptime_info", target: "all", timeout_sec: 20 },
       {
-        name: "深度巡检摘要", module: "host_inspect", target: "all",
-        timeout_sec: 180, register: "inspect", ignore_exit: true, continue_on_error: true,
+        name: "系统巡检", module: "host_inspect", target: "all",
+        timeout_sec: 90, register: "inspect", ignore_exit: true, continue_on_error: true,
         args: { profile: "quick" },
       },
     ]
@@ -810,21 +809,20 @@ const PB_READONLY_TEMPLATES = {
     description: "网卡、监听端口、路由与连接摘要（只读）",
     steps: [
       { name: "网卡地址", module: "net_ifaces", target: "all", timeout_sec: 20 },
-      { name: "监听端口", module: "net_listen", target: "all", timeout_sec: 30 },
-      { name: "路由表", module: "net_routes", target: "all", timeout_sec: 20 },
-      { name: "连接摘要", module: "net_sockets", target: "all", timeout_sec: 30 },
-      { name: "DNS 解析探测", module: "dns_resolve", target: "all", timeout_sec: 20, args: { host: "www.baidu.com" }, continue_on_error: true },
+      { name: "监听端口", module: "net_listen", target: "all", timeout_sec: 25 },
+      { name: "路由表", module: "net_routes", target: "all", timeout_sec: 15 },
+      { name: "连接摘要", module: "net_sockets", target: "all", timeout_sec: 25 },
+      { name: "DNS 解析探测", module: "dns_resolve", target: "all", timeout_sec: 15, args: { host: "www.baidu.com" }, continue_on_error: true },
     ]
   },
   sre: {
     name: "SRE可观测巡检（只读）",
     description: "日志、容器、时间同步等只读巡检",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
-      { name: "最近日志", module: "journal_recent", target: "all", timeout_sec: 45, args: { lines: "80" }, continue_on_error: true },
-      { name: "内核消息", module: "dmesg_recent", target: "all", timeout_sec: 30, continue_on_error: true },
-      { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 30, continue_on_error: true },
-      { name: "容器资源", module: "docker_stats", target: "all", timeout_sec: 45, continue_on_error: true },
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 25, register: "facts" },
+      { name: "最近日志", module: "journal_recent", target: "all", timeout_sec: 35, args: { lines: "80" }, continue_on_error: true },
+      { name: "内核消息", module: "dmesg_recent", target: "all", timeout_sec: 25, continue_on_error: true },
+      { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 25, continue_on_error: true },
       { name: "时间时区", module: "time_sync", target: "all", timeout_sec: 15 },
     ]
   },
@@ -833,19 +831,18 @@ const PB_READONLY_TEMPLATES = {
     description: "登录会话、对外监听、认证失败与主机安全扫描（只读）",
     steps: [
       { name: "登录会话", module: "users_logged", target: "all", timeout_sec: 20 },
-      { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 30 },
-      { name: "认证失败", module: "auth_failures", target: "all", timeout_sec: 45, continue_on_error: true, ignore_exit: true },
-      { name: "主机安全扫描", module: "host_security_scan", target: "all", timeout_sec: 180, continue_on_error: true, ignore_exit: true },
+      { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 25 },
+      { name: "认证失败", module: "auth_failures", target: "all", timeout_sec: 35, continue_on_error: true, ignore_exit: true },
+      { name: "主机安全扫描", module: "host_security_scan", target: "all", timeout_sec: 120, continue_on_error: true, ignore_exit: true },
     ]
   },
   container: {
     name: "容器/Compose 巡检（只读）",
     description: "Docker/Podman 容器列表、资源与 Compose 项目（无运行时时软跳过）",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
-      { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 30, continue_on_error: true },
-      { name: "容器资源", module: "docker_stats", target: "all", timeout_sec: 45, continue_on_error: true },
-      { name: "Compose 项目", module: "container_compose_ls", target: "all", timeout_sec: 45, continue_on_error: true, ignore_exit: true },
+      { name: "容器列表", module: "docker_ps", target: "all", timeout_sec: 25, continue_on_error: true },
+      { name: "容器资源", module: "docker_stats", target: "all", timeout_sec: 35, continue_on_error: true },
+      { name: "Compose 项目", module: "container_compose_ls", target: "all", timeout_sec: 35, continue_on_error: true, ignore_exit: true },
     ]
   },
   k8s: {
@@ -862,24 +859,24 @@ const PB_READONLY_TEMPLATES = {
     name: "Hyper-V 宿主巡检（只读+条件）",
     description: "仅 Windows 宿主：系统信息 + 深度巡检；电源类步骤需手工加模块",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts", when: "{{os}} == windows" },
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 25, register: "facts", when: "{{os}} == windows" },
       {
         name: "深度巡检", module: "host_inspect", target: "all",
-        timeout_sec: 180, register: "inspect", ignore_exit: true, continue_on_error: true,
+        timeout_sec: 150, register: "inspect", ignore_exit: true, continue_on_error: true,
         when: "{{os}} == windows", args: { profile: "standard" },
       },
-      { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 30, when: "{{os}} == windows" },
+      { name: "对外监听", module: "security_listen", target: "all", timeout_sec: 25, when: "{{os}} == windows" },
     ]
   },
   bigdata: {
     name: "大数据巡检（只读）",
-    description: "Java 进程与常见大数据端口监听检查（只读）",
+    description: "Java 进程与常见大数据端口监听检查（只读）；磁盘/内存走 CIM 批处理缓存",
     steps: [
-      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30, register: "facts" },
-      { name: "Java进程", module: "bigdata_jps", target: "all", timeout_sec: 30, continue_on_error: true, ignore_exit: true },
-      { name: "大数据端口", module: "bigdata_ports", target: "all", timeout_sec: 30, continue_on_error: true },
-      { name: "磁盘用量", module: "disk_usage", target: "all", timeout_sec: 30 },
-      { name: "内存概况", module: "mem_info", target: "all", timeout_sec: 30 },
+      { name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 25, register: "facts" },
+      { name: "Java进程", module: "bigdata_jps", target: "all", timeout_sec: 25, continue_on_error: true, ignore_exit: true },
+      { name: "大数据端口", module: "bigdata_ports", target: "all", timeout_sec: 25, continue_on_error: true },
+      { name: "磁盘用量", module: "disk_usage", target: "all", timeout_sec: 20 },
+      { name: "内存概况", module: "mem_info", target: "all", timeout_sec: 15 },
     ]
   }
 };
@@ -1089,13 +1086,15 @@ async function openIncidentDetail(id){
       <label class="ai-term-toggle" id="incTermToggle" style="margin-top:4px;font-size:12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none"><input type="checkbox" id="incTermCheck"> ${I18N.t("sre.include_term_ctx","包含终端操作上下文（分段摘要）")}</label>`;
     window._curIncident = inc; // 供「转自动化规则」等操作取用完整事件（含时间线诊断）
     const acts=[];
-    acts.push(`<button class="btn sm" data-iact="diagnose">🤖 ${I18N.t("sre.ai_diagnose","AI 诊断")}</button>`);
-    acts.push(`<button class="btn sm" data-iact="analysis-board" title="${I18N.t("sre.gen_analysis_board_title","AI 按此事件生成排障分析看板")}">📊 ${I18N.t("sre.gen_analysis_board","AI 分析看板")}</button>`);
-    // 有 AI 诊断结论时：一键提案（本事件审批执行）或转长期自动化规则草稿
+    // AI 能力收入单一下拉，避免底栏「🤖」按钮连排
+    let aiItems=`<button type="button" role="menuitem" data-iact="diagnose">${I18N.t("sre.ai_diagnose","AI 诊断")}</button>
+      <button type="button" role="menuitem" data-iact="analysis-board" title="${I18N.t("sre.gen_analysis_board_title","AI 按此事件生成排障分析看板")}">${I18N.t("sre.gen_analysis_board","AI 分析看板")}</button>`;
     if ((inc.timeline||[]).some(e=>e.kind==="ai_diagnosis" && e.text)) {
-      acts.push(`<button class="btn sm ai-assist-btn" data-iact="propose-fix" title="${I18N.t("sre.propose_fix_title","根据诊断生成一次性修复剧本草稿，审批后在本事件主机执行")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("sre.propose_fix","生成修复提案")}</button>`);
-      acts.push(`<button class="btn sm ai-assist-btn" data-iact="draft-rule" title="${I18N.t("sre.to_auto_rule_title","把诊断建议转成自动修复规则草稿，人工审核后启用")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("sre.to_auto_rule","转自动化规则")}</button>`);
+      aiItems+=`<div class="act-menu-sep"></div>
+        <button type="button" role="menuitem" data-iact="propose-fix" title="${I18N.t("sre.propose_fix_title","根据诊断生成一次性修复剧本草稿，审批后在本事件主机执行")}">${I18N.t("sre.propose_fix","生成修复提案")}</button>
+        <button type="button" role="menuitem" data-iact="draft-rule" title="${I18N.t("sre.to_auto_rule_title","把诊断建议转成自动修复规则草稿，人工审核后启用")}">${I18N.t("sre.to_auto_rule","转自动化规则")}</button>`;
     }
+    acts.push(`<div class="act-menu act-menu-ai drop-up"><button type="button" class="btn sm ai-assist-btn act-menu-trigger" aria-haspopup="true" aria-expanded="false"><span class="ai-assist-btn-ic">🤖</span>AI<span class="act-menu-caret">▾</span></button><div class="act-menu-panel" hidden role="menu">${aiItems}</div></div>`);
     if (inc.host_id) {
       acts.push(`<button class="btn sm" data-iact="topo-rca" title="查看依赖拓扑与变更关联 RCA">🧭 RCA</button>`);
     }
@@ -3473,6 +3472,7 @@ document.addEventListener("chart-forecast-toggle",(ev)=>{
   if(!ev.detail) return;
   if(ev.detail.scope==="ai-usage") loadAIStats();
   if(ev.detail.scope==="slo-trend") loadSloTrend();
+  if(ev.detail.scope===AI_CHAT_FC_SCOPE) rebindAIChatChartsForecast();
 });
 
 // 值班晨报：拉取服务端态势汇总（未决事件/SLO/待审批修复/巡检）→ 走统一 /ai/assist 流式生成
@@ -3494,17 +3494,23 @@ function applyAIConfigEditMode(editable){
   root.querySelectorAll("button").forEach(el=>{
     if(el.hasAttribute("data-close-btn") || el.classList.contains("close") || el.classList.contains("ai-nav-item")) return;
     const id=el.id||"";
-    if(/^(mcpCopyClientCfgBtn|mcpRefreshClientCfgBtn)$/.test(id)){ el.disabled=false; return; }
+    if(/^(mcpCopyClientCfgBtn|mcpRefreshClientCfgBtn|mcpClientAddBtn|mcpClientTestBtn|mcpClientSyncBtn|mcpClientSaveBtn|mcpClientCancelBtn)$/.test(id)){ el.disabled=false; return; }
     const isWrite=el.getAttribute("data-act")==="ai-preset"
-      || /^(aiConfigSaveBtn|aiChatTestBtn|aiEmbedTestBtn|aiRerankTestBtn|aiWeKnoraTestBtn|aiWeKnoraListBtn|aiModelRefreshBtn|aiModelCaretBtn|mcpGenTokenBtn|aiTermToggleBtn|aiTermConfirmBtn|aiTermCancelBtn|aiStatsRefreshBtn)$/.test(id)
+      || /^(aiConfigSaveBtn|aiConfigSaveCloseBtn|aiChatTestBtn|aiEmbedTestBtn|aiRerankTestBtn|aiWeKnoraTestBtn|aiWeKnoraListBtn|aiModelRefreshBtn|aiModelCaretBtn|mcpGenTokenBtn|aiTermToggleBtn|aiTermConfirmBtn|aiTermCancelBtn|aiStatsRefreshBtn|aiJumpObserveAbBtn|aiJumpQualityRouteBtn)$/.test(id)
       || id.indexOf("Test")>=0 || id.indexOf("Gen")>=0;
     if(isWrite) el.disabled=!editable;
   });
   const save=$("aiConfigSaveBtn"); if(save){ save.disabled=!editable; save.style.display=editable?"":"none"; }
+  const saveClose=$("aiConfigSaveCloseBtn"); if(saveClose){ saveClose.disabled=!editable; saveClose.style.display=editable?"":"none"; }
   const foot=root.querySelector(".ai-settings-foot-hint");
-  if(foot) foot.textContent=editable
-    ? "修改后点击保存写入配置；观测与终端授权即时生效。"
-    : "当前为只读查看；修改 Provider / 密钥需管理员。";
+  if(foot){
+    if(editable){
+      foot.innerHTML='<span class="ai-foot-chip">'+(I18N.t("sre.ai_save_need_chip","配置项需保存")||"配置项需保存")+'</span>'
+        +'<span class="ai-foot-chip muted">'+(I18N.t("sre.ai_save_instant_chip","终端授权 / 观测刷新即时生效")||"终端授权 / 观测刷新即时生效")+'</span>';
+    } else {
+      foot.innerHTML='<span class="ai-foot-chip muted">'+(I18N.t("sre.ai_settings_readonly","当前为只读查看；修改 Provider / 密钥需管理员。")||"当前为只读查看")+'</span>';
+    }
+  }
 }
 
 async function openAIConfig(){
@@ -3529,7 +3535,9 @@ async function openAIConfig(){
     if($("mcpToken")) $("mcpToken").value=c.mcp_token||"";
     if($("mcpRateLimit")) $("mcpRateLimit").value=c.mcp_rate_limit_per_min||"";
     if($("mcpScopedTokens")) $("mcpScopedTokens").value=c.mcp_scoped_tokens_json||"";
+    loadMCPClientsFromJSON(c.mcp_clients_json||"");
     refreshMcpClientConfig();
+    updateMcpCardSummary();
     if($("weknoraEnabled")) $("weknoraEnabled").checked=!!c.weknora_enabled;
     if($("weknoraURL")) $("weknoraURL").value=c.weknora_url||"";
     if($("weknoraKey")) $("weknoraKey").value=c.weknora_api_key||"";
@@ -3549,9 +3557,11 @@ async function openAIConfig(){
     if($("speechTTSVoice")) $("speechTTSVoice").value=c.speech_tts_voice||"";
     AI_SPEECH_STATUS={prefer:!!c.speech_prefer_cloud,stt:!!(c.speech_stt_model||"").trim(),tts:!!(c.speech_tts_model||"").trim()};
     AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
-    updateEmbedCardSummary(); updateRerankCardSummary(); updateMcpCardSummary(); updateWeKnoraCardSummary();
-    // 侧栏布局下 RAG / MCP 内容始终展开（不再依赖折叠箭头）
-    ["embedCardBody","rerankCardBody","mcpCardBody","weknoraCardBody"].forEach(id=>{ const el=$(id); if(el) el.style.display=""; });
+    updateAllAISettingsSummaries();
+    applyAiCardCollapsedState();
+    syncAIPresetActive();
+    markAIConfigClean();
+    bindAIConfigDirtyTracking();
     switchAISettingsTab("provider");
     loadAIStats();
     loadABExperiments();
@@ -3582,6 +3592,8 @@ function renderAITermState(){
   if(btn){ btn.textContent=AI_TERM_ENABLED?I18N.t("sre.term_disable","关闭"):I18N.t("sre.term_enable","开启"); }
   if(row) row.style.display="none";
   if(msg){ msg.textContent=""; msg.className="ai-term-msg"; }
+  if(typeof updateSecurityPanelSummary==="function") updateSecurityPanelSummary();
+  if(typeof updateAISettingsNavDots==="function") updateAISettingsNavDots();
 }
 function toggleAITerm(){
   if(AI_TERM_ENABLED){ aiTermSet(false,""); return; } // 关闭无需密码
@@ -3651,10 +3663,12 @@ function setAIPreset(type){
   const p=presets[type]; if(!p) return;
   $("aiEndpoint").value=p.endpoint;
   $("aiModel").value=""; // 取消默认预设模型，切 Provider 后需重新获取/输入
+  syncAIPresetActive();
+  markAIConfigDirty();
   toast(`${I18N.t("sre.preset_set","已设为")} ${p.label} · ${I18N.t("sre.fetching_models","正在获取模型…")}`,"ok");
   loadAIModels(); // 选预设后自动获取该 provider 的模型
 }
-async function saveAIConfig(){
+async function saveAIConfig(opts){
   if(typeof isAdmin==="function" && !isAdmin()){ toast(I18N.t("toast.admin_only","仅管理员可操作"),"err"); return; }
   const enabled=$("aiEnabled").checked, endpoint=$("aiEndpoint").value.trim(), model=$("aiModel").value.trim();
   if(enabled && (!endpoint || !model)){ toast(I18N.t("sre.ai_need_endpoint_model","启用 AI 需填写 Endpoint 和模型"),"err"); return; } // 轻校验：启用却没填必填项
@@ -3671,6 +3685,7 @@ async function saveAIConfig(){
     mcp_enabled:$("mcpEnabled")?.checked||false,mcp_token:($("mcpToken")?.value||"").trim(),
     mcp_rate_limit_per_min:parseInt($("mcpRateLimit")?.value,10)||0,
     mcp_scoped_tokens_json:($("mcpScopedTokens")?.value||"").trim(),
+    mcp_clients_json: serializeMCPClientsJSON(),
     weknora_enabled:$("weknoraEnabled")?.checked||false,
     weknora_url:($("weknoraURL")?.value||"").trim(),
     weknora_api_key:$("weknoraKey")?.value||"",
@@ -3691,9 +3706,13 @@ async function saveAIConfig(){
   const r=await fetch(`${API}/ai/config`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(r.ok){
     AI_SPEECH_STATUS={prefer:!!body.speech_prefer_cloud,stt:!!body.speech_stt_model,tts:!!body.speech_tts_model};
-    $("aiConfigMask").classList.remove("show"); toast(I18N.t("toast.saved","已保存"),"ok");
+    markAIConfigClean();
+    updateAllAISettingsSummaries();
+    toast(I18N.t("toast.saved","已保存"),"ok");
+    if(opts && opts.close){ $("aiConfigMask").classList.remove("show"); }
   } else toast(I18N.t("toast.save_failed","保存失败"),"err");
 }
+async function saveAIConfigAndClose(){ return saveAIConfig({close:true}); }
 // AI 对话模型连接测试：通过 SSE 流式验证 Provider 连通性，展示延迟 + 回复摘要
 let _aiTestBusy=false;
 async function testAIChatConfig(){
@@ -3862,18 +3881,445 @@ async function testAIEmbedConfig(){
   finally{ _aiEmbedTestBusy=false; if(testBtn) testBtn.disabled=false; }
 }
 
-// 侧栏布局下 RAG / MCP 内容始终展开，保留函数以免旧绑定报错
-function toggleEmbedCard(){ /* no-op: panel layout */ }
-function toggleRerankCard(){ /* no-op: panel layout */ }
-function toggleMcpCard(){ /* no-op: panel layout */ }
-// MCP 摘要：面板标题旁状态
-function updateMcpCardSummary(){
-  const el=$("mcpCardSummary"); if(!el) return;
-  const on=$("mcpEnabled") && $("mcpEnabled").checked;
-  el.textContent = on ? "已启用" : "未启用";
-  el.className = "ai-card-summary" + (on ? " on" : "");
-  refreshMcpClientConfig();
+// ===== AI 设置：统一折叠卡片 + 摘要 / 脏状态 =====
+const AI_CARD_DEFS = {
+  providerChat: { body:"providerChatCardBody", arrow:"providerChatCardArrow", header:"providerChatCardHeader", card:"providerChatCard", storage:"aiops_ai_card_providerChat", defaultCollapsed:false },
+  providerSpeech: { body:"providerSpeechCardBody", arrow:"providerSpeechCardArrow", header:"providerSpeechCardHeader", card:"providerSpeechCard", storage:"aiops_ai_card_providerSpeech", defaultCollapsed:true },
+  embed: { body:"embedCardBody", arrow:"embedCardArrow", header:"embedCardHeader", card:"embedCard", storage:"aiops_ai_card_embed", defaultCollapsed:false },
+  rerank: { body:"rerankCardBody", arrow:"rerankCardArrow", header:"rerankCardHeader", card:"rerankCard", storage:"aiops_ai_card_rerank", defaultCollapsed:true },
+  weknora: { body:"weknoraCardBody", arrow:"weknoraCardArrow", header:"weknoraCardHeader", card:"weknoraCard", storage:"aiops_ai_card_weknora", defaultCollapsed:true },
+  qualityDiag: { body:"qualityDiagCardBody", arrow:"qualityDiagCardArrow", header:"qualityDiagCardHeader", card:"qualityDiagCard", storage:"aiops_ai_card_qualityDiag", defaultCollapsed:false },
+  qualityCost: { body:"qualityCostCardBody", arrow:"qualityCostCardArrow", header:"qualityCostCardHeader", card:"qualityCostCard", storage:"aiops_ai_card_qualityCost", defaultCollapsed:false },
+  qualityRoute: { body:"qualityRouteCardBody", arrow:"qualityRouteCardArrow", header:"qualityRouteCardHeader", card:"qualityRouteCard", storage:"aiops_ai_card_qualityRoute", defaultCollapsed:true },
+  mcpServer: { body:"mcpServerCardBody", arrow:"mcpServerCardArrow", header:"mcpServerCardHeader", card:"mcpServerCard", storage:"aiops_mcp_server_collapsed", defaultCollapsed:false },
+  mcpClients: { body:"mcpClientsCardBody", arrow:"mcpClientsCardArrow", header:"mcpClientsCardHeader", card:"mcpClientsCard", storage:"aiops_mcp_clients_collapsed", defaultCollapsed:false },
+  securityQuota: { body:"securityQuotaCardBody", arrow:"securityQuotaCardArrow", header:"securityQuotaCardHeader", card:"securityQuotaCard", storage:"aiops_ai_card_securityQuota", defaultCollapsed:false },
+  securityMemory: { body:"securityMemoryCardBody", arrow:"securityMemoryCardArrow", header:"securityMemoryCardHeader", card:"securityMemoryCard", storage:"aiops_ai_card_securityMemory", defaultCollapsed:false },
+  securityTerm: { body:"securityTermCardBody", arrow:"securityTermCardArrow", header:"securityTermCardHeader", card:"securityTermCard", storage:"aiops_ai_card_securityTerm", defaultCollapsed:false }
+};
+function aiCardStoredCollapsed(key){
+  const def=AI_CARD_DEFS[key]; if(!def) return true;
+  try{
+    const raw=localStorage.getItem(def.storage);
+    if(raw==null) return !!def.defaultCollapsed;
+    return raw==="1";
+  }catch(_){ return !!def.defaultCollapsed; }
 }
+function setAiCardCollapsed(key, collapsed){
+  const def=AI_CARD_DEFS[key]; if(!def) return;
+  try{ localStorage.setItem(def.storage, collapsed ? "1" : "0"); }catch(_){}
+  const body=$(def.body), arrow=$(def.arrow), header=$(def.header), card=$(def.card);
+  if(body) body.style.display = collapsed ? "none" : "";
+  if(arrow) arrow.classList.toggle("open", !collapsed);
+  if(header) header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  if(card) card.classList.toggle("is-collapsed", !!collapsed);
+}
+function toggleAiCard(key, ev){
+  if(ev && ev.target && ev.target.closest && ev.target.closest("input,button,a,select,textarea,label")) return;
+  setAiCardCollapsed(key, !aiCardStoredCollapsed(key));
+}
+function applyAiCardCollapsedState(){
+  const forceOpen=[];
+  if(($("rerankModel")?.value||"").trim()) forceOpen.push("rerank");
+  if($("weknoraEnabled")?.checked) forceOpen.push("weknora");
+  if(($("speechSTTModel")?.value||"").trim() || ($("speechTTSModel")?.value||"").trim() || $("speechPreferCloud")?.checked) forceOpen.push("providerSpeech");
+  if(($("aiCheapModel")?.value||"").trim() || ($("aiTaskModels")?.value||"").trim() || ($("aiActiveExperiment")?.value||"").trim()) forceOpen.push("qualityRoute");
+  Object.keys(AI_CARD_DEFS).forEach(key=>{
+    let collapsed=aiCardStoredCollapsed(key);
+    if(forceOpen.includes(key)) collapsed=false;
+    setAiCardCollapsed(key, collapsed);
+  });
+}
+function toggleEmbedCard(ev){ toggleAiCard("embed", ev); }
+function toggleRerankCard(ev){ toggleAiCard("rerank", ev); }
+function toggleMcpCard(){ /* legacy */ }
+function setMcpSectionCollapsed(kind, collapsed){ setAiCardCollapsed(kind==="server"?"mcpServer":"mcpClients", collapsed); }
+function applyMcpSectionCollapsed(){ applyAiCardCollapsedState(); }
+function toggleMcpServerCard(ev){ toggleAiCard("mcpServer", ev); }
+function toggleMcpClientsCard(ev){ toggleAiCard("mcpClients", ev); }
+
+let _aiConfigDirty=false;
+function markAIConfigDirty(){
+  _aiConfigDirty=true;
+  const foot=$("aiConfigMask") && $("aiConfigMask").querySelector(".ai-settings-foot");
+  if(foot) foot.classList.add("is-dirty");
+}
+function markAIConfigClean(){
+  _aiConfigDirty=false;
+  const foot=$("aiConfigMask") && $("aiConfigMask").querySelector(".ai-settings-foot");
+  if(foot) foot.classList.remove("is-dirty");
+}
+function bindAIConfigDirtyTracking(){
+  const root=$("aiConfigMask"); if(!root || root._aiDirtyBound) return;
+  root._aiDirtyBound=true;
+  root.addEventListener("input", e=>{
+    if(!e.target || !e.target.closest) return;
+    if(e.target.closest("input,textarea,select")) markAIConfigDirty();
+  });
+  root.addEventListener("change", e=>{
+    if(!e.target || !e.target.closest) return;
+    if(e.target.closest("input,textarea,select")){
+      markAIConfigDirty();
+      updateAllAISettingsSummaries();
+      syncAIPresetActive();
+    }
+  });
+}
+function confirmCloseAIConfigIfDirty(){
+  if(!_aiConfigDirty) return true;
+  return confirm(I18N.t("sre.ai_dirty_leave","有未保存的更改，确定关闭？")||"有未保存的更改，确定关闭？");
+}
+function tryCloseAIConfigMask(){
+  if(!confirmCloseAIConfigIfDirty()) return false;
+  markAIConfigClean();
+  const m=$("aiConfigMask"); if(m) m.classList.remove("show");
+  return true;
+}
+(function wrapCloseMaskForAIConfig(){
+  if(typeof closeMask!=="function" || closeMask._aiWrapped) return;
+  const orig=closeMask;
+  window.closeMask=function(mask){
+    if(mask && mask.id==="aiConfigMask"){
+      if(!confirmCloseAIConfigIfDirty()) return;
+      markAIConfigClean();
+    }
+    return orig(mask);
+  };
+  window.closeMask._aiWrapped=true;
+})();
+
+const AI_PRESET_ENDPOINTS={
+  bailian:"https://dashscope.aliyuncs.com/compatible-mode/v1",
+  openai:"https://api.openai.com/v1",
+  deepseek:"https://api.deepseek.com/v1",
+  ollama:"http://localhost:11434/v1",
+  claude:"https://dashscope.aliyuncs.com/apps/anthropic"
+};
+function syncAIPresetActive(){
+  const ep=(($("aiEndpoint")&&$("aiEndpoint").value)||"").trim().replace(/\/+$/,"");
+  document.querySelectorAll(".ai-preset-btn[data-preset]").forEach(btn=>{
+    const key=btn.getAttribute("data-preset");
+    const want=(AI_PRESET_ENDPOINTS[key]||"").replace(/\/+$/,"");
+    btn.classList.toggle("active", !!want && ep===want);
+  });
+}
+function setAINavDot(tab, on){
+  const el=document.querySelector('[data-ai-nav-dot="'+tab+'"]');
+  if(!el) return;
+  if(on) el.removeAttribute("hidden"); else el.setAttribute("hidden","");
+}
+function updateAllAISettingsSummaries(){
+  updateProviderPanelSummary();
+  updateEmbedCardSummary();
+  updateRerankCardSummary();
+  updateWeKnoraCardSummary();
+  updateRagPanelSummary();
+  updateQualityPanelSummary();
+  updateMcpCardSummary();
+  updateSecurityPanelSummary();
+  updateAISettingsNavDots();
+}
+function updateProviderPanelSummary(){
+  const on=$("aiEnabled")&&$("aiEnabled").checked;
+  const model=(($("aiModel")&&$("aiModel").value)||"").trim();
+  const speechOn=!!(($("speechPreferCloud")&&$("speechPreferCloud").checked) || (($("speechSTTModel")&&$("speechSTTModel").value)||"").trim() || (($("speechTTSModel")&&$("speechTTSModel").value)||"").trim());
+  const panel=$("providerPanelSummary");
+  if(panel){
+    const parts=[];
+    if(on && model) parts.push(model);
+    else if(on) parts.push(I18N.t("sre.enabled_state","已启用")||"已启用");
+    else parts.push(I18N.t("sre.not_enabled","未启用")||"未启用");
+    if(speechOn) parts.push(I18N.t("sre.ai_speech_on","语音")||"语音");
+    panel.textContent=parts.join(" · ");
+    panel.className="ai-card-summary"+(on?" on":"");
+  }
+  const chat=$("providerChatCardSummary");
+  if(chat){ chat.textContent=model?(" · "+model):""; chat.className="ai-card-summary"+(model?" on":""); }
+  const sp=$("providerSpeechCardSummary");
+  if(sp){
+    sp.textContent=speechOn?(" · "+(I18N.t("sre.enabled_state","已启用")||"已启用")):(" · "+(I18N.t("sre.not_enabled","未启用")||"未启用"));
+    sp.className="ai-card-summary"+(speechOn?" on":"");
+  }
+}
+function updateRagPanelSummary(){
+  const emb=(($("embedModel")&&$("embedModel").value)||"").trim();
+  const rr=(($("rerankModel")&&$("rerankModel").value)||"").trim();
+  const wk=$("weknoraEnabled")&&$("weknoraEnabled").checked;
+  const panel=$("ragPanelSummary"); if(!panel) return;
+  const parts=[];
+  if(emb) parts.push("Embed");
+  if(rr) parts.push("Rerank");
+  if(wk) parts.push("WeKnora");
+  panel.textContent=parts.length?parts.join(" · "):(I18N.t("sre.not_enabled","未启用")||"未启用");
+  panel.className="ai-card-summary"+((emb||rr||wk)?" on":"");
+}
+function updateQualityPanelSummary(){
+  const sv=$("aiSelfVerify")&&$("aiSelfVerify").checked;
+  const moa=(($("aiMoAModels")&&$("aiMoAModels").value)||"").trim();
+  const price=parseFloat(($("aiInputPrice")&&$("aiInputPrice").value)||"")||0;
+  const panel=$("qualityPanelSummary");
+  if(panel){
+    const parts=[];
+    if(sv) parts.push("校验");
+    if(moa) parts.push("MoA");
+    if(price>0) parts.push("单价");
+    panel.textContent=parts.length?parts.join(" · "):"—";
+    panel.className="ai-card-summary"+((sv||moa||price>0)?" on":"");
+  }
+  const d=$("qualityDiagCardSummary");
+  if(d){ d.textContent=(sv||moa)?(" · "+(I18N.t("sre.enabled_state","已启用")||"已启用")):""; d.className="ai-card-summary"+((sv||moa)?" on":""); }
+  const c=$("qualityCostCardSummary");
+  if(c){ c.textContent=price>0?(" · "+price):""; c.className="ai-card-summary"+(price>0?" on":""); }
+  const r=$("qualityRouteCardSummary");
+  const routeOn=!!(((($("aiCheapModel")&&$("aiCheapModel").value)||"").trim())||((($("aiTaskModels")&&$("aiTaskModels").value)||"").trim())||((($("aiActiveExperiment")&&$("aiActiveExperiment").value)||"").trim()));
+  if(r){ r.textContent=routeOn?(" · "+(I18N.t("sre.configured","已配置")||"已配置")):""; r.className="ai-card-summary"+(routeOn?" on":""); }
+}
+function updateSecurityPanelSummary(){
+  const term=!!AI_TERM_ENABLED;
+  const mem=!!(($("disablePublicChatMemory")&&$("disablePublicChatMemory").checked) || ($("autoDefendEnabled")&&$("autoDefendEnabled").checked) || ($("selfEvolveEnabled")&&$("selfEvolveEnabled").checked));
+  const panel=$("securityPanelSummary");
+  if(panel){
+    const parts=[];
+    if(term) parts.push(I18N.t("sre.term_on","已开启")||"终端开");
+    if(mem) parts.push(I18N.t("sre.ai_memory_gov","治理")||"治理");
+    panel.textContent=parts.length?parts.join(" · "):(I18N.t("sre.term_off","未开启")||"未开启");
+    panel.className="ai-card-summary"+(term||mem?" on":"");
+  }
+  const q=$("securityQuotaCardSummary");
+  const quota=parseInt(($("aiDailyQuota")&&$("aiDailyQuota").value)||"0",10)||0;
+  if(q){ q.textContent=quota>0?(" · "+quota+"/日"):""; }
+  const m=$("securityMemoryCardSummary");
+  if(m){ m.textContent=mem?(" · "+(I18N.t("sre.enabled_state","已启用")||"已启用")):""; m.className="ai-card-summary"+(mem?" on":""); }
+  const t=$("securityTermCardSummary");
+  if(t){
+    t.textContent=term?(" · "+(I18N.t("sre.term_on","已开启")||"已开启")):(" · "+(I18N.t("sre.term_off","未开启")||"未开启"));
+    t.className="ai-card-summary"+(term?" on":"");
+  }
+}
+function updateAISettingsNavDots(){
+  const providerOn=!!($("aiEnabled")&&$("aiEnabled").checked && ((($("aiModel")&&$("aiModel").value)||"").trim()));
+  const ragOn=!!(((($("embedModel")&&$("embedModel").value)||"").trim()) || ($("weknoraEnabled")&&$("weknoraEnabled").checked));
+  const qualityOn=!!(($("aiSelfVerify")&&$("aiSelfVerify").checked) || ((($("aiMoAModels")&&$("aiMoAModels").value)||"").trim()) || ((parseFloat(($("aiInputPrice")&&$("aiInputPrice").value)||"")||0)>0));
+  const clients=typeof getMCPClientsList==="function" ? getMCPClientsList() : [];
+  const integrateOn=!!(($("mcpEnabled")&&$("mcpEnabled").checked) || (clients||[]).some(c=>c.enabled));
+  const securityOn=!!AI_TERM_ENABLED;
+  setAINavDot("provider", providerOn);
+  setAINavDot("rag", ragOn);
+  setAINavDot("quality", qualityOn);
+  setAINavDot("integrate", integrateOn);
+  setAINavDot("observe", false);
+  setAINavDot("security", securityOn);
+}
+function updateMcpCardSummary(){
+  const on=$("mcpEnabled") && $("mcpEnabled").checked;
+  const clients=getMCPClientsList();
+  const nOn=clients.filter(c=>c.enabled).length;
+  const nAll=clients.length;
+  const serverTxt = on ? (I18N.t("sre.mcp_server_on","Server 开")||"Server 开") : (I18N.t("sre.mcp_server_off","Server 关")||"Server 关");
+  const clientsTxt = nAll
+    ? ((I18N.t("sre.mcp_clients_on","Clients")||"Clients")+" "+nOn+(nAll!==nOn?"/"+nAll:""))
+    : (I18N.t("sre.mcp_clients_none","无 Client")||"无 Client");
+
+  const panel=$("mcpCardSummary");
+  if(panel){
+    const parts=[serverTxt];
+    if(nOn>0) parts.push((I18N.t("sre.mcp_clients_on","Clients")||"Clients")+" "+nOn);
+    panel.textContent = parts.join(" · ");
+    panel.className = "ai-card-summary" + ((on||nOn>0) ? " on" : "");
+  }
+  const srvSum=$("mcpServerCardSummary");
+  if(srvSum){
+    srvSum.textContent = " · " + serverTxt;
+    srvSum.className = "ai-card-summary" + (on ? " on" : "");
+  }
+  const cliSum=$("mcpClientsCardSummary");
+  if(cliSum){
+    cliSum.textContent = " · " + clientsTxt;
+    cliSum.className = "ai-card-summary" + (nOn>0 ? " on" : "");
+  }
+  refreshMcpClientConfig();
+  if(typeof updateAISettingsNavDots==="function") updateAISettingsNavDots();
+}
+
+let MCP_CLIENTS = [];
+function getMCPClientsList(){ return Array.isArray(MCP_CLIENTS) ? MCP_CLIENTS : []; }
+function loadMCPClientsFromJSON(raw){
+  MCP_CLIENTS = [];
+  const s=String(raw||"").trim();
+  if(s && s!=="****"){
+    try{ const arr=JSON.parse(s); if(Array.isArray(arr)) MCP_CLIENTS=arr; }catch(_){}
+  }
+  renderMCPClientsList();
+  syncMCPClientsHidden();
+  updateMcpCardSummary();
+}
+function syncMCPClientsHidden(){
+  const el=$("mcpClientsJSON");
+  if(el) el.value = MCP_CLIENTS.length ? JSON.stringify(MCP_CLIENTS) : "";
+}
+function serializeMCPClientsJSON(){
+  syncMCPClientsHidden();
+  return ($("mcpClientsJSON")?.value||"").trim();
+}
+function splitCSV(s){
+  return String(s||"").split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean);
+}
+function renderMCPClientsList(){
+  const box=$("mcpClientsList"); if(!box) return;
+  const list=getMCPClientsList();
+  if(!list.length){
+    box.className="mcp-clients-list hint";
+    box.textContent=I18N.t("sre.mcp_clients_empty","暂无外部 MCP Client");
+    return;
+  }
+  box.className="mcp-clients-list";
+  box.innerHTML=list.map((c,i)=>{
+    const tools=Array.isArray(c.synced_tools)?c.synced_tools.length:0;
+    const on=c.enabled?'<span class="badge ok">ON</span>':'<span class="badge">OFF</span>';
+    const err=c.last_sync_error?`<div class="hint" style="color:var(--danger)">${esc(c.last_sync_error)}</div>`:"";
+    return `<div class="mcp-client-row" data-idx="${i}">
+      <div class="mcp-client-main">
+        <strong>${esc(c.name||c.id||"")}</strong> ${on}
+        <code class="mono">${esc(c.url||"")}</code>
+        <span class="tag">${tools} tools</span>
+      </div>
+      ${err}
+      <div class="mcp-client-acts">
+        <button type="button" class="btn sm" data-mcp-edit="${i}">${esc(I18N.t("ui.edit","编辑"))}</button>
+        <button type="button" class="btn sm ghost" data-mcp-del="${i}">${esc(I18N.t("ui.delete","删除"))}</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+function openMCPClientEditor(idx){
+  setMcpSectionCollapsed("clients", false);
+  const ed=$("mcpClientEditor"); if(!ed) return;
+  ed.hidden=false;
+  const c = (idx!=null && MCP_CLIENTS[idx]) ? MCP_CLIENTS[idx] : {enabled:true,timeout_sec:30,headers:{}};
+  $("mcpClientEditId").value = c.id||"";
+  $("mcpClientName").value = c.name||"";
+  $("mcpClientEnabled").checked = c.enabled!==false;
+  $("mcpClientURL").value = c.url||"";
+  const auth=(c.headers&& (c.headers.Authorization||c.headers.authorization))||"";
+  $("mcpClientAuth").value = auth;
+  $("mcpClientTimeout").value = c.timeout_sec||30;
+  $("mcpClientAllow").value = (c.tool_allowlist||[]).join(",");
+  $("mcpClientBlock").value = (c.tool_blocklist||[]).join(",");
+  const prev=$("mcpClientToolsPreview");
+  if(prev){
+    const tools=c.synced_tools||[];
+    prev.innerHTML = tools.length
+      ? `<div class="table-wrap"><table class="data"><thead><tr><th>tool</th><th></th><th>desc</th></tr></thead><tbody>${
+          tools.map(t=>`<tr><td class="mono">${esc(t.name||"")}</td><td>${t.blocked?"blocked":"ok"}</td><td>${esc(t.description||"")}</td></tr>`).join("")
+        }</tbody></table></div>`
+      : "";
+  }
+  const res=$("mcpClientTestResult"); if(res){ res.textContent=""; res.className="ai-test-result"; }
+}
+function readMCPClientEditor(){
+  const id=($("mcpClientEditId")?.value||"").trim();
+  const name=($("mcpClientName")?.value||"").trim();
+  const url=($("mcpClientURL")?.value||"").trim();
+  const auth=($("mcpClientAuth")?.value||"").trim();
+  const timeout=parseInt($("mcpClientTimeout")?.value,10)||30;
+  const headers={};
+  if(auth) headers.Authorization=auth;
+  // Preserve other headers from existing entry
+  const existing = id ? MCP_CLIENTS.find(x=>x.id===id) : null;
+  if(existing && existing.headers){
+    Object.keys(existing.headers).forEach(k=>{
+      if(k.toLowerCase()==="authorization") return;
+      headers[k]=existing.headers[k];
+    });
+  }
+  return {
+    id: id || undefined,
+    name: name||url||"mcp",
+    enabled: !!($("mcpClientEnabled")?.checked),
+    url,
+    headers,
+    timeout_sec: timeout,
+    tool_allowlist: splitCSV($("mcpClientAllow")?.value),
+    tool_blocklist: splitCSV($("mcpClientBlock")?.value),
+    synced_tools: existing && existing.synced_tools ? existing.synced_tools : [],
+    last_sync_unix: existing && existing.last_sync_unix ? existing.last_sync_unix : 0,
+    last_sync_error: existing && existing.last_sync_error ? existing.last_sync_error : ""
+  };
+}
+function saveMCPClientEditorToList(){
+  const c=readMCPClientEditor();
+  if(!c.url){ toast(I18N.t("sre.mcp_need_url","请填写 MCP URL"),"err"); return; }
+  if(!c.id){
+    c.id = (c.name||"mcp").toLowerCase().replace(/[^a-z0-9_-]+/g,"_").slice(0,24) + "_" + Math.random().toString(16).slice(2,6);
+  }
+  const i=MCP_CLIENTS.findIndex(x=>x.id===c.id);
+  if(i>=0) MCP_CLIENTS[i]=Object.assign({}, MCP_CLIENTS[i], c);
+  else MCP_CLIENTS.push(c);
+  syncMCPClientsHidden();
+  renderMCPClientsList();
+  updateMcpCardSummary();
+  const ed=$("mcpClientEditor"); if(ed) ed.hidden=true;
+  toast(I18N.t("sre.mcp_client_saved","已写入列表，请再点底部「保存」持久化"),"ok"); markAIConfigDirty();
+}
+async function testMCPClientEditor(){
+  const c=readMCPClientEditor();
+  const el=$("mcpClientTestResult");
+  if(!c.url){ if(el){ el.textContent="✗ URL 必填"; el.className="ai-test-result err"; } return; }
+  if(el){ el.textContent=I18N.t("sre.testing","测试中…"); el.className="ai-test-result testing"; }
+  try{
+    const r=await fetch(`${API}/ai/mcp-clients/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});
+    const j=await r.json().catch(()=>({}));
+    if(!j.ok){ if(el){ el.textContent="✗ "+(j.error||"失败"); el.className="ai-test-result err"; } return; }
+    if(el){ el.textContent=`✓ ${j.tool_count||0} tools · allowed ${j.allowed_count||0} · ${j.latency_ms||0}ms`; el.className="ai-test-result ok"; }
+    const prev=$("mcpClientToolsPreview");
+    if(prev && Array.isArray(j.tools)){
+      prev.innerHTML=`<div class="table-wrap"><table class="data"><thead><tr><th>tool</th><th></th><th>desc</th></tr></thead><tbody>${
+        j.tools.map(t=>`<tr><td class="mono">${esc(t.name||"")}</td><td>${t.blocked?"blocked":"ok"}</td><td>${esc(t.description||"")}</td></tr>`).join("")
+      }</tbody></table></div>`;
+    }
+  }catch(e){
+    if(el){ el.textContent="✗ "+e; el.className="ai-test-result err"; }
+  }
+}
+async function syncMCPClientEditor(){
+  const c=readMCPClientEditor();
+  const el=$("mcpClientTestResult");
+  if(!c.url){ if(el){ el.textContent="✗ URL 必填"; el.className="ai-test-result err"; } return; }
+  if(el){ el.textContent=I18N.t("sre.mcp_syncing","同步中…"); el.className="ai-test-result testing"; }
+  try{
+    // Ensure id exists before sync so server can upsert
+    if(!c.id){
+      c.id = (c.name||"mcp").toLowerCase().replace(/[^a-z0-9_-]+/g,"_").slice(0,24) + "_" + Math.random().toString(16).slice(2,6);
+      $("mcpClientEditId").value=c.id;
+    }
+    const r=await fetch(`${API}/ai/mcp-clients/sync`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(c)});
+    const j=await r.json().catch(()=>({}));
+    if(j.client){
+      const nc=j.client;
+      const i=MCP_CLIENTS.findIndex(x=>x.id===nc.id);
+      if(i>=0) MCP_CLIENTS[i]=Object.assign({}, MCP_CLIENTS[i], nc, {headers: Object.assign({}, MCP_CLIENTS[i].headers||{}, nc.headers||{})});
+      else MCP_CLIENTS.push(nc);
+      // keep auth local if masked
+      if(c.headers && c.headers.Authorization && !String(c.headers.Authorization).includes("****")){
+        const idx=MCP_CLIENTS.findIndex(x=>x.id===nc.id);
+        if(idx>=0){
+          MCP_CLIENTS[idx].headers=MCP_CLIENTS[idx].headers||{};
+          MCP_CLIENTS[idx].headers.Authorization=c.headers.Authorization;
+        }
+      }
+      syncMCPClientsHidden();
+      renderMCPClientsList();
+      updateMcpCardSummary();
+      openMCPClientEditor(MCP_CLIENTS.findIndex(x=>x.id===nc.id));
+    }
+    if(!j.ok){ if(el){ el.textContent="✗ "+(j.error||"同步失败"); el.className="ai-test-result err"; } return; }
+    if(el){ el.textContent=`✓ synced ${j.tool_count||0} tools`; el.className="ai-test-result ok"; }
+    toast(I18N.t("sre.mcp_synced","工具已同步并写入配置"),"ok");
+  }catch(e){
+    if(el){ el.textContent="✗ "+e; el.className="ai-test-result err"; }
+  }
+}
+
 function mcpEndpointURL(){
   try{ return new URL("/api/v1/mcp", location.origin).href; }catch(_){ return (location.origin||"")+"/api/v1/mcp"; }
 }
@@ -3906,8 +4352,9 @@ function updateWeKnoraCardSummary(){
   const el=$("weknoraCardSummary"); if(!el) return;
   const on=$("weknoraEnabled") && $("weknoraEnabled").checked;
   const url=($("weknoraURL")?.value||"").trim();
-  el.textContent = on ? (url ? "已启用" : "已启用·待填 URL") : "未启用";
+  el.textContent = on ? (url ? " · 已启用" : " · 已启用·待填 URL") : " · 未启用";
   el.className = "ai-card-summary" + (on ? " on" : "");
+  if(typeof updateRagPanelSummary==="function") updateRagPanelSummary();
 }
 
 // WeKnora knowledge-search 连通性测试
@@ -4009,16 +4456,19 @@ function genStrongToken(nbytes){
 // 更新向量化模型卡片摘要
 function updateEmbedCardSummary(){
   const summary=$("embedCardSummary"); if(!summary) return;
-  const model=$("embedModel").value.trim();
-  if(model){ summary.textContent=` · ${I18N.t("sre.configured","已配置")}：${model}`; }
-  else { summary.textContent=""; }
+  const model=(($("embedModel")&&$("embedModel").value)||"").trim();
+  if(model){ summary.textContent=` · ${I18N.t("sre.configured","已配置")}：${model}`; summary.className="ai-card-summary on"; }
+  else { summary.textContent=""; summary.className="ai-card-summary"; }
+  if(typeof updateRagPanelSummary==="function") updateRagPanelSummary();
 }
 
 // 更新重排模型卡片摘要
 function updateRerankCardSummary(){
   const summary=$("rerankCardSummary"); if(!summary) return;
-  const model=($("rerankModel")?.value||"").trim();
+  const model=(($("rerankModel")&&$("rerankModel").value)||"").trim();
   summary.textContent=model?` · ${I18N.t("sre.enabled_state","已启用")}：${model}`:" · "+I18N.t("sre.not_enabled","未启用");
+  summary.className="ai-card-summary"+(model?" on":"");
+  if(typeof updateRagPanelSummary==="function") updateRagPanelSummary();
 }
 
 // 过滤 AI 输出中的敏感信息（密钥 / 密码 / token）。代码与命令予以保留、交由 Markdown 渲染
@@ -4164,8 +4614,22 @@ function historyForAIChatAPI(hist){
     return item;
   });
 }
+/** AI 会话趋势图状态：支持预测开关重绘与放大预览 */
+let AI_CHAT_CHARTS = {};
+let AI_CHAT_CHART_SPECS = {};
+const AI_CHAT_FC_SCOPE = "ai-chat";
+const AI_CHART_ENLARGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>`;
+
+function ensureAIChatForecastDefault(){
+  if(!window._FC_ON) window._FC_ON = {};
+  if(!Object.prototype.hasOwnProperty.call(window._FC_ON, AI_CHAT_FC_SCOPE)){
+    window._FC_ON[AI_CHAT_FC_SCOPE] = true; // 会话趋势默认开启预测，便于一眼看到未来走势
+  }
+}
+
 function renderAIChatWidgets(actions){
   if(!actions||!actions.length) return "";
+  ensureAIChatForecastDefault();
   const seen=new Set();
   let html="";
   for(const a of actions){
@@ -4178,8 +4642,12 @@ function renderAIChatWidgets(actions){
       const samples=a.chart&&Array.isArray(a.chart.samples)?a.chart.samples:[];
       const series=a.chart&&Array.isArray(a.chart.series)?a.chart.series:[];
       const empty=!a.chart||!samples.length||!series.length;
-      html+=`<div class="ai-chart-card" data-ai-chart="${esc(a.id||"")}">
-        <div class="ai-chart-head"><span class="ai-chart-title">${esc(a.title||a.label||"趋势图")}</span></div>
+      const tools=empty?"":`<div class="ai-chart-tools">
+        ${typeof forecastChipHTML==="function"?forecastChipHTML(AI_CHAT_FC_SCOPE):""}
+        <button type="button" class="chart-enlarge" data-ai-chart-zoom="${esc(cid)}" title="${esc(I18N.t("ui.zoom_preview","放大预览"))}">${AI_CHART_ENLARGE_SVG}</button>
+      </div>`;
+      html+=`<div class="ai-chart-card" data-ai-chart="${esc(a.id||"")}" data-ai-chart-cid="${esc(cid)}">
+        <div class="ai-chart-head"><span class="ai-chart-title">${esc(a.title||a.label||"趋势图")}</span>${tools}</div>
         ${empty
           ?`<div class="ai-chart-empty">${esc(I18N.t("sre.chart_empty","图表数据不可用或已过期，请重试生成"))}</div>`
           :`<div class="ai-chart-wrap"><canvas id="${cid}" height="210"></canvas></div>`}
@@ -4249,20 +4717,113 @@ function renderAIChatActions(actions){
     return `<button type="button" class="ai-action-card" data-ai-act="${i}">${label}</button>`;
   }).join("")+`</div>`;
 }
+function normalizeAIChatSeries(raw){
+  return (Array.isArray(raw)?raw:[]).map(s=>({
+    key:s.key, label:s.label||s.key, color:s.color||"#4c8dff",
+    dashed:!!s.dashed || s.kind==="forecast",
+    kind:s.kind||(s.dashed?"forecast":"history"),
+    fmt: v=> Number.isFinite(v)?(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2)): "-"
+  }));
+}
+
+function aiChatSeriesForToggle(series, fcOn){
+  if(fcOn) return series;
+  return (series||[]).filter(s=>s && s.kind!=="forecast" && !s.dashed);
+}
+
+async function paintAIChatChart(cid, spec){
+  if(!spec||typeof createChart!=="function") return null;
+  const canvas=$(cid) || document.getElementById(cid);
+  if(!canvas) return null;
+  ensureAIChatForecastDefault();
+  const fcOn=typeof isChartForecastOn==="function" && isChartForecastOn(AI_CHAT_FC_SCOPE);
+  const samples=spec.samples||[];
+  const series=normalizeAIChatSeries(spec.series);
+  const yMin=spec.yMin!=null?Number(spec.yMin):null;
+  const yMax=spec.yMax!=null?Number(spec.yMax):null;
+  const title=spec.title||"";
+  const hasServerFC=series.some(s=>s.kind==="forecast"||s.dashed);
+  const paintSeries=aiChatSeriesForToggle(series, fcOn);
+  let horizonSec=Number(spec.horizonSec)||0;
+  if(!horizonSec && samples.length>=2){
+    const a=_fcSampleTs?_fcSampleTs(samples[0]):(samples[0].timestamp||0);
+    const b=_fcSampleTs?_fcSampleTs(samples[samples.length-1]):(samples[samples.length-1].timestamp||0);
+    horizonSec=Math.max(0, Math.round(b-a));
+  }
+  if(fcOn && horizonSec>0 && horizonSec<1800) horizonSec=1800;
+  const opts={
+    title, cssH:200, legendMode:fcOn?"wrap":"dash", noEntrance:true,
+    nowTs:fcOn?(spec.nowTs||0):0,
+    forecastScope:AI_CHAT_FC_SCOPE,
+    horizonSec: fcOn?horizonSec:0,
+    reload: spec.reload||null,
+    _fcBase: { samples, series, yMin, yMax, title, nowTs:spec.nowTs||0, horizonSec, reload: spec.reload||null }
+  };
+  let ch=null;
+  let fcMeta=null;
+  try{
+    if(fcOn && !hasServerFC && samples.length>=4 && typeof createChartWithForecast==="function"){
+      ch=await createChartWithForecast(cid, samples, paintSeries, yMin, yMax,
+        Object.assign({}, opts, { forecast:true, forecastScope:AI_CHAT_FC_SCOPE }));
+      if(ch) fcMeta=ch._fcMeta||null;
+    }
+    if(!ch){
+      ch=createChart(cid, samples, paintSeries.length?paintSeries:series, yMin, yMax, opts);
+    }
+  }catch(_){ ch=null; }
+  if(!ch){
+    try{ ch=createChart(cid, samples, series, yMin, yMax, Object.assign({}, opts, { nowTs:0 })); }catch(__){}
+  }
+  if(ch){
+    const reload=spec.reload||null;
+    ch._aiBase={ samples, series, yMin, yMax, title, nowTs:spec.nowTs||0, horizonSec, reload };
+    ch.reload=reload;
+    ch.forecastScope=AI_CHAT_FC_SCOPE;
+    if(ch._fcBase) ch._fcBase.reload=reload;
+    AI_CHAT_CHARTS[cid]=ch;
+  }
+  // 在卡片头展示预测状态（失败时提示，避免开关开着却无虚线）
+  const card=canvas.closest(".ai-chart-card");
+  if(card){
+    let hint=card.querySelector(".ai-chart-fc-hint");
+    if(fcOn){
+      const ok=fcMeta && (fcMeta.ok===true || fcMeta.OK===true);
+      const hasFCLine=(ch && ch.series||[]).some(s=>s && (s.kind==="forecast"||s.dashed));
+      const msg=ok||hasFCLine
+        ? (fcMeta && (fcMeta.message||fcMeta.Message) || "左=历史 · 右=预测（虚线）")
+        : ((fcMeta && (fcMeta.message||fcMeta.Message)) || (samples.length<4?"采样不足，暂无法预测":"预测未生成，请稍后重试或放大预览"));
+      if(!hint){
+        hint=document.createElement("div");
+        hint.className="ai-chart-fc-hint";
+        const head=card.querySelector(".ai-chart-head");
+        if(head && head.nextSibling) card.insertBefore(hint, head.nextSibling);
+        else card.appendChild(hint);
+      }
+      hint.textContent=msg;
+      hint.classList.toggle("warn", !(ok||hasFCLine));
+    } else if(hint){
+      hint.remove();
+    }
+  }
+  canvas.dataset.chartBound="1";
+  return ch;
+}
+
 async function bindAIChatWidgets(root,actions){
   if(!root||!actions||!actions.length||typeof createChart!=="function") return;
+  ensureAIChatForecastDefault();
+  // 刷新工具条 chip 状态（会话内多图共享 scope）
+  root.querySelectorAll(`[data-chart-forecast="${AI_CHAT_FC_SCOPE}"]`).forEach(btn=>{
+    if(typeof isChartForecastOn==="function" && isChartForecastOn(AI_CHAT_FC_SCOPE)) btn.classList.add("active");
+    else btn.classList.remove("active");
+  });
   for(const a of actions){
     if(!a||a.type!=="show_chart"||!a.chart) continue;
     const cid="aiChart_"+(a.id||aiChatActionKey(a).replace(/\|/g,"_"));
     const canvas=$(cid) || root.querySelector("#"+CSS.escape(cid));
-    if(!canvas||canvas.dataset.chartBound==="1") continue;
+    if(!canvas) continue;
     const samples=Array.isArray(a.chart.samples)?a.chart.samples:[];
-    const series=(Array.isArray(a.chart.series)?a.chart.series:[]).map(s=>({
-      key:s.key, label:s.label||s.key, color:s.color||"#4c8dff",
-      dashed:!!s.dashed || s.kind==="forecast",
-      kind:s.kind||(s.dashed?"forecast":"history"),
-      fmt: v=> Number.isFinite(v)?(Math.abs(v)>=100?v.toFixed(0):v.toFixed(2)): "-"
-    }));
+    const series=normalizeAIChatSeries(a.chart.series);
     if(!samples.length||!series.length){
       const card=canvas.closest(".ai-chart-card");
       if(card&&!card.querySelector(".ai-chart-empty")){
@@ -4271,17 +4832,28 @@ async function bindAIChatWidgets(root,actions){
       }
       continue;
     }
+    const src=a.source||{};
+    const hostId=String(src.host_id||src.hostId||"").trim();
+    const metrics=String(src.metrics||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const reload=hostId?{
+      hostId,
+      mode: metrics.length ? "ai-mapped" : "fields",
+      metrics,
+      forecastScope: AI_CHAT_FC_SCOPE
+    }:null;
+    const spec={
+      samples, series,
+      yMin:a.chart.y_min!=null?Number(a.chart.y_min):null,
+      yMax:a.chart.y_max!=null?Number(a.chart.y_max):null,
+      title:a.title||a.label||"",
+      nowTs:a.chart.now_ts||0,
+      horizonSec:a.chart.horizon_sec||0,
+      reload
+    };
+    AI_CHAT_CHART_SPECS[cid]=spec;
+    if(canvas.dataset.chartBound==="1" && AI_CHAT_CHARTS[cid]) continue;
     try{
-      const yMin=a.chart.y_min!=null?Number(a.chart.y_min):null;
-      const yMax=a.chart.y_max!=null?Number(a.chart.y_max):null;
-      const opts={ title:"", cssH:200, legendMode:"dash", noEntrance:true, nowTs:a.chart.now_ts||0 };
-      const hasFC=series.some(s=>s.kind==="forecast"||s.dashed);
-      if(!hasFC && samples.length>=8 && typeof createChartWithForecast==="function"){
-        await createChartWithForecast(cid, samples, series, yMin, yMax, Object.assign({}, opts, { forecast:true, forecastScope:"ai-chat" }));
-      } else {
-        createChart(cid, samples, series, yMin, yMax, opts);
-      }
-      canvas.dataset.chartBound="1";
+      await paintAIChatChart(cid, spec);
     }catch(e){
       const card=canvas.closest(".ai-chart-card");
       if(card){
@@ -4294,6 +4866,40 @@ async function bindAIChatWidgets(root,actions){
     }
   }
 }
+
+async function rebindAIChatChartsForecast(){
+  ensureAIChatForecastDefault();
+  const ids=Object.keys(AI_CHAT_CHART_SPECS||{});
+  for(const cid of ids){
+    const canvas=document.getElementById(cid);
+    if(!canvas || !document.body.contains(canvas)) continue;
+    canvas.dataset.chartBound="";
+    await paintAIChatChart(cid, AI_CHAT_CHART_SPECS[cid]);
+  }
+  document.querySelectorAll(`[data-chart-forecast="${AI_CHAT_FC_SCOPE}"]`).forEach(btn=>{
+    if(typeof isChartForecastOn==="function" && isChartForecastOn(AI_CHAT_FC_SCOPE)) btn.classList.add("active");
+    else btn.classList.remove("active");
+  });
+}
+
+document.addEventListener("click",(e)=>{
+  const en=e.target&&e.target.closest&&e.target.closest("[data-ai-chart-zoom]");
+  if(!en) return;
+  e.preventDefault();
+  const cid=en.getAttribute("data-ai-chart-zoom");
+  if(!cid) return;
+  const open=async()=>{
+    let ch=AI_CHAT_CHARTS[cid];
+    const spec=AI_CHAT_CHART_SPECS[cid];
+    if((!ch||!ch.all)&&spec){
+      const canvas=document.getElementById(cid);
+      if(canvas) canvas.dataset.chartBound="";
+      ch=await paintAIChatChart(cid, spec);
+    }
+    if(ch && typeof openChartZoom==="function") openChartZoom(ch);
+  };
+  open().catch(()=>{});
+});
 async function handleAIChatAction(a){
   if(!a||!a.type) return;
   if(a.type==="open_dashboard"&&a.id){
@@ -5062,7 +5668,8 @@ safeAddEventListener("settingsAiConfigBtn","click",()=>{
   const sm=$("settingsMask"); if(sm) sm.classList.remove("show");
   if(typeof openAIConfig==="function") openAIConfig();
 });
-safeAddEventListener("aiConfigSaveBtn","click",saveAIConfig);
+safeAddEventListener("aiConfigSaveBtn","click",()=>saveAIConfig());
+safeAddEventListener("aiConfigSaveCloseBtn","click",()=>saveAIConfigAndClose());
 document.querySelectorAll(".ai-nav-item").forEach(btn=>{
   btn.addEventListener("click",()=>switchAISettingsTab(btn.getAttribute("data-ai-tab")));
 });
@@ -5072,13 +5679,52 @@ safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
 safeAddEventListener("aiRerankTestBtn","click",testAIRerankConfig);
 safeAddEventListener("aiWeKnoraTestBtn","click",testAIWeKnoraConfig);
 safeAddEventListener("aiWeKnoraListBtn","click",listAIWeKnoraKBs);
-safeAddEventListener("embedCardHeader","click",toggleEmbedCard);
-safeAddEventListener("rerankCardHeader","click",toggleRerankCard);
-safeAddEventListener("mcpCardHeader","click",toggleMcpCard);
-safeAddEventListener("mcpEnabled","change",updateMcpCardSummary);
+safeAddEventListener("aiJumpObserveAbBtn","click",()=>{ switchAISettingsTab("observe"); setAiCardCollapsed("qualityRoute", false); });
+safeAddEventListener("aiJumpQualityRouteBtn","click",()=>{ switchAISettingsTab("quality"); setAiCardCollapsed("qualityRoute", false); });
+function bindAiCardHeader(key){
+  const def=AI_CARD_DEFS[key]; if(!def) return;
+  const el=$(def.header); if(!el || el._aiCardBound) return;
+  el._aiCardBound=true;
+  el.addEventListener("click", ev=>toggleAiCard(key, ev));
+  el.addEventListener("keydown", e=>{
+    if(e.key==="Enter" || e.key===" "){ e.preventDefault(); toggleAiCard(key, e); }
+  });
+}
+Object.keys(AI_CARD_DEFS).forEach(bindAiCardHeader);
+applyAiCardCollapsedState();
+const _aiMask=$("aiConfigMask");
+if(_aiMask && !_aiMask._aiCloseGuard){
+  _aiMask._aiCloseGuard=true;
+  _aiMask.addEventListener("click", e=>{
+    if(e.target===_aiMask || (e.target && e.target.closest && e.target.closest("[data-close-btn]"))){
+      e.stopPropagation();
+      e.preventDefault();
+      tryCloseAIConfigMask();
+    }
+  }, true);
+}
+safeAddEventListener("mcpEnabled","change",()=>{ updateMcpCardSummary(); markAIConfigDirty(); });
 safeAddEventListener("mcpToken","input",refreshMcpClientConfig);
 safeAddEventListener("mcpCopyClientCfgBtn","click",copyMcpClientConfig);
 safeAddEventListener("mcpRefreshClientCfgBtn","click",refreshMcpClientConfig);
+safeAddEventListener("mcpClientAddBtn","click",()=>openMCPClientEditor(null));
+safeAddEventListener("mcpClientCancelBtn","click",()=>{ const ed=$("mcpClientEditor"); if(ed) ed.hidden=true; });
+safeAddEventListener("mcpClientSaveBtn","click",saveMCPClientEditorToList);
+safeAddEventListener("mcpClientTestBtn","click",testMCPClientEditor);
+safeAddEventListener("mcpClientSyncBtn","click",syncMCPClientEditor);
+document.addEventListener("click",(e)=>{
+  const edit=e.target && e.target.closest && e.target.closest("[data-mcp-edit]");
+  if(edit){ openMCPClientEditor(parseInt(edit.getAttribute("data-mcp-edit"),10)); return; }
+  const del=e.target && e.target.closest && e.target.closest("[data-mcp-del]");
+  if(del){
+    const i=parseInt(del.getAttribute("data-mcp-del"),10);
+    if(!Number.isFinite(i)) return;
+    MCP_CLIENTS.splice(i,1);
+    syncMCPClientsHidden();
+    renderMCPClientsList();
+    updateMcpCardSummary();
+  }
+});
 safeAddEventListener("weknoraEnabled","change",updateWeKnoraCardSummary);
 safeAddEventListener("weknoraURL","change",updateWeKnoraCardSummary);
 safeAddEventListener("mcpGenTokenBtn","click",()=>{
@@ -5090,7 +5736,9 @@ safeAddEventListener("mcpGenTokenBtn","click",()=>{
   if(typeof toast==="function") toast(I18N.t("sre.token_generated","已生成高强度随机令牌，请及时保存"),"ok");
 });
 safeAddEventListener("aiModelRefreshBtn","click",loadAIModels);
-safeAddEventListener("aiEndpoint","change",loadAIModels);
+safeAddEventListener("aiEndpoint","change",()=>{ syncAIPresetActive(); loadAIModels(); updateProviderPanelSummary(); });
+safeAddEventListener("aiEnabled","change",()=>{ updateProviderPanelSummary(); updateAISettingsNavDots(); markAIConfigDirty(); });
+safeAddEventListener("aiModel","change",()=>{ updateProviderPanelSummary(); updateAISettingsNavDots(); });
 safeAddEventListener("aiKey","change",loadAIModels); // 填/改 API Key 后自动获取模型
 safeAddEventListener("aiModelCaretBtn","click",toggleModelDropdown);
 safeAddEventListener("aiModel","focus",showModelDropdown);

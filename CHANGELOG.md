@@ -11,6 +11,40 @@
 
 ---
 
+## [Unreleased]
+
+### 变更
+
+（无）
+
+---
+
+## [v0.19.44] — 2026-07-29
+
+### 变更
+
+- **SQL 查询结果表**：限宽 + 横向/纵向滚动；多字段时单元格省略，悬停看全文。
+- **EXPLAIN 详细分析**：在 EXPLAIN JSON 下方输出逐步解读、风险问题、索引 DDL 建议与优化建议（结合元数据）。
+- **查询历史不再脱敏**：完整保留字面量，便于重新打开与复跑；慢 SQL 识别 DIGEST `'?'` 并强化从语句历史/slow_log/PROCESSLIST 还原真实参数。
+- **Agent 运行日志**：全平台写入安装目录 `agent.log`（桌面 worker 为 `agent-desktop.log`），7×10MB 滚动覆盖；安装脚本避免与同一文件双写冲突。
+- **Windows Agent 控制台中文重复**：stderr 改走 `WriteConsoleW`，修复 CP65001 下 CJK「已已加加载载」重复；安装自检日志恢复正常。
+- **剧本执行体验**：弹窗标题不再拼出「执行执行中」；轮询延长至约 30 分钟；主机状态逐步从「等待中」→「执行中」并逐步回写步骤。
+- **剧本性能**：系统巡检模板改为单步 `host_inspect(quick)`；Windows CIM 磁盘/内存/CPU/型号/开机时间一次 PowerShell 批采 + 20s 缓存；跳过缓慢的 `wmic product`；各只读模板超时收紧。
+- **SQL 工作台运行查询**：支持只读运行 SELECT/WITH/SHOW，结果表格展示；拆分 **执行时长**（`exec_ms`）与 **数据返回时长**（`fetch_ms`）；默认限 200 行；Ctrl/⌘+Enter 快捷运行。
+- **OpenAPI 导入公共鉴权**：可展开配置公共请求头 / 请求体，写入业务系统级 `common_headers` / `common_body`。
+- **OpenAPI 导入方法筛选**：支持全部 / GET / POST / PUT / DELETE / PATCH / HEAD（可多选），默认仅 GET。
+- **SQL EXPLAIN 规范化**：去除内置函数名非法引号；**去掉 `SUM (` / `MAX (` / `CAST (` 等与括号间空格**（避免 MySQL Error 1630）；规范化 `COUNT(*)`；日期格式探测值；失败回传实际语句。
+- **慢 SQL 列表体验**：汇总卡片（条数/最高均耗/累计耗时/执行次数/类型分布）+ 搜索 + 类型筛选（查询/写入/更新/删除）+ 耗时等降序排序 + `tblPager` 分页；默认按平均耗时降序。
+- **OpenAPI/Knife4j 文档导入**：支持直接填 `doc.html#/home`（含 Knife4j 3.0.x 网关聚合页），服务端自动探测 `/v3/api-docs/swagger-config`、`/swagger-resources`、`/v3|/v2/api-docs` 并拉取 JSON；多分组可选（含 `#/SwaggerModels/<group>` 自动选中）；网关 `contextPath` 自动回填基址；切换分组同步系统名与基址。
+- **剧本多系统适配**：Agent 只读模块 `disk_usage` / `mem_info` / `cpu_load` / `pkg_list` 与 host_inspect 磁盘/内存/CPU 采集改为 Windows CIM/PowerShell 优先（兼容无 wmic 的 Win11/新 Server），失败再回退 wmic；macOS 磁盘改用 `df -hP`。
+- **安装 Agent / 破窗确认 UX**：原生 `confirm` 改为应用内确认对话框；Token 策略区默认折叠，过期改用本地日期时间选择；远程闸门管理员强制放行文案可读化；慢 SQL 限额写入共用同一确认组件。
+- **慢 SQL 完整还原**：多源捞最长 `SQL_TEXT`（history_long/history/current/slow_log/processlist）+ 本平台 DIGEST 全文缓存；报告探测 `max_digest_length` / SQL_TEXT 限额并提供复制调参 / 确认后 SET PERSIST；截断态提供粘贴全文入口。无法编造缺失尾部。
+- **AI 设置 UX**：信息架构纠偏（记忆/防御/进化迁至安全 Tab）；Provider/RAG/研判/安全统一可折叠卡片与摘要；侧栏状态点；保存默认不关窗 + 脏状态确认；文案与预设高亮减噪。
+- **MCP Clients**：AI 设置 → 集成支持接入外部 MCP Server（Streamable HTTP）；工具桥接为 Sreyun `ext_*`，用于 AI 对话、诊断预取与创建看板；危险名工具默认拦截，支持 allow/block list；提供测试连接与同步工具 API。
+- **MCP Server**：保留对外暴露能力；集成页文案改为「MCP 集成」双向说明。
+
+---
+
 ## [v0.19.43] — 2026-07-29
 
 ### 变更

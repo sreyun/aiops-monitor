@@ -182,9 +182,9 @@ func collectTableExpr(shape *QueryShape, te sqlparser.TableExpr) {
 		if len(t.Hints) > 0 {
 			shape.HasIndexHint = true
 		}
-		name, alias := tableNameOf(t)
+		name, schema, alias := tableNameOf(t)
 		if name != "" {
-			shape.Tables = append(shape.Tables, TableRef{Name: name, Alias: alias})
+			shape.Tables = append(shape.Tables, TableRef{Name: name, Schema: schema, Alias: alias})
 		}
 	case *sqlparser.JoinTableExpr:
 		shape.HasJoin = true
@@ -206,15 +206,16 @@ func collectTableExpr(shape *QueryShape, te sqlparser.TableExpr) {
 	}
 }
 
-func tableNameOf(t *sqlparser.AliasedTableExpr) (name, alias string) {
+func tableNameOf(t *sqlparser.AliasedTableExpr) (name, schema, alias string) {
 	alias = t.As.String()
 	switch e := t.Expr.(type) {
 	case sqlparser.TableName:
 		name = e.Name.String()
+		schema = e.Qualifier.String()
 	case *sqlparser.DerivedTable:
 		name = ""
 	}
-	return name, alias
+	return name, schema, alias
 }
 
 func walkExpr(shape *QueryShape, expr sqlparser.Expr, isJoin bool) {
@@ -337,4 +338,24 @@ func (q *QueryShape) TableNames() []string {
 		out = appendUnique(out, t.Name)
 	}
 	return out
+}
+
+// DominantSchema returns the most frequent schema qualifier among tables, if any.
+func (q *QueryShape) DominantSchema() string {
+	if q == nil {
+		return ""
+	}
+	counts := map[string]int{}
+	best, bestN := "", 0
+	for _, t := range q.Tables {
+		s := strings.TrimSpace(t.Schema)
+		if s == "" {
+			continue
+		}
+		counts[s]++
+		if counts[s] > bestN {
+			best, bestN = s, counts[s]
+		}
+	}
+	return best
 }

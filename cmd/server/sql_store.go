@@ -113,6 +113,17 @@ func (cs *ConfigStore) GetMySQLConnection(id string) (MySQLConnection, bool) {
 	return MySQLConnection{}, false
 }
 
+// mysqlConnReady returns a distinct error when the connection is missing or disabled.
+func mysqlConnReady(c MySQLConnection, ok bool) error {
+	if !ok {
+		return fmt.Errorf("连接不存在：请重新选择数据库连接（慢 SQL 填入后若丢失，请在工作台顶部重选连接）")
+	}
+	if !c.Enabled {
+		return fmt.Errorf("连接已停用：请在「连接管理」中启用该连接后再 EXPLAIN")
+	}
+	return nil
+}
+
 func (cs *ConfigStore) UpsertMySQLConnection(in MySQLConnection) (MySQLConnection, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.Host = strings.TrimSpace(in.Host)

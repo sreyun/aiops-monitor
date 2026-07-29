@@ -237,6 +237,9 @@ func TestDecodeAIDashSpecLenientOptionsAndRows(t *testing.T) {
 	if d.Panels[0].Options.Palette != "" {
 		t.Fatalf("unknown palette should soft-clear, got %q", d.Panels[0].Options.Palette)
 	}
+	if len(d.Panels[0].Options.Thresholds) != 0 {
+		t.Fatalf("AI sanitize must strip thresholds by default, got %+v", d.Panels[0].Options.Thresholds)
+	}
 }
 
 func TestTokenize(t *testing.T) {

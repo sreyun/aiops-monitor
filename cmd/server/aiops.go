@@ -65,6 +65,9 @@ type AIConfig struct {
 	// MCPScopedTokensJSON：多 Token 作用域，例 [{"name":"metrics","token":"xxx","scopes":["metrics","alerts"]}]
 	// scopes: metrics|logs|sql|hardware|infra|knowledge|all
 	MCPScopedTokensJSON string `json:"mcp_scoped_tokens_json,omitempty"`
+	// MCPClientsJSON：外部 MCP Server 客户端列表（本平台作为 Client 去连别人）。
+	// 例 [{"id":"jira","name":"Jira","enabled":true,"url":"https://…/mcp","headers":{"Authorization":"Bearer …"},"timeout_sec":30}]
+	MCPClientsJSON string `json:"mcp_clients_json,omitempty"`
 	// WeKnora：外部文档知识库（腾讯开源 RAG）。本平台不建文档入库，仅通过 API URL + API Key
 	// 调用 knowledge-search，供 search_knowledge 工具在诊断/对话时检索手册类知识。
 	WeKnoraEnabled          bool   `json:"weknora_enabled,omitempty"`

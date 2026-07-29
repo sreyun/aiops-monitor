@@ -141,8 +141,11 @@ func TestSanitizeAIDashNewTypesAndOptions(t *testing.T) {
 			radar = p
 		}
 	}
-	if radar.Options.Palette != "cool" || len(radar.Options.Thresholds) != 2 {
-		t.Fatalf("AI options not preserved: %+v", radar.Options)
+	if radar.Options.Palette != "cool" {
+		t.Fatalf("AI palette not preserved: %+v", radar.Options)
+	}
+	if len(radar.Options.Thresholds) != 0 {
+		t.Fatalf("AI sanitize must strip thresholds by default, got %+v", radar.Options.Thresholds)
 	}
 	if radar.Grid.H != 8 {
 		t.Fatalf("radar height default: %+v", radar.Grid)

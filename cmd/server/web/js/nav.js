@@ -266,6 +266,22 @@ safeAddEventListener("agentAutoUpdateToggle", "keydown", (e) => {
     document.getElementById("agentAutoUpdateToggle")?.click();
   }
 });
+safeAddEventListener("installTokenPolicyToggle", "click", () => {
+  const b = document.getElementById("installTokenPolicyBody");
+  const c = document.getElementById("installTokenPolicyCaret");
+  const h = document.getElementById("installTokenPolicyToggle");
+  if (!b) return;
+  const hidden = b.style.display === "none";
+  b.style.display = hidden ? "" : "none";
+  if (c) c.textContent = hidden ? "▾" : "▸";
+  if (h) h.setAttribute("aria-expanded", hidden ? "true" : "false");
+});
+safeAddEventListener("installTokenPolicyToggle", "keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    document.getElementById("installTokenPolicyToggle")?.click();
+  }
+});
 safeAddEventListener("tokenToggleBtn", "click", function() {
   TOKEN_REVEALED = !TOKEN_REVEALED;
   updateTokenDisplay();
@@ -828,6 +844,11 @@ document.addEventListener("click", e => {
   if (!mk || !mk.classList.contains("show")) return;
   if (t !== mk && !t.closest("[data-close-btn]")) return;
   if (mk.hasAttribute("data-forced")) return; // 强制弹窗（首次安全初始化）：禁止点遮罩/✕ 关闭
+  if (mk.id === "uiConfirmMask") {
+    if (typeof _finishUiConfirm === "function") _finishUiConfirm(false);
+    else mk.classList.remove("show");
+    return;
+  }
   mk.classList.remove("show"); hideChartTip();
   if (mk.id === "termMask") { closeTerminalWS(); }
   if (mk.id === "desktopMask") { closeDesktopWS(); }

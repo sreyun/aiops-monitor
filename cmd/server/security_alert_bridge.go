@@ -56,6 +56,10 @@ func (s *Server) notifyHostSecurityScanCompleted(scan *HostScanResult) {
 	if !cfg.AlertsEnabled {
 		return
 	}
+	hostLabel := scan.Hostname
+	if hostLabel == "" {
+		hostLabel = scan.HostID
+	}
 	findings := mergeHostFindingStatus(s.secFindings, scan.HostID, scan.Findings)
 	crit, high := 0, 0
 	var sample []string
@@ -77,16 +81,14 @@ func (s *Server) notifyHostSecurityScanCompleted(scan *HostScanResult) {
 			}
 		}
 	}
+	// Always evaluate baseline rise (even without open high/crit).
+	s.raiseSecurityBaselineEarlyWarning("host_security", scan.HostID, hostLabel, scan.BaselineDiff)
 	if crit == 0 && high == 0 {
 		return
 	}
 	level := "warning"
 	if crit > 0 {
 		level = "critical"
-	}
-	hostLabel := scan.Hostname
-	if hostLabel == "" {
-		hostLabel = scan.HostID
 	}
 	msg := fmt.Sprintf("主机安全扫描「%s」发现开放风险：危急 %d · 高危 %d", hostLabel, crit, high)
 	if len(sample) > 0 {
@@ -145,6 +147,11 @@ func (s *Server) notifyWebSecurityScanCompleted(scan *WebScanResult) {
 		}
 	}
 	if crit == 0 && high == 0 {
+		name := scan.TargetName
+		if name == "" {
+			name = scan.BaseURL
+		}
+		s.raiseSecurityBaselineEarlyWarning("web_security", scan.TargetID, name, scan.BaselineDiff)
 		return
 	}
 	level := "warning"
@@ -184,6 +191,37 @@ func (s *Server) notifyWebSecurityScanCompleted(scan *WebScanResult) {
 	a2 := a
 	a2.Type = "web_vuln"
 	s.triggerSecurityRemediation(a2, incidentID)
+	s.raiseSecurityBaselineEarlyWarning("web_security", scan.TargetID, name, scan.BaselineDiff)
+}
+
+// raiseSecurityBaselineEarlyWarning triggers when consecutive scans show rising
+// findings (added/worsened) — early signal before a full critical page storm.
+func (s *Server) raiseSecurityBaselineEarlyWarning(kind, refID, label string, diff *ScanBaselineDiff) {
+	if s == nil || s.incidents == nil || diff == nil {
+		return
+	}
+	if diff.Added+diff.Worsened < 2 {
+		return
+	}
+	domain := "安全"
+	switch kind {
+	case "host_security":
+		domain = "主机安全"
+	case "web_security":
+		domain = "Web安全"
+	}
+	title := fmt.Sprintf("[预测预警] %s「%s」风险呈上升趋势", domain, label)
+	analysis := fmt.Sprintf("较上次扫描：新增 %d · 恶化 %d · 缓解 %d。示例新增：%s\n建议：优先处置新增/恶化项，避免风险累积。",
+		diff.Added, diff.Worsened, diff.Improved, strings.Join(diff.SamplesAdded, "；"))
+	key := fmt.Sprintf("sec_trend:%s:%s", kind, refID)
+	id, created := s.incidents.raise(key, title, "warning", "AI预测预警", refID, label, kind)
+	if id > 0 {
+		s.incidents.AddEvent(id, "ai_analysis", "AI", analysis)
+		s.store.MarkDirty()
+		if created {
+			go s.rememberAI("alert", key, fmt.Sprintf("【预测预警】%s\n%s", title, analysis))
+		}
+	}
 }
 
 // triggerSecurityRemediation matches RemediationRules (host_security / web_vuln / …).
@@ -261,6 +299,30 @@ func (s *Server) notifySlowSQLReport(c MySQLConnection, rep *SlowSQLReport) {
 				{Type: "datasource", ID: c.ID, Role: "affects", Name: c.Name},
 				{Type: "alert", ID: alertKey(a), Role: "caused_by", Name: "slow_sql"},
 			}, "慢SQL", "慢 SQL 报告关联数据源 "+c.Name)
+		}
+	}
+}
+
+// raiseSlowSQLTrendEarlyWarning fires when digests worsen vs previous report —
+// earlier than waiting for absolute latency alert thresholds.
+func (s *Server) raiseSlowSQLTrendEarlyWarning(c MySQLConnection, rep *SlowSQLReport) {
+	if s == nil || s.incidents == nil || rep == nil || rep.Trend == nil {
+		return
+	}
+	tr := rep.Trend
+	if tr.Worsened < 2 && tr.NewDigests < 3 {
+		return
+	}
+	title := fmt.Sprintf("[预测预警] MySQL「%s」慢 SQL 呈恶化趋势", c.Name)
+	analysis := fmt.Sprintf("较上次报告：新增 %d · 恶化 %d · 改善 %d。示例恶化：%s\n建议：优先审查恶化 digest 的执行计划/索引，避免拖垮业务。",
+		tr.NewDigests, tr.Worsened, tr.Improved, strings.Join(tr.SamplesWorse, "；"))
+	key := fmt.Sprintf("slow_sql_trend:%s", c.ID)
+	id, created := s.incidents.raise(key, title, "warning", "AI预测预警", "mysql:"+c.ID, c.Name, "slow_sql")
+	if id > 0 {
+		s.incidents.AddEvent(id, "ai_analysis", "AI", analysis)
+		s.store.MarkDirty()
+		if created {
+			go s.rememberAI("alert", "slow_sql_trend:"+c.ID, fmt.Sprintf("【预测预警】%s\n%s", title, analysis))
 		}
 	}
 }

@@ -79,8 +79,9 @@ type Predicate struct {
 
 // TableRef is a table (optionally aliased) referenced in the query.
 type TableRef struct {
-	Name  string `json:"name"`
-	Alias string `json:"alias,omitempty"`
+	Name   string `json:"name"`
+	Schema string `json:"schema,omitempty"` // optional database/schema qualifier
+	Alias  string `json:"alias,omitempty"`
 }
 
 // QueryShape is a Vitess-derived structural summary of one SQL statement.
@@ -147,6 +148,11 @@ type ExplainHit struct {
 	UsingFilesort bool    `json:"using_filesort,omitempty"`
 	UsingTemp     bool    `json:"using_temporary_table,omitempty"`
 	Message       string  `json:"message,omitempty"`
+	Condition     string  `json:"condition,omitempty"`      // attached_condition / Filter
+	Ref           string  `json:"ref,omitempty"`            // key lookup refs
+	KeyLength     string  `json:"key_length,omitempty"`
+	Cost          float64 `json:"cost,omitempty"`           // read_cost+eval_cost if present
+	SelectID      int     `json:"select_id,omitempty"`
 }
 
 // ExplainAnalysis is a normalized EXPLAIN summary.
@@ -157,6 +163,32 @@ type ExplainAnalysis struct {
 	Filesorts    int          `json:"filesorts,omitempty"`
 	TempTables   int          `json:"temp_tables,omitempty"`
 	TableAccess  []ExplainHit `json:"table_access"`
+}
+
+// ExplainStepDetail is a human-readable per-table EXPLAIN walkthrough.
+type ExplainStepDetail struct {
+	Table      string `json:"table,omitempty"`
+	AccessType string `json:"access_type,omitempty"`
+	Severity   string `json:"severity"` // ok | info | warn | crit
+	Verdict    string `json:"verdict"`
+	Analysis   string `json:"analysis"`
+	Suggest    string `json:"suggest,omitempty"`
+	Key        string `json:"key,omitempty"`
+	Rows       float64 `json:"rows,omitempty"`
+	Filtered   float64 `json:"filtered,omitempty"`
+	Condition  string `json:"condition,omitempty"`
+}
+
+// ExplainReport is the detailed post-EXPLAIN analysis shown under EXPLAIN JSON.
+type ExplainReport struct {
+	Overview      string              `json:"overview"`
+	Health        string              `json:"health"` // good | caution | poor
+	Steps         []ExplainStepDetail `json:"steps,omitempty"`
+	Findings      []Finding           `json:"findings,omitempty"`
+	IndexHints    []IndexHint         `json:"index_hints,omitempty"`
+	Suggestions   []Finding           `json:"suggestions,omitempty"`
+	RewrittenSQL  string              `json:"rewritten_sql,omitempty"`
+	MetadataUsed  bool                `json:"metadata_used,omitempty"`
 }
 
 // ScoreBreakdown explains how the composite score was formed.

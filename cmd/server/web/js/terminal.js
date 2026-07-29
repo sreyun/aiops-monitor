@@ -309,7 +309,7 @@ async function fetchRemotePreflight(hostId){
     return await r.json();
   }catch(e){ return null; }
 }
-/** 闸门拦截时提示；管理员可 break-glass。返回 true=继续打开。 */
+/** 闸门拦截时提示；管理员可强制放行。返回 true=继续打开。 */
 async function confirmRemoteGate(hostId, opts){
   opts=opts||{};
   const pf=await fetchRemotePreflight(hostId);
@@ -319,11 +319,21 @@ async function confirmRemoteGate(hostId, opts){
     }
     return {ok:true, breakGlass:false, pf};
   }
-  const tip=pf.gate_reason||"当前主机处于冻结/高危状态，需已批准变更或事件闭环批准后方可远程操控。";
+  const tip=pf.gate_reason||(typeof I18N!=="undefined"
+    ? I18N.t("remote.gate_default", "当前主机处于冻结或高危状态，需已批准变更或事件闭环批准后方可远程操控。")
+    : "当前主机处于冻结或高危状态，需已批准变更或事件闭环批准后方可远程操控。");
   if(pf.break_glass_ok){
-    if(confirm(tip+"\n\n你是管理员：是否 break-glass 强制打开？（将记入审计）")){
-      return {ok:true, breakGlass:true, pf};
-    }
+    const ok = typeof uiConfirm === "function"
+      ? await uiConfirm({
+          title: typeof I18N!=="undefined" ? I18N.t("remote.gate_title", "远程操作被闸门拦截") : "远程操作被闸门拦截",
+          message: tip,
+          detail: typeof I18N!=="undefined" ? I18N.t("remote.gate_admin_detail", "你是管理员：可强制打开并继续。此操作将写入审计日志。") : "你是管理员：可强制打开并继续。此操作将写入审计日志。",
+          confirmText: typeof I18N!=="undefined" ? I18N.t("remote.gate_force_open", "强制打开") : "强制打开",
+          cancelText: typeof I18N!=="undefined" ? I18N.t("ui.confirm_cancel", "取消") : "取消",
+          tone: "warn"
+        })
+      : confirm(tip + "\n\n你是管理员：是否强制打开？（将记入审计）");
+    if(ok) return {ok:true, breakGlass:true, pf};
     return {ok:false, breakGlass:false, pf};
   }
   toast(tip,"err");

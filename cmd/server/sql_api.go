@@ -69,6 +69,8 @@ func (s *Server) handleSQLAnalyze(w http.ResponseWriter, r *http.Request) {
 		SQL          string `json:"sql"`
 		Dialect      string `json:"dialect"`
 		ConnectionID string `json:"connection_id"`
+		Schema       string `json:"schema"`
+		Database     string `json:"database"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -76,13 +78,20 @@ func (s *Server) handleSQLAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 	d := sqltoolkit.NormalizeDialect(req.Dialect)
 	in := sqltoolkit.AnalyzeInput{SQL: req.SQL, Dialect: d}
+	schema := strings.TrimSpace(firstNonEmpty(req.Schema, req.Database))
 
 	connID := strings.TrimSpace(req.ConnectionID)
 	if connID != "" {
 		c, ok := s.cfg.GetMySQLConnection(connID)
-		if !ok || !c.Enabled {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "connection not found or disabled"})
+		if err := mysqlConnReady(c, ok); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
+		}
+		if schema == "" {
+			schema = inferSchemaFromSQLText(req.SQL)
+		}
+		if schema == "" {
+			schema = strings.TrimSpace(c.Database)
 		}
 		if driverOf(c) == "postgres" {
 			d = sqltoolkit.DialectPostgres
@@ -105,13 +114,13 @@ func (s *Server) handleSQLAnalyze(w http.ResponseWriter, r *http.Request) {
 			}
 			shape := sqltoolkit.ExtractQueryShape(req.SQL)
 			if shape != nil && shape.ParseOK {
-				if meta, err := mysqlFetchMetadata(c, shape.TableNames()); err == nil {
+				if meta, err := mysqlFetchMetadataInSchema(c, schema, shape.TableNames()); err == nil {
 					in.Meta = meta
 				}
 			}
 			kw := sqltoolkit.FirstKeyword(req.SQL)
 			if kw == "select" || kw == "with" || kw == "explain" {
-				if expl, err := mysqlExplain(c, req.SQL); err == nil {
+				if expl, err := mysqlExplainInSchema(c, schema, req.SQL); err == nil {
 					if a, ok := expl["analysis"].(*sqltoolkit.ExplainAnalysis); ok {
 						in.Explain = a
 					}
@@ -208,30 +217,74 @@ func (s *Server) handleTestMySQLConnection(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleMySQLExplain(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	c, ok := s.cfg.GetMySQLConnection(id)
-	if !ok || !c.Enabled {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "connection not found or disabled"})
+	if err := mysqlConnReady(c, ok); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
 	var req struct {
-		SQL string `json:"sql"`
+		SQL      string `json:"sql"`
+		Schema   string `json:"schema"`
+		Database string `json:"database"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
+	schema := strings.TrimSpace(firstNonEmpty(req.Schema, req.Database))
+	if schema == "" {
+		schema = inferSchemaFromSQLText(req.SQL)
+	}
+	if schema == "" {
+		schema = strings.TrimSpace(c.Database)
+	}
 	if driverOf(c) == "postgres" {
 		res, err := pgExplain(c, req.SQL)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			body := map[string]any{"error": err.Error()}
+			if res != nil {
+				if v, ok := res["prepared_sql"]; ok {
+					body["prepared_sql"] = v
+				}
+				if v, ok := res["prepare_notes"]; ok {
+					body["prepare_notes"] = v
+				}
+			}
+			writeJSON(w, http.StatusBadGateway, body)
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
 		return
 	}
-	res, err := mysqlExplain(c, req.SQL)
+	if schema == "" {
+		if dbs, err := mysqlListBusinessDatabases(c); err == nil && len(dbs) == 1 {
+			schema = dbs[0]
+		}
+	}
+	if sqlLikelyTruncated(req.SQL, 0) {
+		shape := sqltoolkit.ExtractQueryShape(req.SQL)
+		if shape == nil || !shape.ParseOK {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "SQL 语句不完整或被截断，无法 EXPLAIN。请粘贴完整 SQL，或提高 MySQL 的 max_digest_length / performance_schema_max_sql_text_length 后重新采集慢 SQL。",
+			})
+			return
+		}
+	}
+	res, err := mysqlExplainInSchema(c, schema, req.SQL)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		body := map[string]any{"error": err.Error()}
+		if res != nil {
+			if v, ok := res["prepared_sql"]; ok {
+				body["prepared_sql"] = v
+			}
+			if v, ok := res["prepare_notes"]; ok {
+				body["prepare_notes"] = v
+			}
+		}
+		writeJSON(w, http.StatusBadGateway, body)
 		return
+	}
+	if schema != "" {
+		res["schema"] = schema
 	}
 	writeJSON(w, http.StatusOK, res)
 }
@@ -239,8 +292,8 @@ func (s *Server) handleMySQLExplain(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMySQLSchema(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	c, ok := s.cfg.GetMySQLConnection(id)
-	if !ok || !c.Enabled {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "connection not found or disabled"})
+	if err := mysqlConnReady(c, ok); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
 	database := strings.TrimSpace(r.URL.Query().Get("database"))

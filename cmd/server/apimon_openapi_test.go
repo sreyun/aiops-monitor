@@ -30,6 +30,19 @@ func TestParseOpenAPI(t *testing.T) {
 	if len(eps3) != 1 || eps3[0].URL != "https://api.y.com/api/ping" {
 		t.Fatalf("Swagger2 基址推断失败: %+v", eps3)
 	}
+	// 仅导入 GET
+	epsGet, _ := parseOpenAPI([]byte(spec3), "", "get")
+	if len(epsGet) != 1 || epsGet[0].Method != "GET" {
+		t.Fatalf("methods=get 应只得 1 个 GET，得 %+v", epsGet)
+	}
+	// all / 空 = 全部
+	epsAll, _ := parseOpenAPI([]byte(spec3), "", "all")
+	if len(epsAll) != 2 {
+		t.Fatalf("methods=all 应得 2，得 %d", len(epsAll))
+	}
+	if h := sanitizeOpenAPICommonHeaders(map[string]string{" Authorization ": " Bearer x ", "": "skip"}); len(h) != 1 || h["Authorization"] != "Bearer x" {
+		t.Fatalf("sanitize headers: %#v", h)
+	}
 	// 非法 JSON 应报错
 	if _, err := parseOpenAPI([]byte("not json"), ""); err == nil {
 		t.Error("非法 JSON 应返回错误")

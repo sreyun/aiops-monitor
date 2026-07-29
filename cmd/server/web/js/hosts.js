@@ -1292,12 +1292,14 @@ function mountDetailLazyCharts(root, loadSeq, loadHandle) {
     delete DETAIL_CHART_PENDING[id];
     const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
     const legendMode = fcOn ? "wrap" : "dash";
-    const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode };
+    const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode, forecastScope: "host-detail",
+      _fcBase: { samples: spec.samples, series: spec.series, yMin: spec.yMin, yMax: spec.yMax, title: spec.title,
+        reload: { hostId: DETAIL_HOST_ID, mode: "fields", forecastScope: "host-detail" } } };
     if (fcOn && DETAIL_SHARED_FC && typeof sliceForecastForChart === "function") {
       if (!isCurrent()) return;
-      const sliced = sliceForecastForChart(DETAIL_SHARED_FC, spec.series);
+      const sliced = sliceForecastForChart(DETAIL_SHARED_FC, spec.series, spec.samples);
       if (!isCurrent()) return;
-      if (sliced) {
+      if (sliced && sliced.samples && sliced.samples.length) {
         DETAIL_CHARTS[id] = createChart(id, sliced.samples, sliced.series, spec.yMin, spec.yMax,
           Object.assign({}, chartOpts, { nowTs: sliced.nowTs || 0 }));
       } else {
@@ -1360,10 +1362,13 @@ safeAddEventListener("detailBody", "click", e => {
       delete DETAIL_CHART_PENDING[id];
       const fcOn = typeof isChartForecastOn === "function" && isChartForecastOn("host-detail");
       const finish = (ch) => { if (ch) { DETAIL_CHARTS[id] = ch; openChartZoom(ch); } };
-      const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: fcOn ? "wrap" : "dash" };
+      const chartOpts = { title: spec.title, noEntrance: true, cssH: 220, legendMode: fcOn ? "wrap" : "dash",
+        forecastScope: "host-detail",
+        _fcBase: { samples: spec.samples, series: spec.series, yMin: spec.yMin, yMax: spec.yMax, title: spec.title,
+          reload: { hostId: DETAIL_HOST_ID, mode: "fields", forecastScope: "host-detail" } } };
       if (fcOn && DETAIL_SHARED_FC && typeof sliceForecastForChart === "function") {
-        const sliced = sliceForecastForChart(DETAIL_SHARED_FC, spec.series);
-        if (sliced) {
+        const sliced = sliceForecastForChart(DETAIL_SHARED_FC, spec.series, spec.samples);
+        if (sliced && sliced.samples && sliced.samples.length) {
           finish(createChart(id, sliced.samples, sliced.series, spec.yMin, spec.yMax,
             Object.assign({}, chartOpts, { nowTs: sliced.nowTs || 0 })));
         } else {
@@ -1596,6 +1601,9 @@ function createChart(canvasId, allSamples, series, yMin = null, yMax = null, opt
     title: opts.title || "", isZoom: !!opts.isZoom,
     legendMode, // full | dash | wrap
     nowTs: opts.nowTs || 0, // realtime|forecast boundary (unix sec)
+    forecastScope: opts.forecastScope || "",
+    _fcBase: opts._fcBase || null,
+    reload: opts.reload || (opts._fcBase && opts._fcBase.reload) || null,
     i0: 0, i1: allSamples.length - 1,
     hover: -1, drag: false, downX: null, curX: null, moved: false,
     pad: { top: 22, right: 18, bottom: 28, left: 56 },
@@ -1998,12 +2006,22 @@ function showChartTip(state, e, li) {
   const sm = vis[li]; if (!sm) { hideChartTip(); return; }
   const d = new Date(sm.timestamp * 1000);
   const time = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const nowTs = +state.nowTs || 0;
+  const inFuture = !!(nowTs && sm.timestamp > nowTs + 1);
   let rows = "";
   state.series.forEach(s => {
     const v = seriesVal(s, sm);
-    const txt = v === null ? "—" : (s.fmt ? s.fmt(v) : v.toFixed(1));
+    const isFc = s.kind === "forecast" || s.dashed || String(s.key || "").indexOf("fc_") === 0;
+    // 未来区不展示历史序列的空值；历史区不展示预测空值；避免整列 "—"
+    if (v === null) {
+      if (inFuture && !isFc) return;
+      if (!inFuture && isFc) return;
+      return;
+    }
+    const txt = s.fmt ? s.fmt(v) : v.toFixed(1);
     rows += `<div class="tip-r"><span class="tip-dot" style="background:${s.color}"></span><span>${esc(s.label)}</span><span class="tip-v">${esc(txt)}</span></div>`;
   });
+  if (!rows) { hideChartTip(); return; }
   const t = chartTipEl();
   t.innerHTML = `<div class="tip-t">${time}</div>${rows}`;
   t.style.display = "block";
@@ -2019,16 +2037,346 @@ function showChartTip(state, e, li) {
 // openChartZoom opens the enlarge modal, re-rendering the source chart on a
 // larger canvas that keeps the source's current visible window and stays fully
 // interactive (hover / box-zoom / dbl-click reset).
+let ZOOM_CHART_SRC = null;
+/** Reload context for zoom time-range switching (host history / AI chart). */
+let ZOOM_CTX = null; // { hostId, mode, metrics, series, yMin, yMax, titleBase, forecastScope, rangeH, custom }
+
+function zoomMetricField(m) {
+  switch (String(m || "").toLowerCase()) {
+    case "cpu": return "cpu_percent";
+    case "memory": case "mem": return "mem_percent";
+    case "disk": return "disk_percent";
+    case "load": return "load1";
+    case "network": case "net": return "net_rx_mbps";
+    case "io": return "disk_read_mbps";
+    default: return String(m || "");
+  }
+}
+
+function estimateZoomRangeHours(src) {
+  const base = src && (src._fcBase || src._aiBase);
+  const samples = (base && base.samples) || (src && src.all) || [];
+  if (samples.length >= 2) {
+    const a = +(samples[0].timestamp || samples[0].ts || 0);
+    const b = +(samples[samples.length - 1].timestamp || samples[samples.length - 1].ts || 0);
+    const h = (b - a) / 3600;
+    if (h > 0.2) {
+      // snap to nearest preset
+      let best = CHART_SPANS[0], bestD = Math.abs(h - best);
+      for (const s of CHART_SPANS) {
+        const d = Math.abs(h - s);
+        if (d < bestD) { best = s; bestD = d; }
+      }
+      return best;
+    }
+  }
+  if (typeof DETAIL_TIME_RANGE === "number" && DETAIL_TIME_RANGE > 0) return DETAIL_TIME_RANGE;
+  return 6;
+}
+
+function buildZoomCtxFromSrc(src) {
+  const base = src && (src._fcBase || src._aiBase) || {};
+  const series = (base.series || src.series || []).filter(s => s && s.kind !== "forecast" && !s.dashed);
+  const reload = base.reload || src.reload || null;
+  const hostId = (reload && reload.hostId) || (src.forecastScope === "host-detail" ? DETAIL_HOST_ID : "") || "";
+  const mode = (reload && reload.mode) || (hostId && series.some(s => /_percent$|^load\d/.test(String(s.key || ""))) ? "fields" : (reload ? reload.mode : ""));
+  return {
+    hostId: hostId || (reload && reload.hostId) || "",
+    mode: mode || (reload && reload.metrics ? "ai-mapped" : (hostId ? "fields" : "")),
+    metrics: (reload && reload.metrics) || [],
+    series,
+    yMin: base.yMin != null ? base.yMin : src.yMin,
+    yMax: base.yMax != null ? base.yMax : src.yMax,
+    titleBase: String((base.title || src.title || "").replace(/\s*[·•]\s*放大预览\s*$/, "")),
+    forecastScope: src.forecastScope || (reload && reload.forecastScope) || "",
+    rangeH: estimateZoomRangeHours(src),
+    custom: null,
+    canReload: !!(hostId || (reload && reload.hostId))
+  };
+}
+
+function renderZoomRangeControls() {
+  const box = $("chartZoomRanges");
+  if (!box) return;
+  if (!ZOOM_CTX) { box.innerHTML = ""; return; }
+  const rangeH = ZOOM_CTX.custom ? -1 : ZOOM_CTX.rangeH;
+  const can = ZOOM_CTX.canReload;
+  box.innerHTML = `
+    ${can ? renderChartControls(rangeH, "zoom-range") : `<span class="hint">${I18N.t("ui.zoom_range_local", "当前图仅支持框选缩放（无主机历史可重载）")}</span>`}
+    ${can ? `<button type="button" class="chip-btn ${ZOOM_CTX.custom ? "active" : ""}" data-zoom-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>` : ""}
+  `;
+  const panel = $("chartZoomCustomPanel");
+  if (panel) {
+    panel.hidden = !(ZOOM_CTX.custom || (panel.dataset.forceOpen === "1"));
+    if (ZOOM_CTX.custom) {
+      const f = $("chartZoomCustomFrom"), t = $("chartZoomCustomTo");
+      if (f) f.value = toLocalDatetimeValue(ZOOM_CTX.custom.from);
+      if (t) t.value = toLocalDatetimeValue(ZOOM_CTX.custom.to);
+    }
+  }
+}
+
+function mapHostSamplesForZoom(rawSamples, ctx) {
+  const samples = Array.isArray(rawSamples) ? rawSamples : [];
+  if (!ctx || ctx.mode !== "ai-mapped" || !ctx.metrics || !ctx.metrics.length) {
+    return samples;
+  }
+  const metrics = ctx.metrics;
+  return samples.map(sm => {
+    const row = { timestamp: sm.timestamp || sm.ts };
+    metrics.forEach((m, i) => {
+      const field = zoomMetricField(m);
+      let v = sm[field];
+      if (v == null && m === "load") v = sm.load1;
+      if (v == null || !isFinite(+v)) return;
+      row["s" + i] = +v;
+    });
+    return row;
+  });
+}
+
+async function fetchZoomHostSamples(hostId, from, to) {
+  const r = await fetch(`${API}/hosts/${encodeURIComponent(hostId)}/history?from=${from}&to=${to}`, { credentials: "same-origin" });
+  if (!r.ok) throw new Error("历史拉取失败 HTTP " + r.status);
+  const j = await r.json();
+  return Array.isArray(j) ? j : (Array.isArray(j.samples) ? j.samples : []);
+}
+
+function resolveZoomWindow() {
+  if (!ZOOM_CTX) return null;
+  if (ZOOM_CTX.custom) return { from: ZOOM_CTX.custom.from, to: ZOOM_CTX.custom.to };
+  const rangeH = ZOOM_CTX.rangeH || 6;
+  const spanSec = Math.max(3600, rangeH * 3600);
+  let step = Math.floor(spanSec / 480);
+  if (step < 5) step = 5;
+  if (step > 300) step = 300;
+  const now = Math.floor(Date.now() / 1000);
+  const to = typeof alignUnixFloor === "function" ? alignUnixFloor(now, step) : now;
+  return { from: to - spanSec, to };
+}
+
+function zoomTitleWithRange(base, from, to) {
+  const hours = Math.max(0.1, (to - from) / 3600);
+  const label = hours < 24
+    ? (`近 ${Math.round(hours * 10) / 10} 小时`)
+    : (`近 ${Math.round(hours / 24 * 10) / 10} 天`);
+  const clean = String(base || I18N.t("ui.trend", "趋势")).replace(/\s*[（(]近[^）)]*[）)]\s*/g, " ").replace(/\s+/g, " ").trim();
+  return `${clean}（${label}） · ${I18N.t("ui.zoom_preview", "放大预览")}`;
+}
+
+async function reloadZoomChartData() {
+  if (!ZOOM_CTX || !ZOOM_CTX.canReload || !ZOOM_CTX.hostId) {
+    await refreshChartZoomFromSrc();
+    return;
+  }
+  const win = resolveZoomWindow();
+  if (!win) return;
+  const wrap = $("chartZoomCanvas") && $("chartZoomCanvas").closest(".chart-wrap");
+  if (wrap) wrap.classList.add("is-loading");
+  try {
+    const raw = await fetchZoomHostSamples(ZOOM_CTX.hostId, win.from, win.to);
+    const samples = mapHostSamplesForZoom(raw, ZOOM_CTX);
+    if (!samples.length) {
+      if (typeof toast === "function") toast(I18N.t("empty.no_history", "暂无历史数据"), "err");
+      return;
+    }
+    const series = (ZOOM_CTX.series || []).map(s => Object.assign({}, s, { kind: "history", dashed: false }));
+    const horizonSec = Math.max(1800, win.to - win.from);
+    const titleBase = ZOOM_CTX.titleBase || "";
+    const title = zoomTitleWithRange(titleBase, win.from, win.to).replace(/\s*[·•]\s*放大预览\s*$/, "");
+    const base = {
+      samples, series,
+      yMin: ZOOM_CTX.yMin, yMax: ZOOM_CTX.yMax,
+      title, horizonSec,
+      reload: {
+        hostId: ZOOM_CTX.hostId,
+        mode: ZOOM_CTX.mode,
+        metrics: ZOOM_CTX.metrics,
+        forecastScope: ZOOM_CTX.forecastScope
+      }
+    };
+    ZOOM_CHART_SRC = {
+      all: samples, series, yMin: ZOOM_CTX.yMin, yMax: ZOOM_CTX.yMax,
+      title, nowTs: 0, forecastScope: ZOOM_CTX.forecastScope,
+      _fcBase: base, _aiBase: base, reload: base.reload
+    };
+    $("chartZoomTitle").textContent = zoomTitleWithRange(titleBase, win.from, win.to);
+    renderZoomRangeControls();
+    await refreshChartZoomFromSrc();
+  } catch (e) {
+    if (typeof toast === "function") toast(String(e.message || e), "err");
+  } finally {
+    if (wrap) wrap.classList.remove("is-loading");
+  }
+}
+
+async function refreshChartZoomFromSrc() {
+  const src = ZOOM_CHART_SRC;
+  if (!src || !$("chartZoomMask") || !$("chartZoomMask").classList.contains("show")) return;
+  const scope = src.forecastScope || (ZOOM_CTX && ZOOM_CTX.forecastScope) || "";
+  const fcOn = scope && typeof isChartForecastOn === "function" && isChartForecastOn(scope);
+  const base = src._fcBase || src._aiBase || null;
+  const samples = (base && base.samples) || src.all;
+  let series = (base && base.series) || src.series;
+  // 放大预览只用历史序列做 enrich，避免把已有虚线再喂一遍
+  series = (series || []).filter(s => s && s.kind !== "forecast" && !s.dashed);
+  const yMin = base && base.yMin != null ? base.yMin : src.yMin;
+  const yMax = base && base.yMax != null ? base.yMax : src.yMax;
+  const title = src.title || "";
+  let horizonSec = (base && base.horizonSec) || 0;
+  if (!horizonSec && samples && samples.length >= 2) {
+    const a = samples[0].timestamp || samples[0].ts || 0;
+    const b = samples[samples.length - 1].timestamp || samples[samples.length - 1].ts || 0;
+    horizonSec = Math.max(0, Math.round(+b - +a));
+  }
+  if (fcOn && horizonSec > 0 && horizonSec < 1800) horizonSec = 1800;
+  let sm = samples, ser = series, nowTs = 0;
+  if (fcOn && typeof enrichSamplesWithForecast === "function" && samples && samples.length >= 4) {
+    const en = await enrichSamplesWithForecast(samples, series, { forecast: true, horizonSec });
+    if (en && !en.stale) {
+      const sliced = typeof sliceForecastForChart === "function"
+        ? sliceForecastForChart(en, series, samples) : en;
+      if (sliced && sliced.samples && sliced.samples.length) {
+        sm = sliced.samples; ser = sliced.series; nowTs = sliced.nowTs || 0;
+      } else if (en.samples) {
+        sm = en.samples; ser = en.series; nowTs = en.nowTs || 0;
+      }
+    }
+  } else if (!fcOn) {
+    ser = series;
+    nowTs = 0;
+  }
+  const z = createChart("chartZoomCanvas", sm, ser, yMin, yMax, {
+    title, isZoom: true, nowTs, forecastScope: scope,
+    _fcBase: base || { samples, series, yMin, yMax, title, horizonSec, reload: src.reload || (base && base.reload) }
+  });
+  if (z) {
+    z.i0 = 0;
+    z.i1 = (z.all ? z.all.length : 1) - 1;
+    z.reload = src.reload || (base && base.reload) || null;
+    drawChart(z);
+    DETAIL_CHARTS.__zoom = z;
+    ZOOM_CHART_SRC = z;
+  }
+}
 function openChartZoom(src) {
   hideChartTip();
+  ZOOM_CHART_SRC = src;
+  ZOOM_CTX = buildZoomCtxFromSrc(src);
   $("chartZoomTitle").textContent = (src.title || I18N.t("ui.trend")) + " · " + I18N.t("ui.zoom_preview");
+  const tools = $("chartZoomTools");
+  if (tools) {
+    const scope = (ZOOM_CTX && ZOOM_CTX.forecastScope) || src.forecastScope || "";
+    // 仅保留「预测」按钮本身，避免再出现一个重复的「预测」文字标签
+    tools.innerHTML = (scope && typeof forecastChipHTML === "function") ? forecastChipHTML(scope) : "";
+  }
+  renderZoomRangeControls();
+  const panel = $("chartZoomCustomPanel");
+  if (panel) { panel.hidden = true; panel.dataset.forceOpen = ""; }
   $("chartZoomMask").classList.add("show");
-  const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, {
-    title: src.title, isZoom: true, nowTs: src.nowTs || 0
+  const scope = (ZOOM_CTX && ZOOM_CTX.forecastScope) || src.forecastScope || "";
+  const fcOn = scope && typeof isChartForecastOn === "function" && isChartForecastOn(scope);
+  // 可重载时按当前时间窗拉一次，保证与所选范围一致；否则直接画源图
+  if (ZOOM_CTX && ZOOM_CTX.canReload) {
+    reloadZoomChartData().catch(() => refreshChartZoomFromSrc());
+    return;
+  }
+  if (fcOn) {
+    refreshChartZoomFromSrc().catch(() => {
+      const z = createChart("chartZoomCanvas", src.all, src.series, src.yMin, src.yMax, {
+        title: src.title, isZoom: true, nowTs: src.nowTs || 0,
+        forecastScope: scope,
+        _fcBase: src._fcBase || src._aiBase || null
+      });
+      if (z) { z.i0 = 0; z.i1 = (z.all ? z.all.length : 1) - 1; drawChart(z); }
+      DETAIL_CHARTS.__zoom = z;
+    });
+    return;
+  }
+  const histSeries = (src.series || []).filter(s => s && s.kind !== "forecast" && !s.dashed);
+  const base = src._fcBase || src._aiBase;
+  const samples = (base && base.samples) || src.all;
+  const z = createChart("chartZoomCanvas", samples, histSeries.length ? histSeries : src.series, src.yMin, src.yMax, {
+    title: src.title, isZoom: true, nowTs: 0,
+    forecastScope: scope,
+    _fcBase: base || null
   });
-  if (z) { z.i0 = src.i0; z.i1 = src.i1; drawChart(z); }
+  if (z) { z.i0 = 0; z.i1 = (z.all ? z.all.length : 1) - 1; drawChart(z); }
   DETAIL_CHARTS.__zoom = z;
 }
+document.addEventListener("chart-forecast-toggle", (ev) => {
+  if (!ev.detail || !ZOOM_CHART_SRC) return;
+  const scope = ZOOM_CHART_SRC.forecastScope || (ZOOM_CTX && ZOOM_CTX.forecastScope) || "";
+  if (!scope || ev.detail.scope !== scope) return;
+  const mask = $("chartZoomMask");
+  if (!mask || !mask.classList.contains("show")) return;
+  refreshChartZoomFromSrc().catch(() => {});
+});
+
+// Zoom modal: time-range chips + custom range
+safeAddEventListener("chartZoomMask", "click", (e) => {
+  if (!ZOOM_CTX) return;
+  const rangeBtn = e.target.closest && e.target.closest("[data-zoom-range]");
+  if (rangeBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    const h = parseInt(rangeBtn.getAttribute("data-zoom-range"), 10);
+    if (!Number.isFinite(h) || h <= 0) return;
+    ZOOM_CTX.custom = null;
+    ZOOM_CTX.rangeH = h;
+    const panel = $("chartZoomCustomPanel");
+    if (panel) { panel.hidden = true; panel.dataset.forceOpen = ""; }
+    renderZoomRangeControls();
+    reloadZoomChartData();
+    return;
+  }
+  const tog = e.target.closest && e.target.closest("[data-zoom-custom-toggle]");
+  if (tog) {
+    e.preventDefault();
+    e.stopPropagation();
+    const panel = $("chartZoomCustomPanel");
+    if (!panel) return;
+    const open = panel.hidden;
+    panel.hidden = !open;
+    panel.dataset.forceOpen = open ? "1" : "";
+    if (open) {
+      const win = resolveZoomWindow() || { from: Math.floor(Date.now() / 1000) - 3600, to: Math.floor(Date.now() / 1000) };
+      const f = $("chartZoomCustomFrom"), t = $("chartZoomCustomTo");
+      if (f) f.value = toLocalDatetimeValue(win.from);
+      if (t) t.value = toLocalDatetimeValue(win.to);
+      if (f) f.focus();
+    }
+    return;
+  }
+});
+safeAddEventListener("chartZoomCustomApply", "click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!ZOOM_CTX) return;
+  const fEl = $("chartZoomCustomFrom"), tEl = $("chartZoomCustomTo");
+  if (!fEl || !tEl || !fEl.value || !tEl.value) {
+    if (typeof toast === "function") toast(I18N.t("time.custom_incomplete") || "请选择开始和结束时间", "warn");
+    return;
+  }
+  const from = Math.floor(new Date(fEl.value).getTime() / 1000);
+  const to = Math.floor(new Date(tEl.value).getTime() / 1000);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    if (typeof toast === "function") toast(I18N.t("time.custom_invalid") || "时间格式无效", "err");
+    return;
+  }
+  if (to <= from) {
+    if (typeof toast === "function") toast(I18N.t("time.custom_order") || "结束时间必须晚于开始时间", "warn");
+    return;
+  }
+  if (to - from < 60) {
+    if (typeof toast === "function") toast(I18N.t("time.custom_tooshort") || "时间范围太短（至少 1 分钟）", "warn");
+    return;
+  }
+  ZOOM_CTX.custom = { from, to };
+  ZOOM_CTX.rangeH = Math.max(1, Math.round((to - from) / 3600));
+  renderZoomRangeControls();
+  reloadZoomChartData();
+});
 function sparkBlock(title, series, color) {
   const last = series.length ? series[series.length - 1] : 0;
   return `<div class="field"><label>${title} · 当前 ${(last || 0).toFixed(1)}</label>

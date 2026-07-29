@@ -10,7 +10,7 @@ import (
 // inspectWindowsFQDN resolves the DNS hostname without invoking Linux-style
 // `hostname -f` (which often hits Git/MSYS hostname.exe and returns usage junk).
 func inspectWindowsFQDN(fallback string) string {
-	out := strings.TrimSpace(string(cmdOutRaw(5, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+	out := strings.TrimSpace(string(cmdOutRaw(5, windowsPowerShellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-Command", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [System.Net.Dns]::GetHostEntry('LocalHost').HostName")))
 	out = sanitizeInspectField(out)
 	if out == "" || looksLikeCommandUsage(out) {
@@ -43,7 +43,7 @@ Write-Output ("MINOR=" + [string]$cv.CurrentMinorVersionNumber)
 Write-Output ("UBR=" + [string]$cv.UBR)
 Write-Output ("VERSION=" + [string]$o.Version)
 `
-	raw := string(cmdOutRaw(8, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script))
+	raw := string(cmdOutRaw(8, windowsPowerShellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script))
 	vals := map[string]string{}
 	for _, ln := range strings.Split(raw, "\n") {
 		ln = strings.TrimSpace(strings.TrimSuffix(ln, "\r"))

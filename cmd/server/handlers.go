@@ -56,6 +56,7 @@ type Server struct {
 	distDir     string                   // directory of downloadable agent binaries + plugins.zip
 	pg          *pgStore                 // PostgreSQL persistence (optional, for pgvector/RAG)
 	sreyun      *SreyunCore              // Sreyun Agent (autonomous SRE agent)
+	mcpClients  *MCPClientManager        // external MCP Servers bridged into Sreyun tools
 	aiStats     *aiStatsHub              // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
 	aiGov       *aiGovHub                // AI 治理：配额 + 写工具审计
 	assistStore *assistStore             // Assist 服务端原文（反馈防投毒）
@@ -63,7 +64,7 @@ type Server struct {
 	webSec      *webScanManager          // Web Nuclei 扫描结果
 	feeds       *feedManager             // 威胁情报/模板库更新（Nuclei 模板、sqlmap 特征等）
 	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
-	sqlHistory  *sqlQueryHistoryManager  // per-user desensitized SQL history
+	sqlHistory  *sqlQueryHistoryManager  // per-user SQL workbench history (full SQL)
 	sqlSlow     *slowSQLManager          // multi-DB slow SQL digests + advice
 	secFindings  *securityFindingManager // security finding lifecycle states
 	agentUpdates *agentUpdateManager     // fleet agent binary update jobs
@@ -117,6 +118,8 @@ func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir strin
 	// 能否真正对话由请求时的 AI 配置（cfg.Enabled）决定——见 handleSreyunChat，
 	// 未启用时优雅返回提示而非 503。此前 gated on SreyunEnabled&&Enabled 且仅在启动时
 	// 判断，导致"配置完模型点 AI 对话仍 503"（s.sreyun 为 nil）。
+	s.mcpClients = newMCPClientManager()
+	_ = s.mcpClients.Reload(cfg.AIConfig().MCPClientsJSON)
 	s.sreyun = newSreyunCore(s)
 	secDir := cfg.securityDataDir()
 	s.hostSec = newHostSecurityManager(secDir)
@@ -299,6 +302,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/apimon/transactions/{id}/run", s.handleRunAPITransaction)
 	mux.HandleFunc("GET /api/v1/apimon/distributed", s.handleDistStatus)
 	mux.HandleFunc("POST /api/v1/apimon/import-openapi", s.handleImportOpenAPI)
+	mux.HandleFunc("POST /api/v1/apimon/fetch-openapi", s.handleFetchOpenAPI)
 	mux.HandleFunc("GET /api/v1/apimon/sla", s.handleSLAReport)
 	mux.HandleFunc("GET /api/v1/scrape-targets", s.handleScrapeTargets)
 	mux.HandleFunc("POST /api/v1/scrape-targets", s.handleUpsertScrapeTarget)
@@ -484,6 +488,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/test-rerank", s.handleTestRerankConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-weknora", s.handleTestWeKnoraConfig)
 	mux.HandleFunc("POST /api/v1/ai/list-weknora-kbs", s.handleListWeKnoraKBs)
+	mux.HandleFunc("POST /api/v1/ai/mcp-clients/test", s.handleTestMCPClient)
+	mux.HandleFunc("POST /api/v1/ai/mcp-clients/sync", s.handleSyncMCPClient)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
 	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                  // 全站「AI 辅助」按钮统一入口（任务化 SSE）
@@ -621,6 +627,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/sql/connections/{id}", s.handleDeleteMySQLConnection)
 	mux.HandleFunc("POST /api/v1/sql/connections/{id}/test", s.handleTestMySQLConnection)
 	mux.HandleFunc("POST /api/v1/sql/connections/{id}/explain", s.handleMySQLExplain)
+	mux.HandleFunc("POST /api/v1/sql/connections/{id}/query", s.handleSQLWorkbenchQuery)
 	mux.HandleFunc("POST /api/v1/sql/connections/{id}/exec-ddl", s.handleMySQLExecDDL)
 	mux.HandleFunc("GET /api/v1/sql/connections/{id}/schema", s.handleMySQLSchema)
 	mux.HandleFunc("GET /api/v1/sql/connections/{id}/schema/health", s.handleMySQLSchemaHealth)
@@ -628,6 +635,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/sql/connections/{id}/locks", s.handleMySQLLocks)
 	mux.HandleFunc("POST /api/v1/sql/connections/{id}/slow-sql/run", s.handleSlowSQLRun)
 	mux.HandleFunc("GET /api/v1/sql/connections/{id}/slow-sql/latest", s.handleSlowSQLLatest)
+	mux.HandleFunc("GET /api/v1/sql/connections/{id}/slow-sql/ps-limits", s.handleSlowSQLPSLimits)
+	mux.HandleFunc("POST /api/v1/sql/connections/{id}/slow-sql/ps-limits/apply", s.handleSlowSQLApplyPSLimits)
 	mux.HandleFunc("GET /api/v1/sql/slow-sql/reports", s.handleSlowSQLReports)
 	mux.HandleFunc("GET /api/v1/sql/history", s.handleSQLQueryHistory)
 	mux.HandleFunc("POST /api/v1/sql/history", s.handleAppendSQLQueryHistory)

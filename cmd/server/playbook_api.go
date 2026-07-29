@@ -623,12 +623,19 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			result := HostExecResult{Hostname: h.Hostname, Status: "running"}
+			// Progressive status: leave「等待中」as soon as the host goroutine starts.
+			s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
+			s.persistPlaybookExecution(exec.ID)
 			vars := playbookHostVars(h) // 变量存储：预置主机 facts，register 逐步累加
 			type rollbackAction struct {
 				step PlaybookStep
 				cmd  string
 			}
 			var rollbacks []rollbackAction
+			pushProgress := func() {
+				s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
+				s.persistPlaybookExecution(exec.ID)
+			}
 			for _, step := range pb.Steps {
 				sr := StepResult{Name: step.Name, Status: "running"}
 				start := time.Now()
@@ -641,6 +648,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 						result.Reason = "skipped_when"
 					}
 					result.Steps = append(result.Steps, sr)
+					pushProgress()
 					continue
 				}
 				// 解析最终命令：模块 > 分系统覆盖 > 默认，并做 {{变量}} 替换
@@ -650,6 +658,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					sr.Output = "（本系统无对应命令，已跳过）"
 					sr.Duration = time.Since(start).Milliseconds()
 					result.Steps = append(result.Steps, sr)
+					pushProgress()
 					continue
 				}
 				// Retry infrastructure-class failures (agent didn't pick up,
@@ -712,6 +721,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					result.Reason = execKindReason(kind)
 					result.Output += sr.Output + "\n"
 					result.Steps = append(result.Steps, sr)
+					pushProgress()
 					if !step.ContinueErr {
 						break
 					}
@@ -720,6 +730,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					sr.Output = output
 					result.Output += output + "\n"
 					result.Steps = append(result.Steps, sr)
+					pushProgress()
 					if strings.TrimSpace(step.Module) == "host_inspect" {
 						s.ingestPlaybookHostInspect(pb.Name, exec.ID, h, exec.Operator, output, sr.Duration)
 					}

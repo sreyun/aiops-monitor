@@ -1053,6 +1053,12 @@ func healImportedDashboard(d *Dashboard) bool {
 				changed = true
 			}
 		}
+		// AI 看板：打开时惰性去掉默认 0/75/90 阈值阶梯（用户自定义阶梯保留）。
+		if isAIDashboardSource(d.Source) && isStockAIThresholdLadder(p.Options.Thresholds) {
+			p.Options.Thresholds = nil
+			p.Options.ThresholdMode = ""
+			changed = true
+		}
 		for j := range p.Targets {
 			expr := p.Targets[j].Expr
 			neu := promoteTemplateVarEq(expandGrafanaClassicVars(expr), varNames)

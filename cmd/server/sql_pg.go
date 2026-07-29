@@ -149,10 +149,27 @@ func pgExplain(c MySQLConnection, sqlText string) (map[string]any, error) {
 	if sqltoolkit.ForbiddenWrite(inner) {
 		return nil, fmt.Errorf("禁止写操作")
 	}
+	prepared, prepNotes := sqltoolkit.PrepareSQLForExplain(inner, sqltoolkit.DialectPostgres)
+	if prepared != "" {
+		inner = prepared
+	}
+	attachPrep := func(err error) (map[string]any, error) {
+		body := map[string]any{}
+		if len(prepNotes) > 0 {
+			body["prepare_notes"] = prepNotes
+		}
+		if prepared != "" {
+			body["prepared_sql"] = prepared
+		}
+		if err != nil {
+			body["error"] = err.Error()
+		}
+		return body, err
+	}
 
 	db, err := pgOpen(c)
 	if err != nil {
-		return nil, err
+		return attachPrep(err)
 	}
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -162,7 +179,7 @@ func pgExplain(c MySQLConnection, sqlText string) (map[string]any, error) {
 	jsonSQL := "EXPLAIN (FORMAT JSON) " + inner
 	var rawJSON string
 	if err := db.QueryRowContext(ctx, jsonSQL).Scan(&rawJSON); err != nil {
-		return nil, err
+		return attachPrep(err)
 	}
 	analysis := analyzePGExplainJSON(rawJSON)
 	var parsed any
@@ -183,14 +200,20 @@ func pgExplain(c MySQLConnection, sqlText string) (map[string]any, error) {
 		planText = strings.Join(lines, "\n")
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"driver":       "postgres",
 		"plan":         planText,
 		"raw":          rawJSON,
 		"explain_json": parsed,
 		"analysis":     analysis,
 		"readonly":     true,
-	}, nil
+	}
+	if len(prepNotes) > 0 {
+		out["prepare_notes"] = prepNotes
+		out["prepared_sql"] = inner
+	}
+	attachExplainAdvice(out, c, strings.TrimSpace(c.Database), inner, analysis)
+	return out, nil
 }
 
 func analyzePGExplainJSON(raw string) *sqltoolkit.ExplainAnalysis {
@@ -260,6 +283,9 @@ func walkPGPlan(node map[string]any, hits *[]sqltoolkit.ExplainHit) {
 		Rows:         rows,
 		FullScanRisk: full && table != "",
 		UsingIndex:   indexName != "" || strings.Contains(nt, "index"),
+	}
+	if filt, ok := node["Filter"].(string); ok && filt != "" {
+		hit.Condition = filt
 	}
 	if hit.Table != "" || hit.AccessType != "" {
 		*hits = append(*hits, hit)

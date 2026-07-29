@@ -543,7 +543,7 @@ type winPosture struct {
 }
 
 func collectWindowsPostureFindings() []hostSecFinding {
-	raw := strings.TrimSpace(string(cmdOutRaw(45, "powershell", "-NoProfile", "-NonInteractive",
+	raw := strings.TrimSpace(string(cmdOutRaw(45, windowsPowerShellPath(), "-NoProfile", "-NonInteractive",
 		"-ExecutionPolicy", "Bypass", "-Command", winPostureScript)))
 	if raw == "" {
 		return []hostSecFinding{{

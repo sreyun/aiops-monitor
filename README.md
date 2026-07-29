@@ -1,6 +1,6 @@
 # AIOps
 
-[![Version](https://img.shields.io/badge/Version-v0.19.43-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.43)
+[![Version](https://img.shields.io/badge/Version-v0.19.44-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.44)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -13,7 +13,7 @@
 
 **语言 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-**当前版本 [v0.19.43](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.43)** · 镜像：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · 变更见 [CHANGELOG.md](CHANGELOG.md)
+**当前版本 [v0.19.44](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.44)** · 镜像：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · 变更见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
@@ -60,7 +60,7 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 
 | 方向 | 能力 |
 |---|---|
-| **MCP 集成** | `GET/POST/DELETE /api/v1/mcp` 支持 Streamable HTTP（JSON-RPC + SSE），可把值班/诊断只读工具接到 Cursor / Claude；AI 设置支持作用域令牌与一键复制客户端配置 |
+| **MCP 集成** | 双向：本平台作 MCP Server（Streamable HTTP）暴露只读工具给 Cursor/Claude；亦可配置 MCP Clients 接入外部 MCP Server，工具注入 AI 对话 / 诊断 / 创建看板 |
 | **AI 语音** | 语音输入/播报配置支持「测试语音」闭环（TTS 样例播放 + 可选 STT 回环） |
 | **文件完整性 / 威胁情报** | FIM 与威胁情报通道纳入主机安全能力面（见面板安全中心） |
 | **Agent 远程更新** | 批量远程更新；Windows 更新进入 `pending_verify`，待 `agent_version` ACK 后再标成功 |
@@ -128,7 +128,7 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 - **AI 巡检**：定期 / 按需巡检并产出报告；关键事件可在时间线自动诊断。
 - **根因研判**：证据门控 + 上下文诊断；可插拔 OpenAI 兼容模型，未配置时启发式兜底。
 - **RAG / Skills**：pgvector 相似案例；高质量对话可沉淀为草稿 Skill，验证后激活。
-- **MCP**：Streamable HTTP 暴露值班 / 诊断等只读工具（`get_duty_context`、`diagnose_incident` 等），便于 Cursor / Claude 接入。
+- **MCP**：双向集成——Streamable HTTP 暴露值班 / 诊断等只读工具（`get_duty_context`、`diagnose_incident` 等）给 Cursor / Claude；亦可在 AI 设置 → 集成中添加外部 MCP Clients，将远端工具桥接为 `ext_*` 供 Hermes 对话、诊断预取与创建看板使用。
 - **AI Copilot / 语音**：SSE 对话、Function Calling；语音 TTS / STT，配置页支持一键测试。
 
 ### SQL 工具箱

@@ -18,9 +18,172 @@ let wsAuthType = "none";
 let wsProfilePick = "standard"; // quick | standard | deep | custom
 let wsShowPacks = false;
 let wsPendingFilter = null; // { level } from security overview
+let wsPickSelected = new Set(); // toolbar multi-select
+let wsPickCollapsed = new Set();
+let wsPickQ = "";
+let wsPickInited = false;
 
 const wsT = (k, fb) => I18N.t(k, fb);
 function wsEsc(s) { return typeof esc === "function" ? esc(String(s ?? "")) : String(s ?? ""); }
+
+function wsTargetTitle(t) {
+  const name = (t && (t.name || t.id)) || "";
+  const url = (t && t.base_url) || "";
+  return url ? `${name} (${url})` : name;
+}
+function wsCapturePick() {
+  const root = $("wsTargetTree");
+  if (!root) return;
+  root.querySelectorAll(".hs-pick-host:checked").forEach(cb => wsPickSelected.add(cb.value));
+  root.querySelectorAll(".hs-pick-host:not(:checked)").forEach(cb => wsPickSelected.delete(cb.value));
+}
+function wsInitPickDefaults(targets) {
+  if (wsPickInited) return;
+  wsPickInited = true;
+  const enabled = (targets || []).filter(t => t && t.enabled !== false);
+  (enabled.length ? enabled : targets || []).forEach(t => { if (t && t.id) wsPickSelected.add(t.id); });
+}
+function wsFilterTarget(t, q) {
+  if (!q) return true;
+  const hay = [t.id, t.name, t.base_url, t.auth_type, ...(t.tags || [])]
+    .filter(Boolean).join(" ").toLowerCase();
+  return hay.includes(q);
+}
+function wsPickTargetRowHTML(t, selected, depth) {
+  const enabled = t.enabled !== false;
+  const pad = Math.min(depth, 6) * 14;
+  return `<label class="hs-pick-row${enabled ? "" : " off"}${selected.has(t.id) && enabled ? " is-on" : ""}" style="padding-left:${pad + 22}px" title="${wsEsc(wsTargetTitle(t))}">
+    <input type="checkbox" class="hs-pick-host" value="${wsEsc(t.id)}" ${enabled ? "" : "disabled"} ${selected.has(t.id) ? "checked" : ""}>
+    <span class="hs-pick-name">${wsEsc(t.name || t.id)}</span>
+    <span class="hs-pick-ip mono">${wsEsc(t.base_url || "—")}</span>
+    <span class="hs-pick-st ${enabled ? "ok" : ""}"><i class="hs-pick-dot" aria-hidden="true"></i>${enabled ? wsEsc(wsT("ws.on", "启用")) : wsEsc(wsT("ws.off", "停用"))}</span>
+  </label>`;
+}
+function wsPickFolderBlockHTML(fid, label, list, selected, collapsed) {
+  const isCollapsed = collapsed.has(fid);
+  const ids = list.filter(t => t.enabled !== false).map(t => t.id);
+  const checkedN = ids.filter(id => selected.has(id)).length;
+  const folderState = !ids.length ? "" : (checkedN === ids.length ? "checked" : (checkedN > 0 ? "data-indeterminate=\"1\"" : ""));
+  let html = `<div class="hs-pick-folder">
+    <button type="button" class="hs-pick-caret" data-ws-fold="${wsEsc(fid)}" aria-expanded="${isCollapsed ? "false" : "true"}">${isCollapsed ? "▸" : "▾"}</button>
+    <label class="hs-pick-folder-lab">
+      <input type="checkbox" class="hs-pick-folder-cb" data-ws-folder="${wsEsc(fid)}" ${folderState}>
+      <span class="hs-pick-folder-name">${wsEsc(label)}</span>
+      <span class="hs-pick-count">${list.length}</span>
+    </label>
+  </div>`;
+  if (!isCollapsed) html += list.map(t => wsPickTargetRowHTML(t, selected, 1)).join("");
+  return html;
+}
+function wsPickTreeHTML() {
+  const targets = wsTargets || [];
+  const selected = wsPickSelected;
+  const collapsed = wsPickCollapsed;
+  const q = (wsPickQ || "").trim().toLowerCase();
+  const filtered = q ? targets.filter(t => wsFilterTarget(t, q)) : targets.slice();
+  filtered.sort((a, b) => {
+    const an = (a.name || a.id || "").toLowerCase();
+    const bn = (b.name || b.id || "").toLowerCase();
+    if (an !== bn) return an < bn ? -1 : 1;
+    return String(a.base_url || "").localeCompare(String(b.base_url || ""));
+  });
+  const enabledN = filtered.filter(t => t.enabled !== false).length;
+  const selN = [...selected].filter(id => filtered.some(t => t.id === id)).length;
+  let body = "";
+  if (!targets.length) {
+    body = `<div class="hs-pick-empty">${wsEsc(wsT("ws.no_targets", "暂无目标"))}</div>`;
+  } else if (!filtered.length) {
+    body = `<div class="hs-pick-empty">${wsEsc(wsT("ws.no_target_match", "无匹配目标"))}</div>`;
+  } else {
+    const on = filtered.filter(t => t.enabled !== false);
+    const off = filtered.filter(t => t.enabled === false);
+    if (on.length) body += wsPickFolderBlockHTML("grp:enabled", wsT("ws.grp_enabled", "启用"), on, selected, collapsed);
+    if (off.length) body += wsPickFolderBlockHTML("grp:disabled", wsT("ws.grp_disabled", "停用"), off, selected, collapsed);
+  }
+  return `<div class="hs-pick-tree-wrap" data-ws-pick="scan">
+    <div class="hs-pick-tools">
+      <input type="search" id="wsTargetSearch" class="hs-pick-search" value="${wsEsc(wsPickQ || "")}" placeholder="${wsEsc(wsT("ws.target_search_ph", "搜索名称 / URL…"))}" autocomplete="off">
+      <div class="hs-pick-quick">
+        <button type="button" class="btn sm ghost" data-ws-pick-act="all-enabled">${wsEsc(wsT("ws.select_all_enabled", "全选启用"))}</button>
+        <button type="button" class="btn sm ghost" data-ws-pick-act="clear">${wsEsc(wsT("ws.clear_sel", "清空"))}</button>
+        <span class="hs-pick-meta">${selN}/${enabledN || filtered.length}</span>
+      </div>
+    </div>
+    <div class="hs-pick-tree" id="wsTargetTree">${body}</div>
+  </div>`;
+}
+function wsFolderMemberIds(folderId) {
+  const q = (wsPickQ || "").trim().toLowerCase();
+  const targets = wsTargets || [];
+  if (folderId === "grp:enabled") {
+    return targets.filter(t => t.enabled !== false && wsFilterTarget(t, q)).map(t => t.id);
+  }
+  if (folderId === "grp:disabled") {
+    return targets.filter(t => t.enabled === false && wsFilterTarget(t, q)).map(t => t.id);
+  }
+  return [];
+}
+function wsBindPickTree(root) {
+  if (!root) return;
+  root.querySelectorAll(".hs-pick-folder-cb[data-indeterminate]").forEach(cb => { cb.indeterminate = true; });
+  root.querySelectorAll("[data-ws-fold]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      const id = btn.dataset.wsFold;
+      if (wsPickCollapsed.has(id)) wsPickCollapsed.delete(id); else wsPickCollapsed.add(id);
+      wsCapturePick();
+      wsPickQ = ($("wsTargetSearch") && $("wsTargetSearch").value) || wsPickQ;
+      paintWebSecurity();
+    });
+  });
+  root.querySelectorAll(".hs-pick-folder-cb").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const folderId = cb.dataset.wsFolder;
+      const ids = wsFolderMemberIds(folderId);
+      ids.forEach(id => { if (cb.checked) wsPickSelected.add(id); else wsPickSelected.delete(id); });
+      wsPickQ = ($("wsTargetSearch") && $("wsTargetSearch").value) || "";
+      paintWebSecurity();
+    });
+  });
+  const search = root.querySelector(".hs-pick-search");
+  if (search) {
+    search.addEventListener("input", () => {
+      wsCapturePick();
+      wsPickQ = search.value || "";
+      paintWebSecurity();
+      const again = $("wsTargetSearch");
+      if (again) { again.focus(); const v = again.value; again.setSelectionRange(v.length, v.length); }
+    });
+  }
+  root.querySelectorAll("[data-ws-pick-act]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      wsCapturePick();
+      if (btn.dataset.wsPickAct === "clear") wsPickSelected.clear();
+      else (wsTargets || []).filter(t => t.enabled !== false).forEach(t => wsPickSelected.add(t.id));
+      paintWebSecurity();
+    });
+  });
+  root.querySelectorAll(".hs-pick-host").forEach(cb => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) wsPickSelected.add(cb.value); else wsPickSelected.delete(cb.value);
+      const meta = root.querySelector(".hs-pick-meta");
+      if (meta) {
+        const enabledN = (wsTargets || []).filter(t => t.enabled !== false).length;
+        meta.textContent = `${wsPickSelected.size}/${enabledN}`;
+      }
+      const chip = document.querySelector("#webSecurityPanel .sec-sel-chip");
+      if (chip) chip.textContent = `${wsSelectedScanIds().length} ${wsT("ws.selected_n", "已选")}`;
+      root.querySelectorAll(".hs-pick-row").forEach(row => {
+        const input = row.querySelector(".hs-pick-host");
+        if (input) row.classList.toggle("is-on", !!input.checked && !input.disabled);
+      });
+    });
+  });
+}
+function wsSelectedScanIds() {
+  wsCapturePick();
+  return [...wsPickSelected].filter(id => (wsTargets || []).some(t => t.id === id && t.enabled !== false));
+}
 
 const WS_TAG_OPTS = [
   ["misconfig", "ws.tag_misconfig", "错误配置"], ["exposures", "ws.tag_exposures", "信息暴露"],
@@ -674,13 +837,37 @@ function paintWebSecurity() {
     <div class="sec-metric high"><b>${sum.high}</b><span>${wsEsc(wsT("ws.sev_high", "高危"))}</span></div>
     <div class="sec-metric"><b>${sum.running}</b><span>${wsEsc(wsT("ws.stat_running", "进行中"))}</span></div>
   </div>`;
-  html += `<div class="sec-toolbar"><div class="sec-toolbar-actions">
-    <button class="btn primary" data-ws="add">${wsEsc(wsT("ws.add_target", "添加目标"))}</button>
-    <button class="btn" data-ws="refresh">${wsEsc(wsT("common.refresh", "刷新"))}</button>
-    <button class="btn nf-ai-btn" data-ws="ai-diag" title="${wsEsc(wsT("ws.ai_diag_tip", "研判风险、优先级与疑似误报"))}">${wsEsc(wsT("ws.ai_diag", "AI 研判"))}</button>
-    <button class="btn nf-ai-btn" data-ws="ai-rem" title="${wsEsc(wsT("ws.ai_rem_tip", "生成可确认执行的修复/复扫计划"))}">${wsEsc(wsT("ws.ai_rem", "AI 修复"))}</button>
-    ${wsExportMenuHTML(false)}
-  </div></div>`;
+  wsCapturePick();
+  wsInitPickDefaults(wsTargets);
+  const wsSelN = wsSelectedScanIds().length;
+  html += `<div class="sec-command">
+    <div class="sec-command-pick">
+      <div class="sec-command-label">
+        <span class="sec-command-title">${wsEsc(wsT("ws.target", "目标"))}</span>
+        <span class="sec-command-hint">${wsEsc(wsT("ws.target_pick_hint", "树形多选 · 显示名称与 URL"))}</span>
+      </div>
+      ${wsPickTreeHTML()}
+    </div>
+    <div class="sec-command-side">
+      <div class="sec-command-cta">
+        <button class="btn primary sec-scan-btn" data-ws="scan" ${wsBusy ? "disabled" : ""}>${wsEsc(wsT("ws.scan_selected", "扫描选中"))}</button>
+        <span class="sec-sel-chip" title="${wsEsc(wsT("ws.scan_selected", "扫描选中"))}">${wsSelN} ${wsEsc(wsT("ws.selected_n", "已选"))}</span>
+      </div>
+      <div class="sec-command-tools">
+        <button class="btn" data-ws="add">${wsEsc(wsT("ws.add_target", "添加目标"))}</button>
+        <button class="btn ghost" data-ws="refresh">${wsEsc(wsT("common.refresh", "刷新"))}</button>
+        <div class="act-menu act-menu-ai">
+          <button type="button" class="btn sm act-menu-trigger" aria-haspopup="true" aria-expanded="false"><span data-i18n="ui.ai_menu">AI</span><span class="act-menu-caret">▾</span></button>
+          <div class="act-menu-panel" hidden role="menu">
+            <div class="act-menu-hint">${wsEsc(wsT("ws.ai_menu_hint", "基于当前扫描报告"))}</div>
+            <button type="button" role="menuitem" data-ws="ai-diag">${wsEsc(wsT("ws.ai_diag", "AI 研判"))}<span class="act-menu-sub">${wsEsc(wsT("ws.ai_diag_tip", "研判风险、优先级与疑似误报"))}</span></button>
+            <button type="button" role="menuitem" data-ws="ai-rem">${wsEsc(wsT("ws.ai_rem", "AI 修复"))}<span class="act-menu-sub">${wsEsc(wsT("ws.ai_rem_tip", "生成可确认执行的修复/复扫计划"))}</span></button>
+          </div>
+        </div>
+        ${wsExportMenuHTML(false)}
+      </div>
+    </div>
+  </div>`;
   html += wsCfgPanelHTML();
   if (typeof sfPanelHTML === "function") html += sfPanelHTML();
   html += `<div class="ws-layout">
@@ -691,6 +878,7 @@ function paintWebSecurity() {
   html += `</div>`;
   el.innerHTML = html;
   wsBindShell(el);
+  document.querySelectorAll("#webSecurityPanel .hs-pick-tree-wrap").forEach(wsBindPickTree);
   if (wsSelected) wsPaintDetail(wsSelected);
   else wsPaintDetailEmpty();
   if (wsShowForm) {
@@ -877,12 +1065,13 @@ function wsPaintDetailEmpty() {
   box.innerHTML = `<div class="sec-empty ws-detail-empty">
     <div class="sec-empty-ico" aria-hidden="true"></div>
     <h4>${wsEsc(wsT("ws.pick_scan", "选择一条扫描记录"))}</h4>
-    <p>${wsEsc(wsT("ws.pick_scan_hint", "在左侧历史中点击批次，或先「扫描」目标，即可查看命中并导出报告。"))}</p>
+    <p>${wsEsc(wsT("ws.pick_scan_hint", "在上方勾选目标后「扫描选中」，或在左侧历史中点击批次，即可查看命中并导出报告。"))}</p>
   </div>`;
 }
 
 function wsAction(act) {
   if (act === "refresh") return renderWebSecurity();
+  if (act === "scan") return wsRunScanSelected();
   if (act === "add") {
     wsEditTarget = null; wsAuthType = "none";
     wsApplyProfile("standard");
@@ -1104,6 +1293,7 @@ async function wsDelete(id) {
 
 async function wsScanNow(id) {
   wsBusy = true;
+  paintWebSecurity();
   try {
     const d = await wsFetchJSON(`${API}/security/web/targets/` + encodeURIComponent(id) + "/scan", { method: "POST" });
     wsSelected = d.scan || d;
@@ -1115,6 +1305,47 @@ async function wsScanNow(id) {
     if (typeof toast === "function") toast(String(e.message || e), "err");
   } finally {
     wsBusy = false;
+    paintWebSecurity();
+  }
+}
+
+async function wsRunScanSelected() {
+  let ids = wsSelectedScanIds();
+  if (!ids.length) {
+    ids = (wsTargets || []).filter(t => t.enabled !== false).map(t => t.id);
+    if (!ids.length) {
+      if (typeof toast === "function") toast(wsT("ws.pick_target", "请选择目标"), "err");
+      return;
+    }
+    if (typeof toast === "function") toast(wsT("ws.scan_all_enabled", "未勾选目标，将扫描全部启用目标"), "ok");
+  }
+  wsBusy = true;
+  paintWebSecurity();
+  let last = null;
+  let ok = 0;
+  const errors = [];
+  try {
+    for (const id of ids) {
+      try {
+        const d = await wsFetchJSON(`${API}/security/web/targets/` + encodeURIComponent(id) + "/scan", { method: "POST" });
+        last = d.scan || d;
+        ok++;
+      } catch (e) {
+        errors.push(String(e.message || e));
+      }
+    }
+    if (last) wsSelected = last;
+    wsScans = (await wsFetchJSON(`${API}/security/web/scans?limit=40`)).scans || [];
+    if (typeof toast === "function") {
+      if (ok) toast(wsT("ws.scan_started", "扫描已启动，右侧查看进度") + ` · ${ok}/${ids.length}`, "ok");
+      if (errors.length) toast(errors[0], "err");
+    }
+    wsMaybePoll();
+  } catch (e) {
+    if (typeof toast === "function") toast(String(e.message || e), "err");
+  } finally {
+    wsBusy = false;
+    paintWebSecurity();
   }
 }
 
@@ -1223,8 +1454,13 @@ function wsPaintDetail(scan) {
     </div>
     <div class="ws-detail-actions">
       ${wsStatusBadge(scan.status)}
-      ${canExport ? `<button class="btn sm nf-ai-btn" data-ws="ai-diag">${wsEsc(wsT("ws.ai_diag", "AI 研判"))}</button>
-      <button class="btn sm nf-ai-btn" data-ws="ai-rem">${wsEsc(wsT("ws.ai_rem", "AI 修复"))}</button>
+      ${canExport ? `<div class="act-menu act-menu-ai">
+        <button type="button" class="btn sm act-menu-trigger" aria-haspopup="true" aria-expanded="false">AI<span class="act-menu-caret">▾</span></button>
+        <div class="act-menu-panel" hidden role="menu">
+          <button type="button" role="menuitem" data-ws="ai-diag">${wsEsc(wsT("ws.ai_diag", "AI 研判"))}</button>
+          <button type="button" role="menuitem" data-ws="ai-rem">${wsEsc(wsT("ws.ai_rem", "AI 修复"))}</button>
+        </div>
+      </div>
       <button class="btn sm primary" data-ws="export-toggle">${wsEsc(wsT("ws.export", "导出报告"))}</button>` : ""}
     </div></div>`;
   if (scan.error) html += `<div class="sec-error-box">${wsEsc(scan.error)}</div>`;

@@ -318,6 +318,11 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	memText, memHits, degM, memCites := s.retrieveMemoryWithCitations(policy.MemKind, ragQ, 6)
 	skillText, skillNames, skillHits, degS := s.retrieveSkillsDetailed(ragQ, 4)
 	sys += memText + skillText
+	if assistTaskWantsExternalMCP(task) {
+		sys += s.prefetchExternalMCPForDiagnosis(strings.TrimSpace(userMsg+" "+contextText), actor)
+	} else if inv := s.formatExternalMCPInventory(); inv != "" {
+		sys += inv
+	}
 	if pref := s.loadPreferenceHints(actor, 4); pref != "" {
 		sys += "\n\n" + pref
 	}

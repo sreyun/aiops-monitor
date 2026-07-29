@@ -16,7 +16,9 @@ import (
 func moduleDiskUsage() ([]byte, int) {
 	switch runtime.GOOS {
 	case "windows":
-		return runModuleCmds([][]string{{"cmd", "/c", "wmic logicaldisk get Caption,FreeSpace,Size /format:list"}})
+		return winCIMDiskUsageText()
+	case "darwin":
+		return runModuleCmds([][]string{{"df", "-hP"}})
 	default:
 		return runModuleCmds([][]string{{"df", "-hT"}})
 	}
@@ -47,7 +49,9 @@ func moduleMemInfo() ([]byte, int) {
 		b.Write(out)
 		return []byte(b.String()), exit
 	case "windows":
-		return runModuleCmds([][]string{{"cmd", "/c", "wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /format:list"}})
+		out, exit := winCIMMemInfoText()
+		b.Write(out)
+		return []byte(b.String()), exit
 	}
 	return []byte(b.String()), 0
 }
@@ -72,7 +76,9 @@ func moduleCPULoad() ([]byte, int) {
 		b.Write(out)
 		return []byte(b.String()), exit
 	case "windows":
-		return runModuleCmds([][]string{{"cmd", "/c", "wmic cpu get LoadPercentage,NumberOfCores /format:list"}})
+		out, exit := winCIMCPULoadText()
+		b.Write(out)
+		return []byte(b.String()), exit
 	}
 	return []byte(b.String()), 0
 }
@@ -118,7 +124,7 @@ func modulePkgList() ([]byte, int) {
 		if have("winget") {
 			return runModuleCmds([][]string{{"winget", "list"}})
 		}
-		return runModuleCmds([][]string{{"cmd", "/c", "wmic product get name,version"}})
+		return winCIMPkgListText()
 	}
 	return []byte("不支持的系统"), 1
 }

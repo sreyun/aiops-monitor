@@ -669,8 +669,9 @@ elif [ "$OS" = "Darwin" ]; then
   <key>WorkingDirectory</key><string>$DIR</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$DIR/agent.log</string>
-  <key>StandardErrorPath</key><string>$DIR/agent.log</string>
+  <!-- Agent writes rotating agent.log under $DIR; do not also redirect here (FD would block rotation). -->
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>
 PL
@@ -698,15 +699,16 @@ PL
 else
   # Fallback (non-root Linux without systemd): restart now + a @reboot crontab entry
   # so it survives reboots. root+systemd is recommended for restart-on-crash too.
+  # Redirect to /dev/null — Agent itself writes rolling agent.log under $DIR (7×10MiB).
   pkill -f "$DIR/aiops-agent" 2>/dev/null || true
   sleep 1 2>/dev/null || true
-  nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" > "$DIR/agent.log" 2>&1 &
+  nohup "$DIR/aiops-agent" --config "$DIR/config.yaml" >/dev/null 2>&1 &
   if command -v crontab >/dev/null 2>&1; then
     ( crontab -l 2>/dev/null | grep -v "$DIR/aiops-agent --config" ; \
-      echo "@reboot $DIR/aiops-agent --config $DIR/config.yaml >> $DIR/agent.log 2>&1" ) | crontab - 2>/dev/null || true
-    echo "[AIOps] agent restarted in background + @reboot autostart added (log: $DIR/agent.log)"
+      echo "@reboot $DIR/aiops-agent --config $DIR/config.yaml >/dev/null 2>&1" ) | crontab - 2>/dev/null || true
+    echo "[AIOps] agent restarted in background + @reboot autostart added (log: $DIR/agent.log, 7x10MiB rotate)"
   else
-    echo "[AIOps] agent restarted in background (log: $DIR/agent.log)"
+    echo "[AIOps] agent restarted in background (log: $DIR/agent.log, 7x10MiB rotate)"
   fi
 fi
 echo "[AIOps] done. Check the dashboard for this host."
@@ -1667,7 +1669,7 @@ Write-Host ("[AIOps] win service: " + $svcOk + " (SYSTEM service => disk IO + Hy
 $hv = $false
 try { $hv = [bool](Get-Service -Name 'vmms' -ErrorAction SilentlyContinue) } catch {}
 Write-Host ("[AIOps] Hyper-V role: " + $hv + $(if ($hv -and -not $IsAdmin) { " (needs elevated reinstall)" } else { "" }))
-Write-Host ("[AIOps] agent log   : " + (Join-Path $Dir 'agent.log'))
+Write-Host ("[AIOps] agent log   : " + (Join-Path $Dir 'agent.log') + " (7×10MB rolling)")
 if ($SelfTestExit -eq 0) {
   Write-Host "[AIOps] connectivity: OK — 主机已注册，面板上应能看到这台机器。" -ForegroundColor Green
   Write-Host "[AIOps] done. Check the dashboard for this host."
@@ -1677,7 +1679,7 @@ if ($SelfTestExit -eq 0) {
 } else {
   Write-Host "[AIOps] connectivity: FAILED — 主机不会出现在面板，原因见上方 [selftest] 输出。" -ForegroundColor Red
   Write-Host ("[AIOps] 重新自检: & '" + $AgentExe + "' --selftest --config '" + $conf + "'") -ForegroundColor Yellow
-  Write-Host ("[AIOps] 运行日志: " + (Join-Path $Dir 'agent.log')) -ForegroundColor Yellow
+  Write-Host ("[AIOps] 运行日志: " + (Join-Path $Dir 'agent.log') + " (7×10MB 滚动覆盖)") -ForegroundColor Yellow
   # Deliberately no "exit": this script is consumed via irm ... | iex, so exiting
   # tears down the operator's console — taking the diagnosis above with it.
   $global:LASTEXITCODE = 1
@@ -2168,7 +2170,7 @@ Remove-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\agent_state.json')
 # Step 5: Delete files with retry logic (handles stubborn file locks), for BOTH
 # install locations. Delete VBS files FIRST -- removing them prevents wscript.exe
 # from being relaunched by the Run registry.
-$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.yaml", "config.json", "agent_state.json", "agent.log", "agent.log.1", "agent-desktop.log", "agent-desktop.log.1", "plugins.zip")
+$files = @("start-agent.vbs", "start-relay.vbs", "aiops-agent.exe", "config.yaml", "config.json", "agent_state.json", "agent.log", "agent.log.1", "agent.log.2", "agent.log.3", "agent.log.4", "agent.log.5", "agent.log.6", "agent-desktop.log", "agent-desktop.log.1", "agent-desktop.log.2", "agent-desktop.log.3", "agent-desktop.log.4", "agent-desktop.log.5", "agent-desktop.log.6", "plugins.zip")
 foreach ($Dir in $Dirs) {
     foreach ($f in $files) {
         $path = Join-Path $Dir $f

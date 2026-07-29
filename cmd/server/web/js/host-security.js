@@ -11,9 +11,286 @@ let hsPollTimer = null;
 let hsCfg = null;
 let hsShowCfg = false;
 let hsPendingFilter = null; // { level: open|critical|high } from security overview
+let hsPickSelected = new Set(); // toolbar multi-select
+let hsPickCollapsed = new Set();
+let hsPickQ = "";
+let hsPickInited = false;
+let hsCfgPickSelected = new Set(); // schedule config multi-select
+let hsCfgPickCollapsed = new Set();
+let hsCfgPickQ = "";
+let hsCfgPickInited = false;
 
 const hsT = (k, fb) => I18N.t(k, fb);
 function hsEsc(s) { return typeof esc === "function" ? esc(String(s ?? "")) : String(s ?? ""); }
+
+function hsHostIP(h) {
+  if (!h) return "";
+  return String(h.ip || h.agent_ip || h.primary_ip || "").trim();
+}
+function hsHostTitle(h) {
+  const name = (h && (h.hostname || h.id)) || "";
+  const ip = hsHostIP(h);
+  return ip ? `${name} (${ip})` : name;
+}
+function hsCapturePick(kind) {
+  const root = kind === "cfg" ? $("hsCfgHostTree") : $("hsHostTree");
+  const set = kind === "cfg" ? hsCfgPickSelected : hsPickSelected;
+  if (!root) return;
+  root.querySelectorAll(".hs-pick-host:checked").forEach(cb => set.add(cb.value));
+  root.querySelectorAll(".hs-pick-host:not(:checked)").forEach(cb => set.delete(cb.value));
+}
+function hsInitPickDefaults(hosts) {
+  if (hsPickInited) return;
+  hsPickInited = true;
+  const online = (hosts || []).filter(h => h.online !== false);
+  (online.length ? online : hosts || []).forEach(h => { if (h && h.id) hsPickSelected.add(h.id); });
+}
+function hsInitCfgPickDefaults() {
+  if (hsCfgPickInited) return;
+  hsCfgPickInited = true;
+  const ids = (hsCfg && Array.isArray(hsCfg.host_ids)) ? hsCfg.host_ids : [];
+  hsCfgPickSelected = new Set(ids.filter(Boolean));
+}
+function hsHostsByFolder(hosts) {
+  const map = new Map();
+  (hosts || []).forEach(h => {
+    const fid = h.folder_id || "__ungrouped__";
+    if (!map.has(fid)) map.set(fid, []);
+    map.get(fid).push(h);
+  });
+  map.forEach(list => list.sort((a, b) => {
+    const an = (a.hostname || a.id || "").toLowerCase();
+    const bn = (b.hostname || b.id || "").toLowerCase();
+    if (an !== bn) return an < bn ? -1 : 1;
+    return hsHostIP(a).localeCompare(hsHostIP(b));
+  }));
+  return map;
+}
+function hsFilterHost(h, q) {
+  if (!q) return true;
+  const hay = [h.id, h.hostname, hsHostIP(h), h.os, h.platform, h.category, h.folder_path]
+    .filter(Boolean).join(" ").toLowerCase();
+  return hay.includes(q);
+}
+function hsPickFolderNodeHTML(node, byFolder, q, selected, collapsed, depth) {
+  const kids = node.children || [];
+  const own = (byFolder.get(node.id) || []).filter(h => hsFilterHost(h, q));
+  const childHTML = kids.map(c => hsPickFolderNodeHTML(c, byFolder, q, selected, collapsed, depth + 1)).join("");
+  const hasHosts = own.length > 0 || childHTML;
+  if (q && !hasHosts && !(node.name || "").toLowerCase().includes(q)) return "";
+  const isCollapsed = collapsed.has(node.id);
+  const hostIds = [];
+  const collect = (n) => {
+    (byFolder.get(n.id) || []).forEach(h => { if (hsFilterHost(h, q) && h.online !== false) hostIds.push(h.id); });
+    (n.children || []).forEach(collect);
+  };
+  collect(node);
+  const checkedN = hostIds.filter(id => selected.has(id)).length;
+  const folderState = !hostIds.length ? "" : (checkedN === hostIds.length ? "checked" : (checkedN > 0 ? "data-indeterminate=\"1\"" : ""));
+  const pad = Math.min(depth, 6) * 14;
+  let html = `<div class="hs-pick-folder" style="padding-left:${pad}px">
+    <button type="button" class="hs-pick-caret" data-hs-fold="${hsEsc(node.id)}" aria-expanded="${isCollapsed ? "false" : "true"}">${isCollapsed ? "▸" : "▾"}</button>
+    <label class="hs-pick-folder-lab">
+      <input type="checkbox" class="hs-pick-folder-cb" data-hs-folder="${hsEsc(node.id)}" ${folderState}>
+      <span class="hs-pick-folder-name">${hsEsc(node.name || node.id)}</span>
+      <span class="hs-pick-count">${own.length || hostIds.length}</span>
+    </label>
+  </div>`;
+  if (!isCollapsed) {
+    html += own.map(h => hsPickHostRowHTML(h, selected, depth + 1)).join("");
+    html += childHTML;
+  }
+  return html;
+}
+function hsPickHostRowHTML(h, selected, depth) {
+  const online = h.online !== false;
+  const ip = hsHostIP(h);
+  const pad = Math.min(depth, 6) * 14;
+  return `<label class="hs-pick-row${online ? "" : " off"}${selected.has(h.id) && online ? " is-on" : ""}" style="padding-left:${pad + 22}px" title="${hsEsc(hsHostTitle(h))}">
+    <input type="checkbox" class="hs-pick-host" value="${hsEsc(h.id)}" ${online ? "" : "disabled"} ${selected.has(h.id) ? "checked" : ""}>
+    <span class="hs-pick-name">${hsEsc(h.hostname || h.id)}</span>
+    <span class="hs-pick-ip mono">${hsEsc(ip || "—")}</span>
+    <span class="hs-pick-st ${online ? "ok" : ""}"><i class="hs-pick-dot" aria-hidden="true"></i>${online ? hsEsc(hsT("hs.online", "在线")) : hsEsc(hsT("hs.offline", "离线"))}</span>
+  </label>`;
+}
+function hsPickTreeHTML(opts) {
+  const kind = opts.kind || "scan";
+  const hosts = opts.hosts || [];
+  const selected = opts.selected || new Set();
+  const collapsed = opts.collapsed || new Set();
+  const q = (opts.q || "").trim().toLowerCase();
+  const treeId = kind === "cfg" ? "hsCfgHostTree" : "hsHostTree";
+  const searchId = kind === "cfg" ? "hsCfgHostSearch" : "hsHostSearch";
+  const folders = (typeof HOST_FOLDERS !== "undefined" && HOST_FOLDERS && HOST_FOLDERS.folders) ? HOST_FOLDERS.folders : [];
+  const byFolder = hsHostsByFolder(hosts);
+  const filtered = q ? hosts.filter(h => hsFilterHost(h, q)) : hosts;
+  const onlineN = filtered.filter(h => h.online !== false).length;
+  const selN = [...selected].filter(id => filtered.some(h => h.id === id)).length;
+  let body = "";
+  if (!hosts.length) {
+    body = `<div class="hs-pick-empty">${hsEsc(hsT("hs.no_hosts", "暂无主机"))}</div>`;
+  } else if (!filtered.length) {
+    body = `<div class="hs-pick-empty">${hsEsc(hsT("hs.no_host_match", "无匹配主机"))}</div>`;
+  } else if (folders.length) {
+    body = folders.map(n => hsPickFolderNodeHTML(n, byFolder, q, selected, collapsed, 0)).join("");
+    const ug = (byFolder.get("__ungrouped__") || []).filter(h => hsFilterHost(h, q));
+    if (ug.length) {
+      const fake = { id: "__ungrouped__", name: hsT("hs.ungrouped", "未分组"), children: [] };
+      body += hsPickFolderNodeHTML(fake, byFolder, q, selected, collapsed, 0);
+    }
+  } else {
+    // Fallback: group by category / flat list
+    const byCat = new Map();
+    filtered.forEach(h => {
+      const c = (h.category || "").trim() || hsT("hs.ungrouped", "未分组");
+      if (!byCat.has(c)) byCat.set(c, []);
+      byCat.get(c).push(h);
+    });
+    [...byCat.keys()].sort().forEach(cat => {
+      const list = byCat.get(cat);
+      const fid = "cat:" + cat;
+      const isCollapsed = collapsed.has(fid);
+      const ids = list.filter(h => h.online !== false).map(h => h.id);
+      const checkedN = ids.filter(id => selected.has(id)).length;
+      const folderState = !ids.length ? "" : (checkedN === ids.length ? "checked" : (checkedN > 0 ? "data-indeterminate=\"1\"" : ""));
+      body += `<div class="hs-pick-folder">
+        <button type="button" class="hs-pick-caret" data-hs-fold="${hsEsc(fid)}" aria-expanded="${isCollapsed ? "false" : "true"}">${isCollapsed ? "▸" : "▾"}</button>
+        <label class="hs-pick-folder-lab">
+          <input type="checkbox" class="hs-pick-folder-cb" data-hs-folder="${hsEsc(fid)}" ${folderState}>
+          <span class="hs-pick-folder-name">${hsEsc(cat)}</span>
+          <span class="hs-pick-count">${list.length}</span>
+        </label>
+      </div>`;
+      if (!isCollapsed) body += list.map(h => hsPickHostRowHTML(h, selected, 1)).join("");
+    });
+  }
+  return `<div class="hs-pick-tree-wrap" data-hs-pick="${hsEsc(kind)}">
+    <div class="hs-pick-tools">
+      <input type="search" id="${searchId}" class="hs-pick-search" value="${hsEsc(opts.q || "")}" placeholder="${hsEsc(hsT("hs.host_search_ph", "搜索主机名 / IP / 分组…"))}" autocomplete="off">
+      <div class="hs-pick-quick">
+        <button type="button" class="btn sm ghost" data-hs-pick-act="all-online" data-kind="${hsEsc(kind)}">${hsEsc(hsT("hs.select_all_online", "全选在线"))}</button>
+        <button type="button" class="btn sm ghost" data-hs-pick-act="clear" data-kind="${hsEsc(kind)}">${hsEsc(hsT("hs.clear_sel", "清空"))}</button>
+        <span class="hs-pick-meta">${selN}/${onlineN || filtered.length}</span>
+      </div>
+    </div>
+    <div class="hs-pick-tree" id="${treeId}">${body}</div>
+  </div>`;
+}
+function hsBindPickTree(root) {
+  if (!root) return;
+  root.querySelectorAll(".hs-pick-folder-cb[data-indeterminate]").forEach(cb => { cb.indeterminate = true; });
+  root.querySelectorAll("[data-hs-fold]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      const id = btn.dataset.hsFold;
+      const kind = root.dataset.hsPick || "scan";
+      const collapsed = kind === "cfg" ? hsCfgPickCollapsed : hsPickCollapsed;
+      if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+      hsCapturePick(kind);
+      if (kind === "cfg") hsCfgPickQ = ($("hsCfgHostSearch") && $("hsCfgHostSearch").value) || hsCfgPickQ;
+      else hsPickQ = ($("hsHostSearch") && $("hsHostSearch").value) || hsPickQ;
+      paintHostSecurity();
+    });
+  });
+  root.querySelectorAll(".hs-pick-folder-cb").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const kind = root.dataset.hsPick || "scan";
+      const selected = kind === "cfg" ? hsCfgPickSelected : hsPickSelected;
+      const folderId = cb.dataset.hsFolder;
+      const tree = kind === "cfg" ? $("hsCfgHostTree") : $("hsHostTree");
+      if (!tree) return;
+      // Toggle visible online hosts under this folder block until next folder at same/lower depth — simpler: all hosts currently listed that belong to folder
+      const ids = hsFolderMemberIds(folderId, kind);
+      ids.forEach(id => { if (cb.checked) selected.add(id); else selected.delete(id); });
+      if (kind === "cfg") hsCfgPickQ = ($("hsCfgHostSearch") && $("hsCfgHostSearch").value) || "";
+      else hsPickQ = ($("hsHostSearch") && $("hsHostSearch").value) || "";
+      paintHostSecurity();
+    });
+  });
+  const search = root.querySelector(".hs-pick-search");
+  if (search) {
+    search.addEventListener("input", () => {
+      const kind = root.dataset.hsPick || "scan";
+      hsCapturePick(kind);
+      if (kind === "cfg") hsCfgPickQ = search.value || "";
+      else hsPickQ = search.value || "";
+      paintHostSecurity();
+      const again = $(kind === "cfg" ? "hsCfgHostSearch" : "hsHostSearch");
+      if (again) { again.focus(); const v = again.value; again.setSelectionRange(v.length, v.length); }
+    });
+  }
+  root.querySelectorAll("[data-hs-pick-act]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const kind = btn.dataset.kind || "scan";
+      const selected = kind === "cfg" ? hsCfgPickSelected : hsPickSelected;
+      hsCapturePick(kind);
+      if (btn.dataset.hsPickAct === "clear") selected.clear();
+      else {
+        const pool = (hsHosts || []).filter(h => h.online !== false);
+        pool.forEach(h => selected.add(h.id));
+      }
+      paintHostSecurity();
+    });
+  });
+  root.querySelectorAll(".hs-pick-host").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const kind = root.dataset.hsPick || "scan";
+      const selected = kind === "cfg" ? hsCfgPickSelected : hsPickSelected;
+      if (cb.checked) selected.add(cb.value); else selected.delete(cb.value);
+      const meta = root.querySelector(".hs-pick-meta");
+      if (meta) {
+        const onlineN = (hsHosts || []).filter(h => h.online !== false).length;
+        meta.textContent = `${selected.size}/${onlineN}`;
+      }
+      if (kind === "scan") {
+        const chip = document.querySelector("#hostSecurityPanel .sec-sel-chip");
+        if (chip) chip.textContent = `${hsSelectedScanIds().length} ${hsT("hs.selected_n", "已选")}`;
+      }
+      root.querySelectorAll(".hs-pick-row").forEach(row => {
+        const input = row.querySelector(".hs-pick-host");
+        if (input) row.classList.toggle("is-on", !!input.checked && !input.disabled);
+      });
+    });
+  });
+}
+function hsFolderMemberIds(folderId, kind) {
+  const q = ((kind === "cfg" ? hsCfgPickQ : hsPickQ) || "").trim().toLowerCase();
+  const hosts = hsHosts || [];
+  if (folderId === "__ungrouped__") {
+    return hosts.filter(h => !h.folder_id && hsFilterHost(h, q) && h.online !== false).map(h => h.id);
+  }
+  if (String(folderId).startsWith("cat:")) {
+    const cat = folderId.slice(4);
+    const un = hsT("hs.ungrouped", "未分组");
+    return hosts.filter(h => {
+      const c = (h.category || "").trim() || un;
+      return c === cat && hsFilterHost(h, q) && h.online !== false;
+    }).map(h => h.id);
+  }
+  // folder + descendants
+  const folders = (typeof HOST_FOLDERS !== "undefined" && HOST_FOLDERS && HOST_FOLDERS.folders) ? HOST_FOLDERS.folders : [];
+  const ids = new Set();
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      if (n.id === folderId) {
+        const mark = (x) => {
+          ids.add(x.id);
+          (x.children || []).forEach(mark);
+        };
+        mark(n);
+        return true;
+      }
+      if (walk(n.children || [])) return true;
+    }
+    return false;
+  };
+  walk(folders);
+  return hosts.filter(h => ids.has(h.folder_id) && hsFilterHost(h, q) && h.online !== false).map(h => h.id);
+}
+function hsSelectedScanIds() {
+  hsCapturePick("scan");
+  return [...hsPickSelected].filter(id => (hsHosts || []).some(h => h.id === id));
+}
 
 function hsLevelLabel(level) {
   const m = {
@@ -375,6 +652,9 @@ async function renderHostSecurity() {
       hosts = (window._cachedHosts && window._cachedHosts.length) ? window._cachedHosts : [];
     }
     hsHosts = Array.isArray(hosts) ? hosts : [];
+    if (typeof loadHostFolders === "function") {
+      try { await loadHostFolders(); } catch (_) {}
+    }
     const [sum, scans, cfg] = await Promise.all([
       hsFetchJSON(`${API}/security/host/summary`),
       hsFetchJSON(`${API}/security/host/scans?limit=40`),
@@ -397,7 +677,6 @@ async function renderHostSecurity() {
 function paintHostSecurity() {
   const el = $("hostSecurityPanel");
   if (!el) return;
-  const online = hsHosts.filter(h => h.online !== false);
   const crit = hsSummary.filter(h => h.risk === "critical" || h.risk === "crit").length;
   const high = hsSummary.filter(h => h.risk === "high").length;
   const running = hsScans.filter(s => s.status === "running").length;
@@ -412,39 +691,41 @@ function paintHostSecurity() {
     <div class="sec-metric"><b>${running}</b><span>${hsEsc(hsT("hs.stat_running", "进行中"))}</span></div>
   </div>`;
 
-  html += `<div class="sec-toolbar hs-toolbar">
-    <div class="hs-host-pick">
-      <label>${hsEsc(hsT("hs.host", "主机"))}</label>
-      <select id="hsHostSelect" class="nf-select" multiple size="3">`;
-  if (!online.length && !hsHosts.length) {
-    html += `<option value="" disabled>${hsEsc(hsT("hs.no_hosts", "暂无主机"))}</option>`;
-  } else {
-    (online.length ? online : hsHosts).forEach(h => {
-      const off = h.online === false ? ` (${hsT("hs.offline", "离线")})` : "";
-      html += `<option value="${hsEsc(h.id)}">${hsEsc(h.hostname || h.id)}${hsEsc(off)}</option>`;
-    });
-  }
-  html += `</select></div>
-    <div class="sec-toolbar-actions">
-      <button class="btn primary" data-hs="scan" ${hsBusy ? "disabled" : ""}>${hsEsc(hsT("hs.scan", "扫描选中"))}</button>
-      <button class="btn" data-hs="refresh">${hsEsc(hsT("common.refresh", "刷新"))}</button>
-      ${typeof isAdmin === "function" && isAdmin() ? `<button class="btn" data-hs="cfg">${hsEsc(hsT("hs.config", "定时"))}</button>` : ""}
-      <button class="btn nf-ai-btn" data-hs="ai-diag" title="${hsEsc(hsT("hs.ai_diag_tip", "研判风险、优先级与疑似误报"))}">${hsEsc(hsT("hs.ai_diag", "AI 研判"))}</button>
-      <button class="btn nf-ai-btn" data-hs="ai-rem" title="${hsEsc(hsT("hs.ai_rem_tip", "生成可确认执行的修复动作计划"))}">${hsEsc(hsT("hs.ai_rem", "AI 修复"))}</button>
-      ${hsExportMenuHTML(false)}
+  hsCapturePick("scan");
+  hsInitPickDefaults(hsHosts);
+  const hsSelN = hsSelectedScanIds().length;
+  html += `<div class="sec-command">
+    <div class="sec-command-pick">
+      <div class="sec-command-label">
+        <span class="sec-command-title">${hsEsc(hsT("hs.host", "主机"))}</span>
+        <span class="sec-command-hint">${hsEsc(hsT("hs.host_pick_hint", "树形多选 · 显示主机名与 IP"))}</span>
+      </div>
+      ${hsPickTreeHTML({ kind: "scan", hosts: hsHosts, selected: hsPickSelected, collapsed: hsPickCollapsed, q: hsPickQ })}
+    </div>
+    <div class="sec-command-side">
+      <div class="sec-command-cta">
+        <button class="btn primary sec-scan-btn" data-hs="scan" ${hsBusy ? "disabled" : ""}>${hsEsc(hsT("hs.scan", "扫描选中"))}</button>
+        <span class="sec-sel-chip">${hsSelN} ${hsEsc(hsT("hs.selected_n", "已选"))}</span>
+      </div>
+      <div class="sec-command-tools">
+        <button class="btn ghost" data-hs="refresh">${hsEsc(hsT("common.refresh", "刷新"))}</button>
+        ${typeof isAdmin === "function" && isAdmin() ? `<button class="btn" data-hs="cfg">${hsEsc(hsT("hs.config", "定时"))}</button>` : ""}
+        <div class="act-menu act-menu-ai">
+          <button type="button" class="btn sm act-menu-trigger" aria-haspopup="true" aria-expanded="false"><span data-i18n="ui.ai_menu">AI</span><span class="act-menu-caret">▾</span></button>
+          <div class="act-menu-panel" hidden role="menu">
+            <div class="act-menu-hint">${hsEsc(hsT("hs.ai_menu_hint", "基于当前扫描详情"))}</div>
+            <button type="button" role="menuitem" data-hs="ai-diag">${hsEsc(hsT("hs.ai_diag", "AI 研判"))}<span class="act-menu-sub">${hsEsc(hsT("hs.ai_diag_tip", "研判风险、优先级与疑似误报"))}</span></button>
+            <button type="button" role="menuitem" data-hs="ai-rem">${hsEsc(hsT("hs.ai_rem", "AI 修复"))}<span class="act-menu-sub">${hsEsc(hsT("hs.ai_rem_tip", "生成可确认执行的修复动作计划"))}</span></button>
+          </div>
+        </div>
+        ${hsExportMenuHTML(false)}
+      </div>
     </div>
   </div>`;
 
   if (hsShowCfg && hsCfg) {
-    const schedHosts = new Set(hsCfg.host_ids || []);
     const sch = hsCfg.schedule || {};
-    let hostOpts = "";
-    (hsHosts || []).forEach(h => {
-      // Empty host_ids means "all online"; leave none selected so re-save keeps that meaning.
-      const sel = schedHosts.size > 0 && schedHosts.has(h.id) ? " selected" : "";
-      const off = h.online === false ? ` (${hsT("hs.offline", "离线")})` : "";
-      hostOpts += `<option value="${hsEsc(h.id)}"${sel}>${hsEsc(h.hostname || h.id)}${hsEsc(off)}</option>`;
-    });
+    hsInitCfgPickDefaults();
     html += `<div class="cfg-panel sec-cfg-panel">
       <div class="cfg-panel-head"><div class="cfg-panel-title">${hsEsc(hsT("hs.config_title", "主机扫描调度"))}</div>
         <span class="tag">${hsEsc(hsT("hs.admin_hint", "写入需管理员"))}</span></div>
@@ -492,8 +773,8 @@ function paintHostSecurity() {
             <div class="select-wrap"><select id="hsCfgWeekday">${hsWeekdayOpts(sch.weekday != null ? sch.weekday : 0)}</select></div></div>
         </div>
         <div class="field"><label>${hsEsc(hsT("hs.cfg_hosts", "定时扫描主机（可多选，不选表示全部在线主机）"))}</label>
-          <select id="hsCfgHosts" class="nf-select" multiple size="5" style="min-width:100%;min-height:96px">${hostOpts}</select>
-          <p class="ws-help">${hsEsc(hsT("hs.cfg_hosts_help", "修改后点保存即可生效；与上方「扫描选中主机」的临时选择相互独立。"))}</p>
+          ${hsPickTreeHTML({ kind: "cfg", hosts: hsHosts, selected: hsCfgPickSelected, collapsed: hsCfgPickCollapsed, q: hsCfgPickQ })}
+          <p class="ws-help">${hsEsc(hsT("hs.cfg_hosts_help", "修改后点保存即可生效；与上方「扫描选中主机」的临时选择相互独立。空选 = 全部在线主机。"))}</p>
         </div>
         <div class="cfg-actions"><button class="btn primary" data-hs="save-cfg">${hsEsc(hsT("common.save", "保存修改"))}</button>
           <button class="btn" data-hs="cfg">${hsEsc(hsT("common.cancel", "收起"))}</button>
@@ -615,6 +896,7 @@ function paintHostSecurity() {
     fimBox.addEventListener("change", syncFIMDiff);
     syncFIMDiff();
   }
+  document.querySelectorAll("#hostSecurityPanel .hs-pick-tree-wrap").forEach(hsBindPickTree);
   if (hsSelected) hsPaintDetail(hsSelected);
   else {
     const box = $("hsDetail");
@@ -639,7 +921,12 @@ function hsAction(act) {
     if (menu) menu.classList.toggle("show");
     return;
   }
-  if (act === "cfg") { hsShowCfg = !hsShowCfg; return paintHostSecurity(); }
+  if (act === "cfg") {
+    if (hsShowCfg) hsCapturePick("cfg");
+    hsShowCfg = !hsShowCfg;
+    if (hsShowCfg) { hsCfgPickInited = false; hsInitCfgPickDefaults(); }
+    return paintHostSecurity();
+  }
   if (act === "save-cfg") return hsSaveCfg();
 }
 
@@ -657,8 +944,8 @@ async function hsSaveCfg() {
   if (kind === "weekly") {
     schedule.weekday = parseInt(($("hsCfgWeekday") && $("hsCfgWeekday").value) || "0", 10) || 0;
   }
-  const hostSel = $("hsCfgHosts");
-  const hostIds = hostSel ? [...hostSel.selectedOptions].map(o => o.value).filter(Boolean) : ((hsCfg && hsCfg.host_ids) || []);
+  hsCapturePick("cfg");
+  const hostIds = [...hsCfgPickSelected].filter(id => (hsHosts || []).some(h => h.id === id));
   const body = {
     enabled: schedule.enabled,
     enable_clamav: !!($("hsCfgClam") && $("hsCfgClam").checked),
@@ -690,12 +977,14 @@ async function hsSaveCfg() {
 }
 
 async function hsRunScan() {
-  const sel = $("hsHostSelect");
-  if (!sel) return;
-  const ids = [...sel.selectedOptions].map(o => o.value).filter(Boolean);
+  let ids = hsSelectedScanIds();
   if (!ids.length) {
-    if (typeof toast === "function") toast(hsT("hs.pick_host", "请选择主机"), "err");
-    return;
+    ids = (hsHosts || []).filter(h => h.online !== false).map(h => h.id);
+    if (!ids.length) {
+      if (typeof toast === "function") toast(hsT("hs.pick_host", "请选择主机"), "err");
+      return;
+    }
+    if (typeof toast === "function") toast(hsT("hs.scan_all_online", "未勾选主机，将扫描全部在线主机"), "ok");
   }
   hsBusy = true;
   paintHostSecurity();
@@ -706,7 +995,7 @@ async function hsRunScan() {
     });
     const first = (d.results || []).find(x => x.scan);
     if (first && first.scan) hsSelected = first.scan;
-    if (typeof toast === "function") toast(hsT("hs.scan_started", "扫描已启动"), "ok");
+    if (typeof toast === "function") toast(hsT("hs.scan_started", "扫描已启动") + ` · ${ids.length}`, "ok");
   } catch (e) {
     if (typeof toast === "function") toast(String(e.message || e), "err");
   } finally {
@@ -716,13 +1005,9 @@ async function hsRunScan() {
 }
 
 function hsSoftRefresh() {
-  const sel = $("hsHostSelect");
-  const selected = sel ? [...sel.selectedOptions].map(o => o.value) : [];
+  hsCapturePick("scan");
+  if (hsShowCfg) hsCapturePick("cfg");
   paintHostSecurity();
-  const sel2 = $("hsHostSelect");
-  if (sel2 && selected.length) {
-    [...sel2.options].forEach(o => { o.selected = selected.includes(o.value); });
-  }
   if (hsSelected) hsPaintDetail(hsSelected);
 }
 
@@ -782,8 +1067,13 @@ function hsPaintDetail(scan, opts) {
     </div>
     <div class="hs-detail-actions">
       ${hsStatusBadge(scan.status)}
-      ${canExport ? `<button class="btn sm nf-ai-btn" data-hs="ai-diag">${hsEsc(hsT("hs.ai_diag", "AI 研判"))}</button>
-      <button class="btn sm nf-ai-btn" data-hs="ai-rem">${hsEsc(hsT("hs.ai_rem", "AI 修复"))}</button>
+      ${canExport ? `<div class="act-menu act-menu-ai">
+        <button type="button" class="btn sm act-menu-trigger" aria-haspopup="true" aria-expanded="false">AI<span class="act-menu-caret">▾</span></button>
+        <div class="act-menu-panel" hidden role="menu">
+          <button type="button" role="menuitem" data-hs="ai-diag">${hsEsc(hsT("hs.ai_diag", "AI 研判"))}</button>
+          <button type="button" role="menuitem" data-hs="ai-rem">${hsEsc(hsT("hs.ai_rem", "AI 修复"))}</button>
+        </div>
+      </div>
       <button class="btn sm primary" data-hs="export-toggle">${hsEsc(hsT("hs.export", "导出报告"))}</button>` : ""}
     </div></div>`;
   if (scan.error) html += `<div class="sec-error-box">${hsEsc(scan.error)}</div>`;

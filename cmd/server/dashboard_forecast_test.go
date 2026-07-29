@@ -279,3 +279,56 @@ func TestRobustForecastJitteryNotSawtooth(t *testing.T) {
 		t.Fatalf("预测疑似触顶平台: topFlat=%d/%d method=%s", topFlat, len(band), method)
 	}
 }
+
+func TestRobustForecastShortSpanAllowed(t *testing.T) {
+	now := time.Now().Unix()
+	step := int64(30)
+	hist := make([][2]float64, 0, 10)
+	for i := 0; i < 10; i++ {
+		hist = append(hist, [2]float64{float64(now - int64(10-i)*step), 40 + float64(i)})
+	}
+	band, _, _, method, errMsg := robustForecast(hist, now, 1800, step)
+	if errMsg != "" {
+		t.Fatalf("short span should forecast: %s", errMsg)
+	}
+	if len(band) < 2 {
+		t.Fatalf("expected future points, method=%s", method)
+	}
+	if band[len(band)-1].TS <= float64(now) {
+		t.Fatalf("forecast should extend past now")
+	}
+}
+
+func TestRobustForecastMonotonicDiskPrefersDrift(t *testing.T) {
+	now := time.Now().Unix()
+	step := int64(300)
+	hist := make([][2]float64, 0, 48)
+	for i := 0; i < 48; i++ {
+		// 磁盘占用缓慢单调上升（带极小噪声）
+		v := 62.0 + float64(i)*0.35 + float64((i%5)-2)*0.02
+		hist = append(hist, [2]float64{float64(now - int64(48-i)*step), v})
+	}
+	vals := make([]float64, len(hist))
+	for i, p := range hist {
+		vals[i] = p[1]
+	}
+	prof := profileSeries(vals)
+	if !prof.monotonicUp {
+		t.Fatalf("expected monotonicUp for disk-like series, got %+v", prof)
+	}
+	band, _, _, method, errMsg := robustForecast(hist, now, 24*step, step)
+	if errMsg != "" {
+		t.Fatal(errMsg)
+	}
+	if method == "flat" {
+		t.Fatalf("单调磁盘序列不应选 flat，method=%s", method)
+	}
+	if len(band) < 4 {
+		t.Fatal("empty band")
+	}
+	lastHist := hist[len(hist)-1][1]
+	lastFC := band[len(band)-1].Value
+	if lastFC <= lastHist+0.5 {
+		t.Fatalf("存储外推应继续上升: hist=%.2f fc=%.2f method=%s", lastHist, lastFC, method)
+	}
+}

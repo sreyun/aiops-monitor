@@ -100,12 +100,29 @@ func mysqlExplainInSchema(c MySQLConnection, schema, query string) (map[string]a
 	if sqltoolkit.ForbiddenWrite(query) {
 		return nil, fmt.Errorf("拒绝执行写操作或危险语句")
 	}
+	prepared, prepNotes := sqltoolkit.PrepareSQLForExplain(query, dialectForConn(c))
+	if prepared != "" {
+		query = prepared
+	}
+	attachPrep := func(err error) (map[string]any, error) {
+		body := map[string]any{}
+		if len(prepNotes) > 0 {
+			body["prepare_notes"] = prepNotes
+		}
+		if prepared != "" {
+			body["prepared_sql"] = prepared
+		}
+		if err != nil {
+			body["error"] = err.Error()
+		}
+		return body, err
+	}
 	kw := sqltoolkit.FirstKeyword(query)
 	if kw != "select" && kw != "with" && kw != "explain" {
-		return nil, fmt.Errorf("EXPLAIN 仅允许 SELECT / WITH / EXPLAIN 语句")
+		return attachPrep(fmt.Errorf("EXPLAIN 仅允许 SELECT / WITH / EXPLAIN 语句"))
 	}
 	if !sqltoolkit.IsReadOnlyQuery(query) {
-		return nil, fmt.Errorf("仅允许单条只读查询")
+		return attachPrep(fmt.Errorf("仅允许单条只读查询"))
 	}
 	explainSQL := query
 	if kw != "explain" {
@@ -118,29 +135,73 @@ func mysqlExplainInSchema(c MySQLConnection, schema, query string) (map[string]a
 
 	if schema != "" {
 		if !reSafeIdent.MatchString(schema) {
-			return nil, fmt.Errorf("非法库名")
+			return attachPrep(fmt.Errorf("非法库名"))
 		}
 		c.Database = schema
 	}
 	db, err := mysqlOpen(c)
 	if err != nil {
-		return nil, err
+		return attachPrep(err)
 	}
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if schema != "" {
+		if _, err := db.ExecContext(ctx, "USE `"+schema+"`"); err != nil {
+			return attachPrep(fmt.Errorf("无法切换到库 %s: %w（请确认库名正确且账号有权限）", schema, err))
+		}
+	}
 	var raw string
 	if err := db.QueryRowContext(ctx, explainSQL).Scan(&raw); err != nil {
-		return nil, fmt.Errorf("EXPLAIN 失败: %w", err)
+		msg := err.Error()
+		low := strings.ToLower(msg)
+		if schema == "" && (strings.Contains(low, "no database selected") || strings.Contains(low, "1046")) {
+			return attachPrep(fmt.Errorf("未指定数据库：实例上有多个库时，请先选择 Schema，或从慢 SQL 填入（会自动带库名）后再 EXPLAIN"))
+		}
+		return attachPrep(fmt.Errorf("EXPLAIN 失败: %w", err))
 	}
 	var parsed any
 	_ = json.Unmarshal([]byte(raw), &parsed)
 	analysis := analyzeExplainJSON(raw)
-	return map[string]any{
+	out := map[string]any{
 		"explain_json": parsed,
 		"raw":          raw,
 		"analysis":     analysis,
-	}, nil
+	}
+	if len(prepNotes) > 0 {
+		out["prepare_notes"] = prepNotes
+		out["prepared_sql"] = query
+	}
+	attachExplainAdvice(out, c, schema, query, analysis)
+	return out, nil
+}
+
+// mysqlListBusinessDatabases returns non-system schemas on the instance.
+func mysqlListBusinessDatabases(c MySQLConnection) ([]string, error) {
+	db, err := mysqlOpen(c)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, "SHOW DATABASES")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		if mysqlSystemSchema(name) {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
 }
 
 // mysqlExecDDL runs a narrowly-whitelisted index DDL with a short timeout.
@@ -236,9 +297,21 @@ func walkExplain(node map[string]any, hits *[]sqltoolkit.ExplainHit) {
 			AccessType:   fmt.Sprint(t["access_type"]),
 			Key:          fmt.Sprint(t["key"]),
 			PossibleKeys: joinAny(t["possible_keys"]),
+			Ref:          joinAny(t["ref"]),
+		}
+		if kl, ok := t["key_length"]; ok && kl != nil {
+			h.KeyLength = fmt.Sprint(kl)
+		}
+		if cond, ok := t["attached_condition"]; ok && cond != nil {
+			h.Condition = fmt.Sprint(cond)
 		}
 		h.Rows, _ = toFloat(t["rows"])
 		h.Filtered, _ = toFloat(t["filtered"])
+		if cost, ok := t["cost_info"].(map[string]any); ok {
+			rc, _ := toFloat(cost["read_cost"])
+			ec, _ := toFloat(cost["eval_cost"])
+			h.Cost = rc + ec
+		}
 		if ui, ok := t["using_index"].(bool); ok {
 			h.UsingIndex = ui
 		}

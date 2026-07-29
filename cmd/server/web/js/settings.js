@@ -460,18 +460,60 @@ function updateTokenDisplay() {
   el.value = maskToken(INSTALL.token || "");
   el.dataset.revealed = TOKEN_REVEALED ? "1" : "0";
 }
+function unixToDatetimeLocal(sec) {
+  const n = parseInt(sec, 10) || 0;
+  if (n <= 0) return "";
+  const d = new Date(n * 1000);
+  if (isNaN(d.getTime())) return "";
+  const pad = (x) => String(x).padStart(2, "0");
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+    "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function datetimeLocalToUnix(val) {
+  const s = String(val || "").trim();
+  if (!s) return 0;
+  const t = Date.parse(s);
+  if (isNaN(t)) return 0;
+  return Math.floor(t / 1000);
+}
+function syncInstallTokenPolicyBadge(info) {
+  const badge = $("installTokenPolicyBadge");
+  if (!badge) return;
+  if (info && info.revoked) {
+    badge.textContent = I18N.t("install.token_revoked_badge", "已吊销");
+    badge.classList.add("off");
+    return;
+  }
+  badge.classList.remove("off");
+  const uses = (info && info.max_uses > 0)
+    ? I18N.t("install.token_uses_limited", "限 {n} 次").replace("{n}", String(info.max_uses))
+    : I18N.t("install.token_uses_unlimited", "不限次数");
+  const exp = (info && info.expires_at > 0)
+    ? I18N.t("install.token_expires_at", "过期 {t}").replace("{t}", new Date(info.expires_at * 1000).toLocaleString())
+    : I18N.t("install.token_never_expires", "永不过期");
+  badge.textContent = uses + " · " + exp;
+}
+function collapseInstallTokenPolicy() {
+  const body = $("installTokenPolicyBody"), caret = $("installTokenPolicyCaret");
+  const head = $("installTokenPolicyToggle");
+  if (body) body.style.display = "none";
+  if (caret) caret.textContent = "▸";
+  if (head) head.setAttribute("aria-expanded", "false");
+}
 function renderInstallTokenMeta(info) {
   const el = $("installTokenMeta");
   if (!el || !info) return;
   const parts = [];
-  if (info.revoked) parts.push("状态：已吊销");
-  else parts.push("状态：有效");
-  parts.push(`已用 ${info.use_count || 0}` + (info.max_uses > 0 ? ` / ${info.max_uses}` : " 次（不限）"));
-  if (info.expires_at > 0) parts.push("过期：" + new Date(info.expires_at * 1000).toLocaleString());
-  if (info.prev_valid_until > 0) parts.push("旧 Token 宽限至 " + new Date(info.prev_valid_until * 1000).toLocaleString());
+  if (info.revoked) parts.push(I18N.t("install.token_status_revoked", "状态：已吊销"));
+  else parts.push(I18N.t("install.token_status_valid", "状态：有效"));
+  parts.push(I18N.t("install.token_used", "已用 {n}").replace("{n}", String(info.use_count || 0)) +
+    (info.max_uses > 0 ? ` / ${info.max_uses}` : I18N.t("install.token_used_unlimited", " 次（不限）")));
+  if (info.expires_at > 0) parts.push(I18N.t("install.token_expires_prefix", "过期：") + new Date(info.expires_at * 1000).toLocaleString());
+  if (info.prev_valid_until > 0) parts.push(I18N.t("install.token_grace", "旧 Token 宽限至 ") + new Date(info.prev_valid_until * 1000).toLocaleString());
   el.textContent = parts.join(" · ");
   if ($("installTokenMaxUses")) $("installTokenMaxUses").value = info.max_uses || 0;
-  if ($("installTokenExpiresAt")) $("installTokenExpiresAt").value = info.expires_at || 0;
+  if ($("installTokenExpiresAt")) $("installTokenExpiresAt").value = unixToDatetimeLocal(info.expires_at || 0);
+  syncInstallTokenPolicyBadge(info);
 }
 async function openInstall() {
   try {
@@ -485,6 +527,7 @@ async function openInstall() {
     if (normalRadio) normalRadio.checked = true;
     renderInstallCmd();
     $("installMask").classList.add("show");
+    collapseInstallTokenPolicy();
     loadAgentAutoUpdatePolicy();
   } catch (e) { toast(I18N.t("toast.read_install_failed") + e, "err"); }
 }
@@ -733,7 +776,16 @@ function renderRelayCmd() {
     : `curl -fsSL "${relay}/uninstall.sh" | sh`;
 }
 async function resetToken() {
-  if (!confirm(I18N.t("install.reset_warning"))) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("install.reset_title", "重置安装 Token"),
+        message: I18N.t("install.reset_warning"),
+        detail: I18N.t("install.reset_detail", "仅影响新 Agent 注册；已装 Agent 靠机器指纹鉴权，不受影响。"),
+        confirmText: I18N.t("install.reset_confirm", "重置 Token"),
+        tone: "warn"
+      })
+    : confirm(I18N.t("install.reset_warning"));
+  if (!ok) return;
   try {
     const j = await fetch(`${API}/install/reset-token`, { method: "POST" }).then(r => r.json());
     INSTALL.token = j.token; INSTALL.revoked = false; INSTALL.use_count = 0;
@@ -742,28 +794,37 @@ async function resetToken() {
   } catch (e) { toast(I18N.t("toast.reset_failed2") + e, "err"); }
 }
 async function revokeInstallToken() {
-  if (!confirm("确定吊销当前安装 Token？新 Agent 将无法用该 Token 注册；已注册 Agent 不受影响。可再点重置生成新 Token。")) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("install.revoke_title", "吊销安装 Token"),
+        message: I18N.t("install.revoke_warning", "确定吊销当前安装 Token？新 Agent 将无法用该 Token 注册。"),
+        detail: I18N.t("install.revoke_detail", "已注册 Agent 不受影响。可再点重置生成新 Token。"),
+        confirmText: I18N.t("install.revoke_confirm", "吊销 Token"),
+        tone: "danger"
+      })
+    : confirm(I18N.t("install.revoke_warning", "确定吊销当前安装 Token？新 Agent 将无法用该 Token 注册；已注册 Agent 不受影响。可再点重置生成新 Token。"));
+  if (!ok) return;
   try {
     const r = await fetch(`${API}/install/revoke-token`, { method: "POST" });
-    if (!r.ok) { toast("吊销失败", "err"); return; }
+    if (!r.ok) { toast(I18N.t("install.revoke_failed", "吊销失败"), "err"); return; }
     INSTALL.revoked = true; renderInstallTokenMeta(INSTALL);
-    toast("安装 Token 已吊销", "ok");
-  } catch (e) { toast("吊销失败: " + e, "err"); }
+    toast(I18N.t("install.revoke_ok", "安装 Token 已吊销"), "ok");
+  } catch (e) { toast(I18N.t("install.revoke_failed", "吊销失败") + ": " + e, "err"); }
 }
 async function saveInstallTokenPolicy() {
   const body = {
     max_uses: parseInt(($("installTokenMaxUses") || {}).value, 10) || 0,
-    expires_at: parseInt(($("installTokenExpiresAt") || {}).value, 10) || 0,
+    expires_at: datetimeLocalToUnix(($("installTokenExpiresAt") || {}).value),
   };
   try {
     const r = await fetch(`${API}/install/token-policy`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    if (!r.ok) { toast("保存策略失败", "err"); return; }
+    if (!r.ok) { toast(I18N.t("install.policy_save_failed", "保存策略失败"), "err"); return; }
     INSTALL.max_uses = body.max_uses; INSTALL.expires_at = body.expires_at;
     renderInstallTokenMeta(INSTALL);
-    toast("Token 策略已保存", "ok");
-  } catch (e) { toast("保存失败: " + e, "err"); }
+    toast(I18N.t("install.policy_saved", "Token 策略已保存"), "ok");
+  } catch (e) { toast(I18N.t("install.policy_save_failed", "保存失败") + ": " + e, "err"); }
 }
 
 /* ---------- 自定义监控 ---------- */

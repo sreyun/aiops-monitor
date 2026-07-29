@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -15,20 +14,18 @@ import (
 	"aiops-monitor/cmd/server/sqltoolkit"
 )
 
-const sqlHistoryMaxPerUser = 50
-
-var (
-	reSQLStringSingle = regexp.MustCompile(`'([^']|\\')*'`)
-	reSQLStringDouble = regexp.MustCompile(`"([^"]|\\")*"`)
-	reSQLLongNumber   = regexp.MustCompile(`\b\d{4,}\b`)
+const (
+	sqlHistoryMaxPerUser = 50
+	// Keep full SQL for reopen/EXPLAIN; only clamp pathological pastes.
+	sqlHistoryMaxRunes = 65536
 )
 
-// SQLQueryHistoryEntry is one desensitized analyze/query record for a user.
+// SQLQueryHistoryEntry is one analyze/query record for a user (full SQL, not masked).
 type SQLQueryHistoryEntry struct {
 	ID           string `json:"id"`
 	User         string `json:"user"`
 	ConnectionID string `json:"connection_id,omitempty"`
-	Kind         string `json:"kind"` // analyze|audit|explain|optimize|beautify
+	Kind         string `json:"kind"` // analyze|audit|explain|optimize|beautify|query
 	SQL          string `json:"sql"`
 	Score        *int   `json:"score,omitempty"`
 	CreatedAt    int64  `json:"created_at"`
@@ -81,15 +78,9 @@ func (m *sqlQueryHistoryManager) saveLocked() {
 	_ = os.Rename(tmp, m.path())
 }
 
-func desensitizeSQL(sql string) string {
-	sql = strings.TrimSpace(sql)
-	if sql == "" {
-		return ""
-	}
-	sql = reSQLStringSingle.ReplaceAllString(sql, "'?'")
-	sql = reSQLStringDouble.ReplaceAllString(sql, `"?"`)
-	sql = reSQLLongNumber.ReplaceAllString(sql, "?")
-	return truncateRunes(sql, 500)
+// storeSQLForHistory keeps literals intact so operators can reopen and re-run.
+func storeSQLForHistory(sql string) string {
+	return truncateRunes(strings.TrimSpace(sql), sqlHistoryMaxRunes)
 }
 
 func (m *sqlQueryHistoryManager) append(user, kind, connID, sqlText string, score *int) SQLQueryHistoryEntry {
@@ -106,7 +97,7 @@ func (m *sqlQueryHistoryManager) append(user, kind, connID, sqlText string, scor
 		User:         user,
 		ConnectionID: strings.TrimSpace(connID),
 		Kind:         kind,
-		SQL:          desensitizeSQL(sqlText),
+		SQL:          storeSQLForHistory(sqlText),
 		Score:        score,
 		CreatedAt:    time.Now().Unix(),
 	}

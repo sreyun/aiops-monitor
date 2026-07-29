@@ -95,7 +95,9 @@ func defaultDiskPath() string {
 }
 
 func main() {
-	slog.SetDefault(slog.New(newAgentTextHandler(os.Stderr)))
+	// Prefer WriteConsoleW on an attached Windows console so UTF-8 Chinese slog
+	// lines are not visually duplicated under CP 65001 WriteFile quirks.
+	slog.SetDefault(slog.New(newAgentTextHandler(shared.NewConsoleAwareWriter(os.Stderr))))
 	// LocalSystem services often inherit a truncated/empty Path; repair once so
 	// every child (remote terminal, playbooks) can resolve ipconfig/chcp/…
 	ensureWindowsProcessPath()
@@ -277,11 +279,10 @@ func main() {
 	// The working directory belongs to whoever started us (the Windows SCM uses
 	// System32), so relative paths must be anchored to the install dir instead.
 	resolveConfigRelativePaths(&cfg, cfgPath)
-	// Service / desktop-worker stderr goes nowhere on Windows. Without a log file
-	// a failing service is completely silent: no host in the dashboard and no
-	// evidence anywhere on the machine. Interactive / per-user Win10/11 installs
-	// also hide the console (VBS/Run key), so always mirror logs on Windows.
-	if svcRun || desktopWorker || runtime.GOOS == "windows" {
+	// Mirror slog into the install directory on every OS. Services / hidden
+	// consoles discard stderr; journald/launchd alone is easy to miss on site.
+	// Retention: 7 × 10 MiB rolling files under the config/install directory.
+	{
 		name := "agent.log"
 		if desktopWorker {
 			name = "agent-desktop.log"

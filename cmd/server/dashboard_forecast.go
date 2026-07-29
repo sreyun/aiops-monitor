@@ -211,7 +211,7 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）", bestMethod, bestMAPE)
 			} else if meta.Message == "" {
 				meta.OK = false
-				meta.Message = "数据不足，暂无法预测（至少需要约 8 个采样点）"
+				meta.Message = "数据不足，暂无法预测（至少需要约 4 个采样点）"
 			}
 		}
 	}
@@ -313,6 +313,7 @@ type seriesProfile struct {
 	bursty     bool    // 稀疏尖刺（磁盘 IO 等），适合平滑后的形态回放
 	jittery    bool    // 密集高频抖动（连接数等），禁止锯齿回放
 	stationary bool    // 低趋势低季节 → 才适合偏 flat
+	monotonicUp bool   // 稳态单调上升（磁盘占用、容量类），偏向近线性外推
 }
 
 func profileSeries(vals []float64) seriesProfile {
@@ -362,6 +363,27 @@ func profileSeries(vals []float64) seriesProfile {
 		p.jittery = p.lag1 < 0.55 || (std > 1e-9 && stepMAE/std > 0.85)
 	}
 	p.stationary = !p.bursty && !p.jittery && p.trendStr < 0.35 && p.seasonStr < 0.45
+	// 单调上升：后三分之一中位显著高于前三分之一，且多数相邻差分非负（存储空间类）
+	if n >= 12 && !p.jittery {
+		t1, t2 := n/3, n-n/3
+		if t2 > t1 {
+			earlyMed := recentMedian(vals[:t1], t1)
+			lateMed := recentMedian(vals[t2:], n-t2)
+			up := lateMed - earlyMed
+			scale := math.Max(iqr, math.Abs(earlyMed)*0.02+0.5)
+			pos, steps := 0, 0
+			for i := 1; i < n; i++ {
+				steps++
+				if vals[i] >= vals[i-1]-1e-9 {
+					pos++
+				}
+			}
+			if up >= scale*0.8 && steps > 0 && float64(pos)/float64(steps) >= 0.72 {
+				p.monotonicUp = true
+				p.stationary = false
+			}
+		}
+	}
 	return p
 }
 
@@ -538,6 +560,8 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			damp := 0.82
 			if prof.jittery {
 				damp = 0.7
+			} else if prof.monotonicUp {
+				damp = 0.96 // 存储类近线性，减少阻尼低估
 			}
 			holdPred = driftForecast(trainFit, hold, damp)
 		default:
@@ -569,6 +593,12 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			score *= 0.88
 		case name == "drift" && prof.jittery:
 			score *= 1.2 // 抖动序列的伪趋势易发散触顶
+		case name == "drift" && prof.monotonicUp:
+			score *= 0.78 // 存储/容量类优先近线性漂移
+		case name == "flat" && prof.monotonicUp:
+			score *= 1.4
+		case name == "damped-holt" && prof.monotonicUp:
+			score *= 0.92
 		}
 		cands = append(cands, candScore{name, holdPred, score})
 	}
@@ -621,6 +651,15 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			}
 		}
 	}
+	// 单调上升（磁盘占用等）：禁止 flat 低估填满时间
+	if prof.monotonicUp && best.name == "flat" {
+		for i := range cands {
+			if cands[i].name == "drift" {
+				best = cands[i]
+				break
+			}
+		}
+	}
 
 	steps := int(horizon / step)
 	if steps < 1 {
@@ -658,6 +697,8 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 		damp := 0.82
 		if prof.jittery {
 			damp = 0.7
+		} else if prof.monotonicUp {
+			damp = 0.96
 		}
 		future = driftForecast(fitVals, steps, damp)
 		method = "drift"
@@ -780,7 +821,7 @@ func prepareForecastSeries(hist [][2]float64, step int64) (vals, ts []float64, e
 		}
 		raw = append(raw, pv{p[0], p[1]})
 	}
-	if len(raw) < 8 {
+	if len(raw) < 4 {
 		return nil, nil, "数据不足，暂无法预测（有效采样不足）"
 	}
 	sort.Slice(raw, func(i, j int) bool { return raw[i].t < raw[j].t })
@@ -794,11 +835,16 @@ func prepareForecastSeries(hist [][2]float64, step int64) (vals, ts []float64, e
 		dedup = append(dedup, p)
 	}
 	raw = dedup
-	if len(raw) < 8 {
+	if len(raw) < 4 {
 		return nil, nil, "数据不足，暂无法预测（有效采样不足）"
 	}
 	span := raw[len(raw)-1].t - raw[0].t
-	if span < float64(step*8) {
+	// 短窗也允许预测（AI 会话/刚上线主机常见只有数分钟样本）
+	minSpan := float64(step * 2)
+	if minSpan < 30 {
+		minSpan = 30
+	}
+	if span < minSpan && len(raw) < 6 {
 		return nil, nil, "数据不足，暂无法预测（时间跨度过短）"
 	}
 

@@ -25,6 +25,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	c.AI.EmbedAPIKey = maskSecret(c.AI.EmbedAPIKey)               // 嵌入服务凭证（独立于对话）
 	c.AI.RerankAPIKey = maskSecret(c.AI.RerankAPIKey)
 	c.AI.MCPToken = maskSecret(c.AI.MCPToken)
+	if strings.TrimSpace(c.AI.MCPClientsJSON) != "" {
+		c.AI.MCPClientsJSON = maskMCPClientsJSONForAPI(c.AI.MCPClientsJSON)
+	}
 	c.AI.WeKnoraAPIKey = maskSecret(c.AI.WeKnoraAPIKey)
 	c.PostgresDSN = maskSecret(c.PostgresDSN)                     // DSN carries the PostgreSQL password
 	c.InstallToken = maskSecret(c.InstallToken)                   // agent enrollment token — not for viewers
