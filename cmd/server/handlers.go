@@ -468,6 +468,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/auth/sso/identities/{provider}", s.handleUnbindSSOIdentity)
 	mux.HandleFunc("POST /api/v1/ai/test", s.handleTestAIConfig)
 	mux.HandleFunc("POST /api/v1/ai/test-embed", s.handleTestEmbedConfig)
+	mux.HandleFunc("POST /api/v1/ai/test-speech", s.handleTestSpeechConfig)
 	mux.HandleFunc("POST /api/v1/ai/speech/stt", s.handleAISpeechSTT)
 	mux.HandleFunc("POST /api/v1/ai/speech/tts", s.handleAISpeechTTS)
 	mux.HandleFunc("GET /api/v1/ai/speech/status", s.handleAISpeechStatus)

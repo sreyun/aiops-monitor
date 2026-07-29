@@ -223,6 +223,7 @@ func (s *Server) routeAllowed(r *http.Request, role string) bool {
 		"/api/v1/ai/config",
 		"/api/v1/ai/test",
 		"/api/v1/ai/test-embed",
+		"/api/v1/ai/test-speech",
 		"/api/v1/ai/test-rerank",
 		"/api/v1/ai/test-weknora",
 		"/api/v1/ai/list-weknora-kbs",

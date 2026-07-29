@@ -3426,6 +3426,7 @@ async function openAIConfig(){
   const tr=$("aiChatTestResult"); if(tr){ tr.textContent=""; tr.className="ai-test-result"; }
   const er=$("aiEmbedTestResult"); if(er){ er.textContent=""; er.className="ai-test-result"; }
   const wr=$("aiWeKnoraTestResult"); if(wr){ wr.textContent=""; wr.className="ai-test-result"; }
+  const sr=$("aiSpeechTestResult"); if(sr){ sr.textContent=""; sr.className="ai-test-result"; }
   try { const c=await fetch(`${API}/ai/config`).then(r=>r.json());
     $("aiEnabled").checked=!!c.enabled; $("aiEndpoint").value=c.endpoint||""; $("aiKey").value=c.api_key||""; $("aiModel").value=c.model||""; $("aiInterval").value=c.inspect_interval_min||30;
     $("embedEndpoint").value=c.embed_endpoint||""; $("embedKey").value=c.embed_api_key||""; $("embedModel").value=c.embed_model||""; $("embedDim").value=c.embed_dimensions||"";
@@ -3646,6 +3647,103 @@ async function testAIChatConfig(){
     }
   }catch(e){ if(el){ el.textContent="✗ "+I18N.t("sre.ai_chat_model","对话模型")+" "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; } }
   finally{ _aiTestBusy=false; if(testBtn) testBtn.disabled=false; }
+}
+
+// AI 语音配置测试：TTS 合成样例并播放；若配置了 STT 则对同段音频做识别闭环
+let _aiSpeechTestBusy=false, _aiSpeechTestAudio=null;
+function stopAISpeechTestAudio(){
+  if(_aiSpeechTestAudio){
+    try{ _aiSpeechTestAudio.pause(); }catch(e){}
+    try{ if(_aiSpeechTestAudio._objectUrl) URL.revokeObjectURL(_aiSpeechTestAudio._objectUrl); }catch(e){}
+    _aiSpeechTestAudio=null;
+  }
+}
+function playAISpeechTestAudio(b64, contentType){
+  stopAISpeechTestAudio();
+  if(!b64) return Promise.reject(new Error("无音频数据"));
+  const bin=atob(b64);
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  const blob=new Blob([bytes],{type:contentType||"audio/mpeg"});
+  const url=URL.createObjectURL(blob);
+  const audio=new Audio(url);
+  audio._objectUrl=url;
+  _aiSpeechTestAudio=audio;
+  const cleanup=()=>{
+    try{URL.revokeObjectURL(url);}catch(e){}
+    if(_aiSpeechTestAudio===audio) _aiSpeechTestAudio=null;
+  };
+  audio.onended=cleanup;
+  audio.onerror=()=>{ cleanup(); };
+  return audio.play();
+}
+async function testAISpeechConfig(){
+  if(_aiSpeechTestBusy) return;
+  const el=$("aiSpeechTestResult");
+  const ttsModel=($("speechTTSModel")?.value||"").trim();
+  if(!ttsModel){
+    if(el){ el.textContent="✗ 请先填写 TTS 播报模型"; el.className="ai-test-result err"; }
+    return;
+  }
+  _aiSpeechTestBusy=true;
+  stopAISpeechTestAudio();
+  const testBtn=$("aiSpeechTestBtn"); if(testBtn) testBtn.disabled=true;
+  if(el){ el.textContent="语音 "+I18N.t("sre.testing","测试中…"); el.className="ai-test-result testing"; }
+  const body={
+    enabled:true,
+    endpoint:($("aiEndpoint")?.value||"").trim(),
+    api_key:$("aiKey")?.value||"",
+    speech_prefer_cloud:$("speechPreferCloud")? !!$("speechPreferCloud").checked : false,
+    speech_endpoint:($("speechEndpoint")?.value||"").trim(),
+    speech_api_key:$("speechKey")?.value||"",
+    speech_stt_model:($("speechSTTModel")?.value||"").trim(),
+    speech_tts_model:ttsModel,
+    speech_tts_voice:($("speechTTSVoice")?.value||"").trim()
+  };
+  try{
+    const r=await fetch(`${API}/ai/test-speech`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json().catch(()=>({}));
+    if(!el) return;
+    if(!j.ok){
+      el.textContent="✗ "+(j.error||I18N.t("sre.test_failed","测试失败"));
+      el.className="ai-test-result err";
+      el.style.whiteSpace="pre-wrap";
+      return;
+    }
+    let playErr="";
+    if(j.audio_base64){
+      try{ await playAISpeechTestAudio(j.audio_base64, j.content_type); }
+      catch(e){ playErr=String(e&&e.message?e.message:e); }
+    } else {
+      playErr="未返回音频";
+    }
+    const parts=[`✓ TTS 可用 · ${j.tts_latency_ms||j.latency_ms||0}ms · ${j.model||ttsModel}`];
+    if(j.voice) parts.push(j.voice);
+    if(j.stt_ok){
+      const tr=(j.transcript||"").trim().slice(0,36);
+      parts.push(`STT ${j.stt_latency_ms||0}ms${tr?" · "+tr:""}`);
+    } else if(j.stt_error){
+      parts.push("STT 未通过");
+    } else if(j.stt_skipped){
+      parts.push("未测 STT");
+    }
+    if(playErr){
+      el.textContent=parts.join(" · ")+" · 播放失败："+playErr;
+      el.className="ai-test-result err";
+      el.style.whiteSpace="pre-wrap";
+    } else {
+      el.textContent=parts.join(" · ")+" · 已播报";
+      el.className="ai-test-result ok";
+      el.style.whiteSpace="nowrap";
+      if(j.stt_error && typeof toast==="function"){
+        toast("TTS 已通过，STT 回环失败："+j.stt_error,"warn");
+      }
+    }
+  }catch(e){
+    if(el){ el.textContent="✗ 语音 "+I18N.t("sre.request_failed","请求失败")+"："+e; el.className="ai-test-result err"; }
+  }finally{
+    _aiSpeechTestBusy=false; if(testBtn) testBtn.disabled=false;
+  }
 }
 
 // AI 向量化模型连接测试
@@ -4834,6 +4932,7 @@ document.querySelectorAll(".ai-nav-item").forEach(btn=>{
   btn.addEventListener("click",()=>switchAISettingsTab(btn.getAttribute("data-ai-tab")));
 });
 safeAddEventListener("aiChatTestBtn","click",testAIChatConfig);
+safeAddEventListener("aiSpeechTestBtn","click",testAISpeechConfig);
 safeAddEventListener("aiEmbedTestBtn","click",testAIEmbedConfig);
 safeAddEventListener("aiRerankTestBtn","click",testAIRerankConfig);
 safeAddEventListener("aiWeKnoraTestBtn","click",testAIWeKnoraConfig);
