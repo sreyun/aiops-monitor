@@ -621,7 +621,7 @@ func (s *Server) runAssistTaskSync(ctx context.Context, task, userMsg, contextTe
 	}
 	policy := assistTaskPolicy(task)
 	cfg = applyRoutedModel(cfg, task)
-	actor := "hermes"
+	actor := "ai"
 	expID, variant := s.pickAssistExperiment(cfg, task, actor)
 	cfg = s.applyExperimentVariantOn(cfg, expID, variant)
 	safeCtx := sanitizeAssistContext(contextText)

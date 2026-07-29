@@ -583,7 +583,7 @@ func (h *SreyunCore) sreyunWriteBlocked(tool, detail string, args map[string]any
 		if h.s.aiGov != nil {
 			h.s.aiGov.recordTool(aiToolAuditEntry{
 				Actor: "sreyun", Tool: tool, Action: "auto_approve", Approved: true,
-				Detail: detail + " args_hash=" + argsHash + " reason=hermes_auto_approve",
+				Detail: detail + " args_hash=" + argsHash + " reason=ai_auto_approve",
 			})
 		}
 		return "", false

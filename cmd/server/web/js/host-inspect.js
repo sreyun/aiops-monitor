@@ -367,7 +367,9 @@ function inspAggregateBatch(batch) {
   const hostScores = [];
   (batch.items || []).forEach(it => {
     const rep = inspParseReport(it);
-    const hn = it.hostname || it.host_id;
+    const hn = (typeof HostPicker !== "undefined" && HostPicker.hostTitle)
+      ? HostPicker.hostTitle(it)
+      : (it.hostname || it.ip || "未知主机");
     if (!rep) {
       // Compact poll / list: use briefs + status metrics (no multi‑MB report JSON).
       if (it.status === "pending" || it.status === "running") return;
@@ -929,10 +931,11 @@ function openInspectAIAssist(batch, item, rep) {
   const findingLines = findings.slice(0, 24).map(f =>
     `- [${f.level || "?"}] ${f.message || f.title || ""}`
   ).join("\n") || "（无 findings）";
-  const hostName = item.hostname || h.hostname || item.host_id || "";
+  const hostName = (typeof HostPicker !== "undefined" && HostPicker.hostTitle)
+    ? HostPicker.hostTitle({ hostname: item.hostname || h.hostname, ip: h.ip || item.ip || h.agent_ip, id: item.host_id })
+    : (item.hostname || h.hostname || h.ip || item.ip || "未知主机");
   let ctx = [
     `主机：${hostName}`,
-    `主机ID：${item.host_id || h.id || ""}`,
     `系统：${h.os || ""} ${h.os_family || ""} ${h.kernel || ""}`,
     `IP：${h.ip || item.ip || ""}`,
     `批次：${batch && batch.id ? batch.id : ""} · 状态：${item.status || ""}`,

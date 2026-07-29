@@ -12,9 +12,12 @@
     return String(h.ip || h.agent_ip || h.primary_ip || "").trim();
   }
   function hostTitle(h) {
-    const name = (h && (h.hostname || h.id)) || "";
+    const name = (h && h.hostname) ? String(h.hostname).trim() : "";
     const ip = hostIP(h);
-    return ip ? `${name} (${ip})` : name;
+    if (name && ip) return `${name} (${ip})`;
+    if (name) return name;
+    if (ip) return ip;
+    return "未知主机"; // never surface raw host id
   }
   function hostOnline(h) {
     if (!h) return false;

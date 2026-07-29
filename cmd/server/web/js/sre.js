@@ -1852,7 +1852,7 @@ function proposeRemediationFromIncident(inc){
   for(let i=tl.length-1;i>=0;i--){ if(tl[i].kind==="ai_diagnosis" && tl[i].text){ diag=tl[i].text; break; } }
   if(!diag){ toast(I18N.t("sre.need_diag_first","请先运行「🤖 AI 诊断」，有诊断结论后再生成提案"),"err"); return; }
   const pbs=(SRE_PLAYBOOKS||[]).map(p=>`- id=${p.id} 名称=${p.name}${p.description?" 用途="+p.description:""}`).join("\n")||"（暂无已保存剧本，请新建）";
-  const ctx=`事件ID：${inc.id}\n事件：${inc.title}\n告警类型：${inc.type||"(未知)"}\n级别：${inc.severity}\n主机ID：${inc.host_id}\n主机：${inc.hostname||"(未知)"}\n\nAI 诊断结论：\n${diag}\n\n【可用剧本】\n${pbs}`;
+  const ctx=`事件ID：${inc.id}\n事件：${inc.title}\n告警类型：${inc.type||"(未知)"}\n级别：${inc.severity}\n主机：${(typeof HostPicker!=="undefined"&&HostPicker.hostTitle)?HostPicker.hostTitle({hostname:inc.hostname,ip:inc.ip,id:inc.host_id}):(inc.hostname||"未知主机")}\n\nAI 诊断结论：\n${diag}\n\n【可用剧本】\n${pbs}`;
   openAIAssist({
     task:"remediation_proposal",
     title:I18N.t("sre.propose_fix_ai_title","AI 生成修复提案 · 审批后执行"),
@@ -4856,6 +4856,18 @@ function filterDisplayContent(text){
   t=t.replace(/\{\s*"tool_calls"[\s\S]*?\}\s*$/g,''); // 兜底：结尾残留的 tool_calls JSON
   t=t.replace(/\b(sk-[a-zA-Z0-9_-]{20,})\b/g,I18N.t("sre.redacted_key","[已隐藏密钥]")); // API 密钥
   t=t.replace(/\b(api_key|apikey|secret|password|passwd|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1='+I18N.t("sre.redacted","[已隐藏]"));
+  t=t.replace(/\bhermes(?:\s+agent)?\b/gi,"智能运维服务");
+  t=t.replace(/hermes_auto_approve/gi,"ai_auto_approve");
+  // Defense-in-depth: replace known host ids with HostPicker labels when available.
+  try{
+    const hosts=(typeof HOSTS!=="undefined"&&Array.isArray(HOSTS))?HOSTS
+      :(typeof window!=="undefined"&&Array.isArray(window.HOSTS))?window.HOSTS:[];
+    if(hosts.length&&typeof HostPicker!=="undefined"&&HostPicker.hostTitle){
+      const pairs=hosts.map(h=>[h&&h.id,HostPicker.hostTitle(h)]).filter(p=>p[0]&&p[1]);
+      pairs.sort((a,b)=>String(b[0]).length-String(a[0]).length);
+      pairs.forEach(([id,lab])=>{ if(id) t=t.split(id).join(lab); });
+    }
+  }catch(_e){}
   return t.trim();
 }
 // 轻量 Markdown 渲染：先转义 HTML 防 XSS，再套用有限格式（加粗/斜体/有序无序列表/换行）。

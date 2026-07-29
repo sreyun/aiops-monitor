@@ -44,7 +44,7 @@ function actionLabel(a) {
     case "k8s_undo": return `K8s rollout undo · ${tgt.namespace}/${name}`;
     case "k8s_delete_pod": return `K8s delete pod · ${tgt.namespace}/${name}`;
     case "k8s_exec": return `K8s exec · ${tgt.namespace}/${name}`;
-    case "host_playbook": return `主机剧本 · ${tgt.host_id || name} (${(p.steps || []).length} 步)`;
+    case "host_playbook": return `主机剧本 · ${tgt.name || tgt.hostname || "未知主机"} (${(p.steps || []).length} 步)`;
     case "sql_apply": return "SQL 改写 → 编辑器";
     case "sql_ddl": return "SQL DDL（索引）";
     default: return t + (name ? " · " + name : "");
