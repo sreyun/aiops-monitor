@@ -1,18 +1,24 @@
 # AIOps
 
+[![Version](https://img.shields.io/badge/Version-v0.19.42-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 > **エンタープライズ級ホスト監視・SRE 運用プラットフォーム · 100% オープンソース · プライベート自ホスティング · データ永久自社保有**
 >
-> 1 つの Go バイナリ ＋ 依存ゼロの Agent で、メトリクス収集、インテリジェントアラート、リモートターミナル、自動自己修復から、SRE クローズドループ、AI 巡検診断、Android / HarmonyOS モバイルコンソールまでの運用全行程をカバー。PostgreSQL ＋ VictoriaMetrics の二重ストレージ、コマンド1つで導入、3 分で本稼働。
+> 1 つの Go バイナリ ＋ 依存ゼロの Agent で、メトリクス収集、インテリジェントアラート、リモートターミナル/デスクトップ、自動自己修復から、SRE クローズドループ、AI 巡検診断、MCP 連携、Android / HarmonyOS モバイルコンソールまでの運用全行程をカバー。PostgreSQL ＋ VictoriaMetrics の二重ストレージ、コマンド1つで導入、3 分で本稼働。
 >
-> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
+> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal/desktop, auto-remediation, SRE closure, AI diagnosis, MCP, and native mobile consoles — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
 
 **言語 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
+**現行リリース [v0.19.42](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)** · [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · [CHANGELOG](CHANGELOG.md)
 
 ---
 
 ## 目次
 
 - [プロジェクト概要](#プロジェクト概要)
+- [v0.19 の主な強化](#v019-の主な強化)
 - [機能特性](#機能特性)
 - [インストール手順](#インストール手順)
 - [使い方](#使い方)
@@ -44,6 +50,20 @@ AIOps は**エンタープライズ級ホスト監視・SRE 運用プラット�
 - アラート治理（サイレンス / 抑制 / ルーティング）と統一メッセージセンターでノイズを低減し、操作性を向上。
 
 > 位置付けとして、AIOps はあなたが完全に掌握する1つのプラットフォームで、可観測性、アラート、自動化、AI 診断、SRE クローズドループ、モバイルを統合し —— 分散した複数のツールの保守を減らすことを目指しています。
+
+---
+
+## v0.19 の主な強化
+
+| 領域 | 内容 |
+|---|---|
+| **MCP** | Streamable HTTP で当番/診断ツールを Cursor / Claude に接続 |
+| **AI 音声** | 設定画面のワンクリック音声テスト（TTS + 任意で STT） |
+| **Agent 更新** | Windows は `pending_verify` → バージョン ACK 後に成功 |
+| **Linux 導入** | `ProtectHome=read-only`；再導入で `aiops-relay` を誤削除しない |
+| **モバイル** | Android / HarmonyOS は**別配布**（ソースは本リポジトリ外） |
+
+詳細は [CHANGELOG.md](CHANGELOG.md) を参照。
 
 ---
 
@@ -96,35 +116,28 @@ AIOps は**エンタープライズ級ホスト監視・SRE 運用プラット�
 - **チケットフロー**：インシデント / 自動修復と連動。
 - **統一メッセージセンター**：インシデント / アラート / SLO / 自動修復 / AI / チケットを統合受信箱に。
 
-### AI 運用能力
+### AI 運用と MCP
 
-- **AI 巡検**：定期的に自動巡検し、レポートを生成。
-- **根本原因研判**：コンテキストを組み合わせて診断の提案を提示。
-- **RAG 記憶庫**：pgvector ベースの類似事例検索（diagnosis_embeddings / ai_memory_embeddings）。
-- **自律 Agent**：Function Calling で運用アクションを実行。
-- **AI Copilot / 音声**：対話型アシスタントと音声対話（TTS / STT）。
+- **AI 巡検 / 根本原因研判**：定期・オンデマンド；証拠ゲート付き。
+- **RAG / Skills**：pgvector 類似事例；高品質ターンはドラフト Skill 化。
+- **MCP**：Streamable HTTP で当番/診断の読み取り専用ツールを公開。
+- **AI Copilot / 音声**：SSE 対話、TTS / STT、ワンクリック自己テスト。
 
 ### セキュリティとコンプライアンス
 
-- **認証**：セッション Cookie ＋ RBAC（admin / operator / viewer）。
-- **MFA**：TOTP ワンタイムパスワード（単回使用）。
-- **ターミナル二次パスワード**：レート制限 ＋ ロック期間。
-- **Agent マシン指紋**：`X-Agent-Fingerprint`（machine-id ＋ MAC）。
-- **インストールトークン**：ローテーション ＋ 7 日の猶予期間。
-- **リレーキー**：`AIOPS_RELAY_SECRET` で送信元を検証。
-- **静止暗号化**：設定キーを AES-256-GCM で暗号化。
-- **転送暗号化**：オプションの TLS。初回ログイン時の強制セキュリティ初期化。
+- セッション Cookie ＋ RBAC、任意 MFA、ターミナル二次パスワード、マシン指紋、インストールトークン、AES-256-GCM、任意 TLS。
+- セキュリティセンター（スキャン / FIM / 脅威インテリジェンス）、SSRF 防御。
 
 ### モバイル端末
 
-- **ネイティブ Android App**（Kotlin ＋ Jetpack Compose）：29 のナビゲーションルート / 20 以上の画面。SRE コックピット、ホスト詳細（ネイティブ Canvas チャート）、アラート（レベル / 状態の 2 軸フィルタ ＋ AI 診断）、エンタープライズ級 VT ターミナル、運用センター（インシデント / 承認 / SLO / チケット）、監視死活、AI アシスタント（SSE ストリーミング）、ハードウェア / NetFlow / Hyper-V、ターミナル再生、メッセージセンターなど。DataStore でセッションを永続化、MFA ポップアップ、自前の `/ws/push` 長接続でプッシュ通知。
-- **HarmonyOS NEXT App**（ArkTS）：Android 側と「機能 / 情報アーキテクチャ / インタラクションのクローズドループ」を揃えたネイティブ HarmonyOS コンソール。
+- **ネイティブ Android / HarmonyOS コンソール**は企業向けに**別配布**（ソースは本リポジトリに含まれません）。
+- プッシュは自前 `/ws/push`。アカウント系のセルフサービスは Web パネル側。
 
 ### デプロイと体験
 
-- **Web パネル**：サーバー内蔵ダッシュボード。2 テーマ（ダーク / ライト）。3 言語切替（簡体中文 / 繁体中文 / English）。※ マーケティングサイト（website/）は 簡中 / 繁中 / English / 日本語 / 한국어 の 5 言語に対応。
-- **マルチサーバーブロードキャスト**：1 回の収集を複数のサーバーへ並行上報（マルチDC 災害復旧）。
-- **ゲートウェイ中継**：社内でインターネットに接続した 1 台のマシンがすべての上報をクラウドへ代理。
+- **Web パネル**：ダーク / ライト、簡中 / 繁中 / English。
+- **マーケティングサイト** `website/`：5 言語（簡中 / 繁中 / English / 日本語 / 한국어）。
+- マルチサーバー上報、ゲートウェイ中継、Agent リモート更新（バージョン ACK）。
 
 ---
 
@@ -278,7 +291,7 @@ graph TB
 - **マルチサーバーブロードキャスト**：単一 Agent が1回の収集を複数サーバーへ並行上報。弱いネットワーク下でリトライ / サーキットブレーカー / gzip 低下。
 - **AI / RAG**：プラグイン可能な LLM ＋ pgvector による類似事例検索。
 
-より完全なアーキテクチャ、データフロー、性能、トラブルシューティングは [.qoder/repowiki/zh](.qoder/repowiki/zh/content) の「架構設計」「核心機能」「故障排除」などのドキュメントを参照。
+より詳しい利用・導入は [USER_GUIDE.md](USER_GUIDE.md)、[INSTALL.md](INSTALL.md)、[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md)、[docs/ci-gate.md](docs/ci-gate.md) を参照。
 
 ---
 
@@ -287,15 +300,11 @@ graph TB
 コード、ドキュメント、翻訳の貢献を歓迎します！
 
 1. **Issue の提出**：バグ、機能提案、ドキュメント修正を歓迎します。再現手順と環境情報をできるだけ提供してください。
-2. **開発環境**：Go 1.26+、Python 3（プラグイン SDK）。`make build` でビルド、`make audit` でセキュリティゲート（vet / test / govulncheck / gosec / staticcheck / sbom）を実行。
-3. **コード規約**：
-   - Go コードは `gofmt` / `go vet` を使用。新規ロジックにはテストを添付。
-   - サーバーはゼロフレームワーク、ゼロ CGO。単一バイナリ、第三者依存ゼロの Agent 原則を維持。
-   - コミットメッセージは「なぜ」を明確に表現。
-4. **国際化**：マーケティングサイトは 簡中 / 繁中 / English / 日本語 / 한국어 の 5 言語、管理パネルは 簡中 / 繁中 / English の 3 言語に対応。新規文案は各言語辞書に同期してください（マーケティングサイトは `website/js/i18n.js` と `website/js/i18n-extra.js`；管理パネルは `cmd/server/web/` 配下の `i18n-dashboard*.js`。フロー：権威辞書を変更 → 英語を補完 → `build_en` / `build_tw` を実行 → parity を検証 → `go build` で再埋め込み）。
-5. **PR の提出**：Fork → ブランチ開発 → 変更とテストを記述 → CI とレビューを待機。
-6. **セキュリティ脆弱性**：公開 Issue は行わず、プライベートメッセージ / セキュリティチャネルから報告してください。優先的に対応します。
-7. **開発者向け詳細規約**は [.qoder/repowiki/zh/content/开发者指南](.qoder/repowiki/zh/content/开发者指南) を参照。
+2. **開発環境**：Go 1.26+、Python 3（プラグイン SDK）。`make build` でビルド、`make audit` でセキュリティゲートを実行。
+3. **コード規約**：`gofmt` / `go vet`；サーバーはゼロフレームワーク・ゼロ CGO；Agent は第三者依存ゼロ。
+4. **国際化**：パネル三語（`cmd/server/web/i18n-dashboard*.js` + `scripts/build_i18n_*.js` / `check_i18n_parity.js`）；サイト五語（`website/js/i18n.js` / `i18n-extra.js` / `i18n-ko.js`）。
+5. **PR の提出**：Fork → ブランチ → 変更とテストを記述 → CI / レビュー。
+6. **セキュリティ脆弱性**：公開 Issue は避け、私的チャネルで報告。
 
 ---
 
@@ -304,7 +313,7 @@ graph TB
 本プロジェクトは **MIT ライセンス**でオープンソースとして公開されています。詳細は [LICENSE](LICENSE) を参照。
 
 - コードは GitHub でホスティングされ、透明で信頼できる。ホスト台数制限なし、機能の削減なし、「企業版」のような手口なし。
-- 第三者依存（例：`vendor/` 配下の `lib/pq`、`go-qrcode`、`ledongthuc/pdf`、および `harmony/` の ohpm 依存）はそれぞれのライセンスに従い、原作者に帰属します。
+- `vendor/` 等の第三者依存はそれぞれのライセンスに従う。Android / HarmonyOS クライアントは別配布であり、本リポジトリのソースツリーには含まれません。
 
 ---
 

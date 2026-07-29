@@ -4,7 +4,7 @@
 
 **One binary for observability · alerting · self-healing · AI diagnosis · SRE closed-loop · remote control.**
 
-[![Version](https://img.shields.io/badge/Version-v0.19.39-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.39)
+[![Version](https://img.shields.io/badge/Version-v0.19.42-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#open-source--community)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -16,14 +16,14 @@
 
 > **Single-binary server + zero-dependency agent**: one command stands up observability, alert governance, automated remediation, AI inspection/diagnosis, SRE closed-loop, remote desktop/terminal, SQL toolkit, and security center. 100% open source, self-hosted, data fully owned — no SaaS dependency, no telemetry uplink.
 
-**Current release [v0.19.39](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.39)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+**Current release [v0.19.42](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · [CHANGELOG](CHANGELOG.md)
 
 ---
 
 ## Contents
 
-- [Why AIOps](#why-aiops-monitor)
-- [Highlights in v0.19.0](#highlights-in-v0190)
+- [Why AIOps](#why-aiops)
+- [Highlights in v0.19](#highlights-in-v019)
 - [Capability Map](#capability-map)
 - [Core Capabilities](#core-capabilities)
 - [Architecture](#architecture)
@@ -53,20 +53,20 @@ AIOps consolidates the common path into **one self-hosted platform**:
 
 ---
 
-## Highlights in v0.19.0
+## Highlights in v0.19
 
-Building on v0.18.9, this release pushes from “can diagnose” to “can verify, gate, and learn”:
+Building on the v0.19.0 closed-loop foundation (dry-run → propose → approve → verify → promote Skill), recent patches add:
 
 | Area | What landed |
 |---|---|
-| **Incident loop** | One-click `Dry-run → Propose → Approve → Verify → Promote Skill`; evidence gate on propose; verify checks host/alert/remediation/service; case-pack export |
-| **Remote gate** | Terminal/desktop blocked under freeze or high-risk open incidents unless authorized; unified `remote-preflight`; admin break-glass; sessions audit `change_id` / `incident_id` |
-| **Change & services** | Recurring freeze windows (daily/weekly); business-service tree & impact; emergency change SoD (author cannot self-approve) |
-| **Memory depth** | Memories scoped by service / host category with `verified`; retrieval boosts verified knowledge; resolution/verify reinforce; UI filters by verification |
-| **Agent learning** | Hermes multi-tool turns: only high-quality turns mint **draft** Skills; activate after verify/human accept; write tools require approval by default |
-| **Ops effect** | `GET /api/v1/sre/effect`: MTTR/MTTA, alert noise, change failure rate, closed-loop rate, AI adoption/verify, skill·memory hits and draft/active |
+| **MCP** | Streamable HTTP (`/api/v1/mcp`) with duty/diagnosis tools for Cursor / Claude; scoped tokens + one-click client config copy |
+| **AI speech** | One-click “Test speech” in AI settings (TTS sample + optional STT round-trip) |
+| **Security surface** | FIM + threat-intel channel in the security center; host/web scans remain trackable |
+| **Agent updates** | Batch remote update; Windows stays `pending_verify` until `agent_version` ACK |
+| **Linux install** | `ProtectHome=read-only`; agent reinstall no longer purges gateway `aiops-relay` |
+| **Mobile** | Android / HarmonyOS consoles are **externally distributed** (source not in this repo) |
 
-Milestones: `v0.18.9` lightweight ITSM · `v0.18.2` Windows lock-screen Ctrl+Alt+Del · `v0.18.0` controllable security loop · `v0.17` resource layer (Hyper-V/containers/K8s). Full notes: [Releases](https://github.com/sreyun/aiops-monitor/releases).
+Earlier v0.19.0 pillars remain: remote gate / freeze windows, scoped RAG & Skills, ops-effect KPIs, lightweight ITSM. Full notes: [CHANGELOG.md](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases).
 
 Optional POC checklist: [docs/year1-acceptance.md](docs/year1-acceptance.md)
 
@@ -79,12 +79,12 @@ Observe          Govern           Remediate         Diagnose
 ─────────        ──────           ─────────         ──────────
 Hosts/GPU/logs   Silence/inhibit  Playbooks/gates   Streaming RCA
 Probes/Redfish   Multi-channel    Auto-remediation  Scoped RAG/Skills
-NetFlow/storage  Security findings SLO/tickets      WeKnora docs
+NetFlow/storage  Security findings SLO/tickets      MCP + WeKnora
 
 Control          Data             Secure            Operate
 ────────         ───────          ──────            ────────
 Terminal/desktop Multi-DS/EXPLAIN RBAC/MFA/fingerprint Effect KPIs
-Port forward     SQL change gate  Security center   Compose one-shot
+Port forward     SQL change gate  FIM / threat intel Compose one-shot
 ```
 
 ---
@@ -124,14 +124,15 @@ Port forward     SQL change gate  Security center   Compose one-shot
 - **Tickets**: escalate from incidents; assign real directory users; image/file attachments.
 - **Lightweight ITSM**: service requests / change state machine, OpsLink, SQL↔change linking.
 
-### 5. AI inspection & diagnosis
+### 5. AI inspection, MCP & diagnosis
 
 - Scheduled / on-demand health inspection; critical incidents can auto-diagnose on the timeline.
 - **Live evidence refresh** + strong evidence gate (heartbeat-only is not enough to propose).
 - **RAG memory** (pgvector): service/category scope; `verified` boost; 👍/👎 reinforce/penalize.
 - **Skills**: high-quality multi-tool turns mint drafts; activate after verify/human accept; versioning, scope, customer pack import/export.
+- **MCP Streamable HTTP**: duty/diagnosis tools for Cursor / Claude; scoped tokens and rate limits in AI settings.
 - **WeKnora** external docs with local fallback.
-- Multimodal assistant: SSE, function calling, images/files/URLs; Web speech I/O when the browser supports it.
+- Multimodal assistant: SSE, function calling, images/files/URLs; speech TTS/STT with one-click self-test.
 - Pluggable models; decoupled embed/chat/rerank; AI Runs / fallback / tool turns observable.
 
 ### 6. Remote desktop & terminal
@@ -164,6 +165,7 @@ Port forward     SQL change gate  Security center   Compose one-shot
 - **Two mandatory stores**: missing PostgreSQL or VictoriaMetrics refuses to boot.
 - Versioned schema migrations; gateway relay; agent multi-server fan-out (circuit breaker + gzip degrade).
 - Install-token rotation + 7-day grace; amd64 / arm64 images.
+- **Agent remote update** with version ACK verification (especially hardened on Windows).
 
 ---
 

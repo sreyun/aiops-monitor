@@ -1,18 +1,24 @@
 # AIOps
 
+[![Version](https://img.shields.io/badge/Version-v0.19.42-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 > **엔터프라이즈급 호스트 모니터링 및 SRE 운영 플랫폼 · 100% 오픈소스 · 프라이빗 자체 호스팅 · 데이터 영구 자체 보유**
 >
-> 단일 Go 바이너리 + 의존성 없는 Agent가 메트릭 수집, 지능형 알림, 원격 터미널, 자동 자가 치유부터 SRE 클로즈드루프, AI 점검 진단, Android / HarmonyOS 모바일 콘솔까지의 운영 전체 라이프사이클을 커버합니다. PostgreSQL + VictoriaMetrics 이중 스토리지로, 단 한 줄의 명령으로 배포하고 3분 내에 가동됩니다.
+> 단일 Go 바이너리 + 의존성 없는 Agent가 메트릭 수집, 지능형 알림, 원격 터미널/데스크톱, 자동 자가 치유부터 SRE 클로즈드루프, AI 점검 진단, MCP 연동, Android / HarmonyOS 모바일 콘솔까지의 운영 전체 라이프사이클을 커버합니다. PostgreSQL + VictoriaMetrics 이중 스토리지로, 단 한 줄의 명령으로 배포하고 3분 내에 가동됩니다.
 >
-> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
+> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal/desktop, auto-remediation, SRE closure, AI diagnosis, MCP, and native mobile consoles — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
 
 **언어 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
+**현재 릴리스 [v0.19.42](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)** · [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · [CHANGELOG](CHANGELOG.md)
 
 ---
 
 ## 목차
 
 - [프로젝트 개요](#프로젝트-개요)
+- [v0.19 주요 강화](#v019-주요-강화)
 - [기능 특성](#기능-특성)
 - [설치 단계](#설치-단계)
 - [사용 방법](#사용-방법)
@@ -44,6 +50,20 @@ AIOps는 **엔터프라이즈급 호스트 모니터링 및 SRE 운영 플랫폼
 - 알림 거버넌스(사일런스 / 억제 / 라우팅)와 통합 메시지 센터로 노이즈를 줄이고 실행 가능성 향상.
 
 > 위치 선정 측면에서 AIOps는 완전히 통제 가능한 하나의 플랫폼으로 관측성, 알림, 자동화, AI 진단, SRE 클로즈드루프, 모바일을 수렴하여 여러 분산 도구를 유지보수하는 부담을 줄이는 것을 지향합니다.
+
+---
+
+## v0.19 주요 강화
+
+| 영역 | 내용 |
+|---|---|
+| **MCP** | Streamable HTTP로 당직/진단 도구를 Cursor / Claude에 연결 |
+| **AI 음성** | 설정 화면에서 TTS/STT 원클릭 자가 테스트 |
+| **Agent 업데이트** | Windows는 `pending_verify` 후 버전 ACK로 성공 확정 |
+| **Linux 설치** | `ProtectHome=read-only`; 재설치 시 `aiops-relay` 오삭제 방지 |
+| **모바일** | Android / HarmonyOS는 **별도 배포**(소스는 이 저장소에 없음) |
+
+자세한 내용은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
 
 ---
 
@@ -96,35 +116,28 @@ AIOps는 **엔터프라이즈급 호스트 모니터링 및 SRE 운영 플랫폼
 - **티켓 흐름**: 인시던트 / 자동 복구와 연동.
 - **통합 메시지 센터**: 인시던트 / 알림 / SLO / 자동 복구 / AI / 티켓 통합 받은편지함.
 
-### AI 운영 역량
+### AI 운영 및 MCP
 
-- **AI 점검**: 정기 자동 점검 및 리포트 산출.
-- **근본 원인 분석**: 컨텍스트를 결합하여 진단 제안.
-- **RAG 메모리 라이브러리**: pgvector 기반 유사 사례 검색(diagnosis_embeddings / ai_memory_embeddings).
-- **자율 Agent**: Function Calling으로 운영 동작 실행.
-- **AI Copilot / 음성**: 대화형 어시스턴트 및 음성 상호작용(TTS / STT).
+- **AI 점검 / 근본 원인 분석**: 정기·온디맨드, 증거 게이트.
+- **RAG / Skills**: pgvector 유사 사례; 고품질 대화는 초안 Skill로 전환.
+- **MCP**: Streamable HTTP로 당직/진단 읽기 전용 도구 제공.
+- **AI Copilot / 음성**: SSE 대화, TTS / STT, 원클릭 자가 테스트.
 
 ### 보안 및 컴플라이언스
 
-- **인증**: 세션 Cookie + RBAC(admin / operator / viewer).
-- **MFA**: TOTP 동적 OTP(1회용).
-- **터미널 2차 비밀번호**: 속도 제한 + 잠금 기간.
-- **Agent 머신 핑거프린트**: `X-Agent-Fingerprint`(machine-id + MAC).
-- **설치 토큰**: 교체 + 7일 유예 기간.
-- **중계 키**: `AIOPS_RELAY_SECRET` 출처 검증.
-- **저장 암호화**: 구성 키 AES-256-GCM.
-- **전송 암호화**: 선택적 TLS; 최초 로그인 시 강제 보안 초기화.
+- 세션 Cookie + RBAC, 선택적 MFA, 터미널 2차 비밀번호, 머신 핑거프린트, 설치 토큰, AES-256-GCM, 선택적 TLS.
+- 보안 센터(스캔 / FIM / 위협 인텔), SSRF 방어.
 
 ### 모바일
 
-- **네이티브 Android App**(Kotlin + Jetpack Compose): 29개 네비게이션 라우트 / 20+ 화면. SRE 운전석, 호스트 상세(네이티브 Canvas 차트), 알림(레벨 / 상태 2차원 필터 + AI 진단), 엔터프라이즈급 VT 터미널, 운영 센터(인시던트 / 승인 / SLO / 티켓), 모니터링 헬스 체크, AI 어시스턴트(SSE 스트리밍), 하드웨어 / NetFlow / Hyper-V, 터미널 재생, 메시지 센터 등. DataStore 영속 세션, MFA 팝업, 자체 구축 `/ws/push` 장기 연결 푸시.
-- **HarmonyOS NEXT App**(ArkTS): Android와 "기능 / 정보 아키텍처 / 상호작용 클로즈드루프"가 정렬된 네이티브 HarmonyOS 콘솔.
+- **네이티브 Android / HarmonyOS 콘솔**은 기업용으로 **별도 배포**(소스는 이 저장소에 없음).
+- 푸시는 자체 `/ws/push`; 계정 셀프서비스는 웹 패널 기준.
 
 ### 배포 및 경험
 
-- **웹 패널**: 서버 내장 Dashboard, 듀얼 테마(다크 / 라이트), 3개 언어 전환(简中 / 繁中 / English). (마케팅 사이트 `website/`는 简中 / 繁中 / English / 日本語 / 한국어 5개 언어 지원)
-- **다중 서버 브로드캐스트**: 한 번 수집하여 여러 서버에 동시 보고(크로스 IDC 재해 복구).
-- **게이트웨이 중계**: 내부망에서 인터넷에 연결된 한 대의 머신만이 모든 보고를 클라우드로 프록시.
+- **웹 패널**: 다크 / 라이트, 简中 / 繁中 / English.
+- **마케팅 사이트** `website/`: 5개 언어.
+- 다중 서버 보고, 게이트웨이 중계, Agent 원격 업데이트(버전 ACK).
 
 ---
 
@@ -278,7 +291,7 @@ graph TB
 - **다중 서버 브로드캐스트**: 단일 Agent가 한 번 수집하여 여러 서버에 동시 보고, 약한 네트워크에서 재시도 / 서킷 브레이커 / gzip 폴백.
 - **AI / RAG**: 플러그인 가능 LLM + pgvector 유사 사례 검색.
 
-보다 완전한 아키텍처, 데이터 흐름, 성능 및 문제 해결은 [.qoder/repowiki/zh](.qoder/repowiki/zh/content)의 "아키텍처 설계" "핵심 기능" "문제 해결" 문서를 참고하세요.
+자세한 사용·배포는 [USER_GUIDE.md](USER_GUIDE.md), [INSTALL.md](INSTALL.md), [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md), [docs/ci-gate.md](docs/ci-gate.md)를 참고하세요.
 
 ---
 
@@ -286,16 +299,12 @@ graph TB
 
 코드, 문서, 번역 기여를 환영합니다!
 
-1. **Issue 등록**: 버그, 기능 제안, 문서 수정 모두 환영하며, 재현 단계와 환경 정보를 최대한 제공해 주세요.
-2. **개발 환경**: Go 1.26+, Python 3(플러그인 SDK). `make build`로 빌드, `make audit`로 보안 게이트 실행(vet / test / govulncheck / gosec / staticcheck / sbom).
-3. **코드 규칙**:
-   - Go 코드는 `gofmt` / `go vet` 사용; 새 로직에는 테스트를 동반하세요.
-   - 서버는 제로 프레임워크, 제로 CGO; 단일 바이너리, 제3자 의존성 없는 Agent 원칙 유지.
-   - 커밋 메시지는 "왜"를 명확히 표현.
-4. **국제화**: 마케팅 사이트는 简中 / 繁中 / English / 日本語 / 한국어 5개 언어, 관리 패널은 简中 / 繁中 / English 3개 언어를 지원합니다. 새 문구는 해당 언어 사전에 동기화하세요(마케팅 사이트: `website/js/i18n.js`와 `website/js/i18n-extra.js`; 관리 패널: `cmd/server/web/` 하위 `i18n-dashboard*.js`. 패널 흐름: 권위 사전 수정 → 영어 보완 → `build_en` / `build_tw` 실행 → parity 검증 → `go build` 재임베드).
-5. **PR 제출**: Fork → 브랜치 개발 → 변경 및 테스트 설명 → CI와 리뷰 대기.
-6. **보안 취약점**: 공개 Issue로 등록하지 말고 비공개 메시지 / 보안 채널로 보고해 주세요. 우선 처리하겠습니다.
-7. **개발자 상세 규정**은 [.qoder/repowiki/zh/content/开发者指南](.qoder/repowiki/zh/content/开发者指南) 참고.
+1. **Issue 등록**: 버그·기능·문서 이슈와 재현 환경 정보를 환영합니다.
+2. **개발 환경**: Go 1.26+, Python 3. `make build` / `make audit`.
+3. **코드 규칙**: `gofmt` / `go vet`; 서버 제로 프레임워크·제로 CGO; Agent 무의존.
+4. **국제화**: 패널 3어(`cmd/server/web/i18n-dashboard*.js` + `scripts/build_i18n_*.js` / `check_i18n_parity.js`); 사이트 5어(`website/js/i18n.js` / `i18n-extra.js` / `i18n-ko.js`).
+5. **PR 제출**: Fork → 브랜치 → 변경/테스트 설명 → CI·리뷰.
+6. **보안 취약점**: 공개 Issue 대신 비공개 채널로 보고.
 
 ---
 
@@ -303,8 +312,8 @@ graph TB
 
 본 프로젝트는 **MIT 라이선스**로 오픈소스이며, 자세한 내용은 [LICENSE](LICENSE)를 참고하세요.
 
-- 코드는 GitHub에 호스팅되어 투명하고 신뢰할 수 있습니다. 호스트 수 제한 없음, 기능 축소 없음, "엔터프라이즈 에디션" 술책 없음.
-- 제3자 의존성(예: `vendor/` 하의 `lib/pq`, `go-qrcode`, `ledongthuc/pdf`, 그리고 `harmony/`의 ohpm 의존성)은 각자의 라이선스를 따르며 원저자에게 귀속됩니다.
+- GitHub / Gitee 호스팅, 호스트 수 제한·기능 축소·"엔터프라이즈 에디션" 술책 없음.
+- `vendor/` 등 제3자 의존성은 각자 라이선스를 따릅니다. Android / HarmonyOS 클라이언트는 별도 배포이며 이 저장소 소스 트리에 포함되지 않습니다.
 
 ---
 

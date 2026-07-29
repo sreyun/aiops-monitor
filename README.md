@@ -1,18 +1,26 @@
 # AIOps
 
+[![Version](https://img.shields.io/badge/Version-v0.19.42-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
+
 > **企业级主机监控与 SRE 运维平台 · 100% 开源 · 私有化自托管 · 数据永久自持**
 >
-> 一个 Go 二进制 + 零依赖 Agent，覆盖从指标采集、智能告警、远程终端、自动化自愈，到 SRE 闭环、AI 巡检诊断与安卓/HarmonyOS 移动控制台的运维全链路。PostgreSQL + VictoriaMetrics 双存储，一条命令部署，3 分钟上线。
+> 一个 Go 二进制 + 零依赖 Agent，覆盖从指标采集、智能告警、远程终端/桌面、自动化自愈，到 SRE 闭环、AI 巡检诊断、MCP 集成与 Android / HarmonyOS 移动控制台的运维全链路。PostgreSQL + VictoriaMetrics 双存储，一条命令部署，3 分钟上线。
 >
-> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal, auto-remediation, SRE closure, AI diagnosis, and a native mobile console — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
+> **English:** AIOps is an open-source, self-hosted enterprise host-monitoring & SRE platform. One Go binary plus a zero-dependency agent covers the full ops loop — metrics, alerting, remote terminal/desktop, auto-remediation, SRE closure, AI diagnosis, MCP, and native mobile consoles — on unified PostgreSQL + VictoriaMetrics storage. MIT licensed.
 
 **语言 / Languages：** [简体中文](README.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
+**当前版本 [v0.19.42](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.42)** · 镜像：[GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor) · 变更见 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
 ## 目录
 
 - [项目简介](#项目简介)
+- [v0.19 近期亮点](#v019-近期亮点)
 - [功能特性](#功能特性)
 - [安装步骤](#安装步骤)
 - [使用说明](#使用说明)
@@ -48,6 +56,21 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 
 ---
 
+## v0.19 近期亮点
+
+| 方向 | 能力 |
+|---|---|
+| **MCP 集成** | `GET/POST/DELETE /api/v1/mcp` 支持 Streamable HTTP（JSON-RPC + SSE），可把值班/诊断只读工具接到 Cursor / Claude；AI 设置支持作用域令牌与一键复制客户端配置 |
+| **AI 语音** | 语音输入/播报配置支持「测试语音」闭环（TTS 样例播放 + 可选 STT 回环） |
+| **文件完整性 / 威胁情报** | FIM 与威胁情报通道纳入主机安全能力面（见面板安全中心） |
+| **Agent 远程更新** | 批量远程更新；Windows 更新进入 `pending_verify`，待 `agent_version` ACK 后再标成功 |
+| **Linux 远程终端** | systemd `ProtectHome=read-only`，重装不误清网关 `aiops-relay` |
+| **移动端** | Android / HarmonyOS 原生控制台**独立分发**（源码不在本仓库） |
+
+完整记录见 [CHANGELOG.md](CHANGELOG.md) 与 [Releases](https://github.com/sreyun/aiops-monitor/releases)。
+
+---
+
 ## 功能特性
 
 ### 主机与资源监控
@@ -61,7 +84,8 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
   - **华为 OceanStor**：DeviceManager REST 采集存储 / 磁盘柜健康。
   - **SNMP**：手写协议栈（v2c / v3 USM + Trap），纳管交换机 / 路由器。
   - **五元组包报文**、**SNI / DNS 与明文 HTTP 内容审计**（合规可控、默认关闭）。
-  - **容器清单**（Docker / Podman 自动探测）、**Hyper-V** 虚拟机采集。
+  - **容器清单**（Docker / Podman 自动探测）、**Hyper-V** 虚拟机采集、**Kubernetes** 资源清单（节点 / Pod / Deployment / 事件）。
+  - **全局资源搜索**与拓扑辅助爆炸半径 / 根因分析。
 
 ### 日志与可观测
 
@@ -82,9 +106,11 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 - **多渠道通知**：飞书、钉钉、邮件、短信、语音电话。
 - **恢复通知**与告警生命周期管理。
 
-### 远程终端与端口转发
+### 远程终端、桌面与端口转发
 
 - **Web 终端**：浏览器 ↔ 服务端 ↔ Agent 反向通道（wait / rx / tx），多标签、会话录制回放、只读旁观、命令审计、二次密码认证。
+- **Web 远程桌面**：JPEG / H.264、多显示器、质量档位、文件与剪贴板；Windows 锁屏场景需 Agent **服务安装**（含 Ctrl+Alt+Del / 解锁）。
+- **远程门禁**：冻结窗口或高风险事件下需预检授权；管理员 break-glass 可审计。
 - **端口转发**：TCP / UDP 映射、HTTP 反向代理（`/proxy/{hostID}/{port}/{path}`，支持 WebSocket），SSRF 出站防护，可全局禁用。
 - **机器指纹鉴权**：Token 轮换不影响已安装 Agent。
 
@@ -97,35 +123,38 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 - **工单流转**：与事件 / 自动修复联动。
 - **统一消息中心**：事件 / 告警 / SLO / 自动修复 / AI / 工单统一收件箱。
 
-### AI 运维能力
+### AI 运维与 MCP
 
-- **AI 巡检**：定期自动巡检并产出报告。
-- **根因研判**：结合上下文给出诊断建议。
-- **RAG 记忆库**：基于 pgvector 的相似案例检索（diagnosis_embeddings / ai_memory_embeddings）。
-- **自主 Agent**：Function Calling 执行运维动作。
-- **AI Copilot / 语音**：对话式助手与语音交互（TTS / STT）。
+- **AI 巡检**：定期 / 按需巡检并产出报告；关键事件可在时间线自动诊断。
+- **根因研判**：证据门控 + 上下文诊断；可插拔 OpenAI 兼容模型，未配置时启发式兜底。
+- **RAG / Skills**：pgvector 相似案例；高质量对话可沉淀为草稿 Skill，验证后激活。
+- **MCP**：Streamable HTTP 暴露值班 / 诊断等只读工具（`get_duty_context`、`diagnose_incident` 等），便于 Cursor / Claude 接入。
+- **AI Copilot / 语音**：SSE 对话、Function Calling；语音 TTS / STT，配置页支持一键测试。
+
+### SQL 工具箱
+
+- 多数据源、Schema / 历史、EXPLAIN 对比；高风险 SQL 走变更门禁（详见 [docs/ci-gate.md](docs/ci-gate.md)）。
 
 ### 安全与合规
 
-- **认证**：会话 Cookie + RBAC（admin / operator / viewer）。
-- **MFA**：TOTP 动态口令（单次使用）。
-- **终端二次密码**：限流 + 锁定时长。
+- **认证**：会话 Cookie + RBAC（admin / operator / viewer）；可选 TOTP MFA。
+- **终端 / 桌面二次密码**：限流 + 锁定时长。
 - **Agent 机器指纹**：`X-Agent-Fingerprint`（machine-id + MAC）。
-- **安装令牌**：轮换 + 7 天宽限期。
-- **中继密钥**：`AIOPS_RELAY_SECRET` 校验来源。
-- **静态加密**：配置密钥 AES-256-GCM。
-- **传输加密**：可选 TLS；首次登录强制安全初始化。
+- **安装令牌**：轮换 + 7 天宽限期；中继密钥 `AIOPS_RELAY_SECRET`。
+- **静态 / 传输加密**：配置密钥 AES-256-GCM；可选 TLS；首次登录强制安全初始化。
+- **安全中心**：主机 / Web 扫描、FIM、威胁情报通道；SSRF 出站防护。
 
 ### 移动端
 
-- **原生 Android App**（Kotlin + Jetpack Compose）：29 条导航路由 / 20+ 屏幕。SRE 驾驶舱、主机详情（原生 Canvas 图表）、告警（级别 / 状态双维筛选 + AI 诊断）、企业级 VT 终端、运维中心（事件 / 审批 / SLO / 工单）、监控拨测、AI 助手（SSE 流式）、硬件 / NetFlow / Hyper-V、终端回放、消息中心等。DataStore 持久化会话，MFA 弹窗，自建 `/ws/push` 长连接推送。
-- **HarmonyOS NEXT App**（ArkTS）：与 Android 端「功能 / 信息架构 / 交互闭环」对齐的原生鸿蒙控制台。
+- **原生 Android / HarmonyOS 控制台**（企业级能力面：总览、告警、终端、SRE、AI 助手等），安装包**独立分发**——移动端源码**不在本仓库**（与主仓解耦）。
+- 推送走自建 `/ws/push` 长连接，不依赖第三方推送服务；账号自助等能力以 Web 面板为准。
 
 ### 部署与体验
 
-- **Web 面板**：服务端内嵌 Dashboard，双主题（深色 / 浅色），三语切换（简中 / 繁中 / English）。（营销站点 `website/` 已支持 简中 / 繁中 / English / 日本語 / 한국어 五语）
-- **多服务端广播**：一次采集，并发上报到多个服务端（跨机房容灾）。
-- **网关中继**：内网仅一台联网机器代理所有上报到云端。
+- **Web 面板**：服务端内嵌 Dashboard，双主题（深色 / 浅色），三语切换（简中 / 繁中 / English）。
+- **营销站点** `website/`：简中 / 繁中 / English / 日本語 / 한국어 五语（本地维护，默认不随主仓推送）。
+- **多服务端广播**与**网关中继**：跨机房容灾、弱网穿透。
+- **Agent 批量远程更新**：服务端下发，Windows 校验版本 ACK 后才标成功。
 
 ---
 
@@ -279,7 +308,7 @@ graph TB
 - **多服务端广播**：单 Agent 一次采集并发上报多个服务端，弱网下重试 / 熔断 / gzip 降级。
 - **AI / RAG**：可插拔 LLM + pgvector 相似案例检索。
 
-更完整的架构、数据流、性能与故障排查见 [.qoder/repowiki/zh](.qoder/repowiki/zh/content) 中的「架构设计」「核心功能」「故障排除」等文档。
+更完整的使用与部署说明见 [USER_GUIDE.md](USER_GUIDE.md)、[INSTALL.md](INSTALL.md)、[DEPLOY_GUIDE.md](DEPLOY_GUIDE.md) 与 [docs/ci-gate.md](docs/ci-gate.md)。
 
 ---
 
@@ -293,10 +322,11 @@ graph TB
    - Go 代码使用 `gofmt` / `go vet`；新增逻辑请附测试。
    - 服务端零框架、零 CGO；保持单二进制、零第三方依赖的 Agent 原则。
    - 提交信息清晰表达「为什么」。
-4. **国际化**：营销网站支持 简中 / 繁中 / English / 日本語 / 한국어 五语，管理面板支持 简中 / 繁中 / English 三语。新增文案请在对应语言字典中同步（营销网站：`website/js/i18n.js` 与 `website/js/i18n-extra.js`；管理面板：`cmd/server/web/` 下 `i18n-dashboard*.js`。面板流程：改权威字典 → 补英文 → 跑 `build_en` / `build_tw` → 校验 parity → `go build` 重嵌）。
+4. **国际化**：
+   - **管理面板**（简中 / 繁中 / English）：`cmd/server/web/i18n-dashboard*.js`。流程：改权威字典 → 补英文 → `node scripts/build_i18n_en.js` / `build_i18n_tw.js` → `node scripts/check_i18n_parity.js` → `go build` 重嵌。
+   - **营销网站**（五语）：`website/js/i18n.js`、`i18n-extra.js`、`i18n-ko.js`，五语 key 需对齐。
 5. **提交 PR**：Fork → 分支开发 → 描述变更与测试 → 等待 CI 与评审。
 6. **安全漏洞**：请勿公开 Issue，通过私信 / 安全渠道报告，我们将优先处理。
-7. **开发者详细规范**见 [.qoder/repowiki/zh/content/开发者指南](.qoder/repowiki/zh/content/开发者指南)。
 
 ---
 
@@ -304,8 +334,8 @@ graph TB
 
 本项目以 **MIT 许可证**开源，详见 [LICENSE](LICENSE)。
 
-- 代码托管于 GitHub，透明可信；无主机数限制、无功能阉割、无「企业版」套路。
-- 第三方依赖（如 `vendor/` 下的 `lib/pq`、`go-qrcode`、`ledongthuc/pdf`，以及 `harmony/` 的 ohpm 依赖）遵循各自许可证，归原作者所有。
+- 代码托管于 GitHub / Gitee，透明可信；无主机数限制、无功能阉割、无「企业版」套路。
+- `vendor/` 等第三方依赖遵循各自许可证；Android / HarmonyOS 客户端为独立分发包，不在本仓库源码树中。
 
 ---
 
