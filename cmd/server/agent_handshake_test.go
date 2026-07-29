@@ -192,7 +192,7 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"AIOPS_USER=\"$SUDO_USER\"", "Never create a dedicated",
 		"gui/$AIOPS_UID", "aiops_has_systemd", "aiops_fetch", "unsupported architecture",
 		"AmbientCapabilities=CAP_NET_RAW",
-		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "ProtectHome=false",
+		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "ProtectHome=read-only",
 		"aiops_is_installed", "aiops_stop_and_uninstall_existing", "aiops_purge_systemd_unit",
 		".service.d",
 		"existing agent detected", "systemctl restart aiops-agent",
@@ -202,6 +202,19 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	}
 	if strings.Contains(shIn, "ProtectHome=true") {
 		t.Error("install.sh must not enable ProtectHome=true (blocks /root|/home cwd for remote shell)")
+	}
+	if strings.Contains(shIn, "aiops_stop_and_uninstall_existing") {
+		// Agent reinstall must not tear down the separate gateway relay service.
+		stopFn := shIn
+		if i := strings.Index(shIn, "aiops_stop_and_uninstall_existing()"); i >= 0 {
+			stopFn = shIn[i:]
+			if j := strings.Index(stopFn[1:], "\n}"); j >= 0 {
+				stopFn = stopFn[:j+2]
+			}
+		}
+		if strings.Contains(stopFn, "aiops-relay") {
+			t.Error("agent reinstall must not purge aiops-relay (separate gateway service)")
+		}
 	}
 	must("uninstall.sh", shUn,
 		"aiops_purge_systemd_unit", ".service.d",

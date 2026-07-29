@@ -369,7 +369,7 @@ aiops_is_installed() {
       return 0
     fi
   done
-  for _u in aiops-agent aiops-monitor-agent aiops-relay; do
+  for _u in aiops-agent aiops-monitor-agent; do
     if [ -f "/etc/systemd/system/${_u}.service" ] || [ -d "/etc/systemd/system/${_u}.service.d" ] || \
        [ -f "/lib/systemd/system/${_u}.service" ] || [ -f "/usr/lib/systemd/system/${_u}.service" ]; then
       return 0
@@ -399,7 +399,7 @@ aiops_stop_and_uninstall_existing() {
   fi
   echo "[AIOps] existing agent detected — stopping service, uninstalling, then reinstalling"
   if command -v systemctl >/dev/null 2>&1; then
-    for _u in aiops-agent aiops-monitor-agent aiops-relay; do
+    for _u in aiops-agent aiops-monitor-agent; do
       aiops_purge_systemd_unit "$_u"
     done
     systemctl daemon-reload 2>/dev/null || true
@@ -566,9 +566,8 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
   [ -n "$TERM_SHELL" ] && [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/usr/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/sh"
-  # Always leave home accessible: remote terminal cwd is $HOME (/root or /home/…);
-  # locking home (ProtectHome) makes chdir fail and Go misreports it as bash permission denied.
-  # Wipe any leftover drop-ins before writing the unit so old overrides cannot stick.
+  # Prefer read-only home: shell can chdir/read $HOME; writes under /home|/root stay blocked.
+  # Wipe leftover drop-ins so older home-protection overrides cannot stick.
   aiops_purge_systemd_unit aiops-agent
   aiops_purge_systemd_unit aiops-monitor-agent
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
@@ -588,7 +587,7 @@ RestartSec=5
 $UNIT_NNP
 $UNIT_CAPS
 ProtectSystem=strict
-ProtectHome=false
+ProtectHome=read-only
 PrivateTmp=true
 ReadWritePaths=$DIR
 [Install]

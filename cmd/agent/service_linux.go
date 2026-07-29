@@ -29,12 +29,12 @@ const agentServiceName = "aiops-monitor-agent"
 
 const systemdUnitPath = "/etc/systemd/system/aiops-monitor-agent.service"
 
-// legacyAgentServiceNames are older one-liner / alternate unit names that may
-// still be present after partial uninstalls.
+// legacyAgentServiceNames are older one-liner / alternate agent unit names that may
+// still be present after partial uninstalls. Do NOT include aiops-relay — that is a
+// separate gateway service and must survive agent reinstall/uninstall.
 var legacyAgentServiceNames = []string{
 	"aiops-monitor-agent",
 	"aiops-agent",
-	"aiops-relay",
 }
 
 func installAgentService(exePath, cfgPath string) error {
@@ -61,7 +61,7 @@ User=root
 Environment=SHELL=%s
 KillMode=mixed
 LimitNOFILE=65536
-ProtectHome=false
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target

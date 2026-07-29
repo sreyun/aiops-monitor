@@ -11,6 +11,15 @@
 
 ---
 
+## [v0.19.42] — 2026-07-29
+
+### 变更
+
+- **Linux Agent 安装**：systemd `ProtectHome` 调整为 `read-only`（可读 `$HOME` 供远程终端，同时阻止对 home 的写）；Agent 重装/卸载不再误清网关服务 `aiops-relay`。
+- **Windows Agent 自动更新**：Windows 更新一律进入 `pending_verify` 直至版本 ACK；soft-retry 拉长至 180s；不可比对目标不再卡在 `pending_verify`。
+
+---
+
 ## [v0.19.41] — 2026-07-29
 
 ### 变更

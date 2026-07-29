@@ -16,7 +16,7 @@ const (
 	agentUpdateMaxRetries  = 2
 	// Cooldown after enqueue so success-before-version-ack cannot storm.
 	agentUpdateInFlightSec  = 1800 // hard cooldown after enqueue
-	agentUpdateSoftRetrySec = 60   // if still behind, allow re-queue (Windows helper often needs a 2nd push)
+	agentUpdateSoftRetrySec = 180 // wait for Windows helper / version ack before soft re-queue
 )
 
 type agentUpdateHostResult struct {
@@ -485,9 +485,26 @@ func (s *Server) finishHostInFlight(job *agentUpdateJob, hr *agentUpdateHostResu
 
 func (s *Server) waitVersionAckOrExpire(job *agentUpdateJob, hostID, target string, rollback bool) {
 	if rollback || !isComparableAgentVer(target) {
-		// Rollback / uncomparable: keep short cooldown only.
+		// Rollback / uncomparable targets cannot be verified by agent_version —
+		// clear pending_verify so the job/UI do not stick, then release cooldown.
 		time.Sleep(2 * time.Minute)
-		s.agentUpdates.clearInFlight(hostID)
+		if s.agentUpdates != nil {
+			s.agentUpdates.mu.Lock()
+			if job != nil {
+				if j := s.agentUpdates.jobs[job.ID]; j != nil {
+					for _, hr := range j.Hosts {
+						if hr != nil && hr.HostID == hostID && hr.Status == "pending_verify" {
+							hr.Status = "success"
+							if strings.TrimSpace(hr.Message) == "" {
+								hr.Message = "update accepted (version not comparable; skipped verify)"
+							}
+						}
+					}
+				}
+			}
+			s.agentUpdates.mu.Unlock()
+			s.agentUpdates.clearInFlight(hostID)
+		}
 		return
 	}
 	// Give the helper a few report cycles to come back with the new version.
@@ -629,9 +646,15 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 		}
 		if lastErr == nil {
 			msg := truncateRun(out, 500)
-			// Windows (and Unix detached helpers) report success as soon as restart
-			// is scheduled — keep pending_verify until agent_version actually catches up.
-			if strings.Contains(strings.ToLower(out), "restart scheduled") {
+			// Windows helpers (module + legacy script) often report success before the
+			// new binary is running — keep pending_verify until agent_version catches up.
+			low := strings.ToLower(out)
+			needsVerify := strings.Contains(low, "restart scheduled") ||
+				strings.Contains(low, "legacy agent update ok")
+			if goos == "windows" && !job.Rollback {
+				needsVerify = true
+			}
+			if needsVerify {
 				s.agentUpdates.setHostResult(hr, "pending_verify", method, msg)
 			} else {
 				s.agentUpdates.setHostResult(hr, "success", method, msg)
