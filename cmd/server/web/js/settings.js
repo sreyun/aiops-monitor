@@ -1369,8 +1369,15 @@ function startApp() {
   function schedulePoll() {
     if (pollTimer) clearTimeout(pollTimer);
     const view = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
-    const intervals = { overview: 5000, hosts: 5000, checks: 10000, alerts: 5000, automation: 15000, forward: 15000, log: 10000 };
-    let interval = intervals[view] || POLL_BASE;
+    const intervals = {
+      overview: 5000, hosts: 5000, checks: 10000, alerts: 5000,
+      automation: 15000, forward: 15000, log: 10000,
+      dashboard: 20000, sre: 15000, security: 15000,
+      "host-security": 15000, "web-security": 15000,
+      k8s: 20000, sql: 20000, containers: 20000, hyperv: 20000,
+      netflow: 20000, snmp: 20000, hardware: 20000
+    };
+    let interval = intervals[view] || 20000;
     // 后台标签页降频至 15s，减少不必要的网络请求和 DOM 渲染
     if (document.visibilityState === "hidden") interval = Math.max(interval, 15000);
     pollTimer = setTimeout(() => {

@@ -1,38 +1,66 @@
 /* ---------- 渲染：KPI ---------- */
 function renderCards(s) {
   const cardsEl = $("cards");
-  // 从现有 DOM 读取上一次数值（用于动画起始值）
-  const prevVals = {};
-  cardsEl.querySelectorAll(".v[data-val]").forEach(el => {
-    const k = el.closest(".card")?.getAttribute("data-goto");
-    if (k) prevVals[k] = parseInt(el.dataset.val) || 0;
-  });
-
-  const card = (cls, ic, v, k, vcls, goto) =>
-    `<div class="card ${cls}" data-goto="${goto}" title="${I18N.t('section.click_view')}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}" data-val="${v}">${v}</div><div class="k">${k}</div></div></div>`;
-  cardsEl.innerHTML =
-    card("info", "host", s.total_hosts, I18N.t("ui.total_hosts"), "", "hosts:all") +
-    card("ok", "on", s.online_hosts, I18N.t("ui.online"), "ok", "hosts:online") +
-    card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, I18N.t("ui.offline"), s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
-    card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, I18N.t("ui.critical_alerts"), s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
-    card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, I18N.t("ui.warning"), s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
-    card("info", "event", s.plugin_events || 0, I18N.t("ui.plugin_events"), s.plugin_events > 0 ? "info" : "", "log:");
-
-  // 数值变化动画
-  cardsEl.querySelectorAll(".v[data-val]").forEach(el => {
-    const goto = el.closest(".card")?.getAttribute("data-goto");
-    const newVal = parseInt(el.dataset.val) || 0;
-    const oldVal = prevVals[goto] !== undefined ? prevVals[goto] : newVal;
-    if (oldVal !== newVal) animateValue(el, oldVal, newVal, 400);
-  });
-
-  // 告警数量增加时触发脉冲动画
-  const prevCrit = prevVals["alerts:"] !== undefined ? prevVals["alerts:"] : 0;
-  if (s.critical_alerts > prevCrit) {
-    const critCard = cardsEl.querySelector(".card.crit[data-goto='alerts:']");
-    if (critCard) {
-      critCard.classList.add("card-pulse");
-      setTimeout(() => critCard.classList.remove("card-pulse"), 600);
+  const values = [
+    { goto: "hosts:all", v: s.total_hosts, cls: "info", vcls: "" },
+    { goto: "hosts:online", v: s.online_hosts, cls: "ok", vcls: "ok" },
+    { goto: "hosts:offline", v: s.offline_hosts, cls: s.offline_hosts > 0 ? "crit" : "", vcls: s.offline_hosts > 0 ? "crit" : "" },
+    { goto: "alerts:", v: s.critical_alerts, cls: s.critical_alerts > 0 ? "crit" : "ok", vcls: s.critical_alerts > 0 ? "crit" : "ok" },
+    { goto: "alerts:", v: s.warning_alerts, cls: s.warning_alerts > 0 ? "warn" : "ok", vcls: s.warning_alerts > 0 ? "warn" : "ok" },
+    { goto: "log:", v: s.plugin_events || 0, cls: "info", vcls: (s.plugin_events || 0) > 0 ? "info" : "" },
+  ];
+  const existing = cardsEl.querySelectorAll(".card");
+  if (existing.length === values.length) {
+    let prevCrit = 0;
+    existing.forEach((card, i) => {
+      const spec = values[i];
+      const vEl = card.querySelector(".v");
+      const oldVal = vEl ? (parseInt(vEl.dataset.val) || 0) : 0;
+      if (i === 3) prevCrit = oldVal;
+      card.className = "card " + spec.cls;
+      card.setAttribute("data-goto", spec.goto);
+      if (vEl) {
+        vEl.className = "v mono " + (spec.vcls || "");
+        vEl.dataset.val = String(spec.v);
+        if (oldVal !== spec.v) animateValue(vEl, oldVal, spec.v, 400);
+        else vEl.textContent = String(spec.v);
+      }
+    });
+    if (s.critical_alerts > prevCrit) {
+      const critCard = cardsEl.querySelector(".card.crit[data-goto='alerts:']");
+      if (critCard) {
+        critCard.classList.add("card-pulse");
+        setTimeout(() => critCard.classList.remove("card-pulse"), 600);
+      }
+    }
+  } else {
+    const prevVals = {};
+    cardsEl.querySelectorAll(".v[data-val]").forEach(el => {
+      const k = el.closest(".card")?.getAttribute("data-goto");
+      if (k) prevVals[k] = parseInt(el.dataset.val) || 0;
+    });
+    const card = (cls, ic, v, k, vcls, goto) =>
+      `<div class="card ${cls}" data-goto="${goto}" title="${I18N.t('section.click_view')}"><div class="ic">${icon(ic)}</div><div class="txt"><div class="v mono ${vcls || ""}" data-val="${v}">${v}</div><div class="k">${k}</div></div></div>`;
+    cardsEl.innerHTML =
+      card("info", "host", s.total_hosts, I18N.t("ui.total_hosts"), "", "hosts:all") +
+      card("ok", "on", s.online_hosts, I18N.t("ui.online"), "ok", "hosts:online") +
+      card(s.offline_hosts > 0 ? "crit" : "", "off", s.offline_hosts, I18N.t("ui.offline"), s.offline_hosts > 0 ? "crit" : "", "hosts:offline") +
+      card(s.critical_alerts > 0 ? "crit" : "ok", "crit", s.critical_alerts, I18N.t("ui.critical_alerts"), s.critical_alerts > 0 ? "crit" : "ok", "alerts:") +
+      card(s.warning_alerts > 0 ? "warn" : "ok", "warn", s.warning_alerts, I18N.t("ui.warning"), s.warning_alerts > 0 ? "warn" : "ok", "alerts:") +
+      card("info", "event", s.plugin_events || 0, I18N.t("ui.plugin_events"), s.plugin_events > 0 ? "info" : "", "log:");
+    cardsEl.querySelectorAll(".v[data-val]").forEach(el => {
+      const goto = el.closest(".card")?.getAttribute("data-goto");
+      const newVal = parseInt(el.dataset.val) || 0;
+      const oldVal = prevVals[goto] !== undefined ? prevVals[goto] : newVal;
+      if (oldVal !== newVal) animateValue(el, oldVal, newVal, 400);
+    });
+    const prevCrit = prevVals["alerts:"] !== undefined ? prevVals["alerts:"] : 0;
+    if (s.critical_alerts > prevCrit) {
+      const critCard = cardsEl.querySelector(".card.crit[data-goto='alerts:']");
+      if (critCard) {
+        critCard.classList.add("card-pulse");
+        setTimeout(() => critCard.classList.remove("card-pulse"), 600);
+      }
     }
   }
 
@@ -57,13 +85,37 @@ function renderStatsHealth(s) {
   const rate = total > 0 ? Math.round(online / total * 100) : 0;
   const allAlerts = (s.critical_alerts || 0) + (s.warning_alerts || 0);
   const healthy = (s.critical_alerts || 0) === 0;
-  const sc = (cls, val, key, hint) =>
-    `<div class="stat-card"><div class="sv ${cls}">${val}</div><div class="sk">${key}</div>${hint ? `<div class="sh">${hint}</div>` : ""}</div>`;
-  grid.innerHTML =
-    sc("", total, I18N.t("ui.total_hosts"), "") +
-    sc(rate >= 80 ? "ok" : rate >= 50 ? "warn" : "crit", rate + "%", I18N.t("section.online_rate"), online + "/" + total + " " + I18N.t("ui.online")) +
-    sc(healthy ? "ok" : "crit", healthy ? I18N.t("section.health_ok") : I18N.t("section.health_error"), I18N.t("section.health_status"), !healthy ? I18N.t("section.unprocessed_alerts") + ": " + (s.critical_alerts || 0) : "") +
-    sc(allAlerts > 0 ? "warn" : "ok", allAlerts, I18N.t("section.total_alerts"), I18N.t("ui.critical_alerts") + ": " + (s.critical_alerts || 0) + " / " + I18N.t("ui.warning") + ": " + (s.warning_alerts || 0));
+  const vals = [
+    { cls: "", val: String(total), key: I18N.t("ui.total_hosts"), hint: "" },
+    { cls: rate >= 80 ? "ok" : rate >= 50 ? "warn" : "crit", val: rate + "%", key: I18N.t("section.online_rate"), hint: online + "/" + total + " " + I18N.t("ui.online") },
+    { cls: healthy ? "ok" : "crit", val: healthy ? I18N.t("section.health_ok") : I18N.t("section.health_error"), key: I18N.t("section.health_status"), hint: !healthy ? I18N.t("section.unprocessed_alerts") + ": " + (s.critical_alerts || 0) : "" },
+    { cls: allAlerts > 0 ? "warn" : "ok", val: String(allAlerts), key: I18N.t("section.total_alerts"), hint: I18N.t("ui.critical_alerts") + ": " + (s.critical_alerts || 0) + " / " + I18N.t("ui.warning") + ": " + (s.warning_alerts || 0) },
+  ];
+  const cards = grid.querySelectorAll(".stat-card");
+  if (cards.length === vals.length) {
+    cards.forEach((card, i) => {
+      const spec = vals[i];
+      const sv = card.querySelector(".sv");
+      const sk = card.querySelector(".sk");
+      let sh = card.querySelector(".sh");
+      if (sv) { sv.className = "sv " + spec.cls; sv.textContent = spec.val; }
+      if (sk) sk.textContent = spec.key;
+      if (spec.hint) {
+        if (!sh) { sh = document.createElement("div"); sh.className = "sh"; card.appendChild(sh); }
+        sh.textContent = spec.hint;
+      } else if (sh) {
+        sh.remove();
+      }
+    });
+  } else {
+    const sc = (cls, val, key, hint) =>
+      `<div class="stat-card"><div class="sv ${cls}">${val}</div><div class="sk">${key}</div>${hint ? `<div class="sh">${hint}</div>` : ""}</div>`;
+    grid.innerHTML =
+      sc(vals[0].cls, vals[0].val, vals[0].key, vals[0].hint) +
+      sc(vals[1].cls, vals[1].val, vals[1].key, vals[1].hint) +
+      sc(vals[2].cls, vals[2].val, vals[2].key, vals[2].hint) +
+      sc(vals[3].cls, vals[3].val, vals[3].key, vals[3].hint);
+  }
   // 更新节头徽章（在线率摘要）
   const badge = $("statsHealthBadge");
   if (badge) badge.textContent = I18N.t("section.online_rate") + " " + rate + "%";
@@ -228,7 +280,9 @@ function renderAlerts(alerts) {
   });
   const empty = `<div class="empty-line">✅ ${I18N.t("empty.no_alerts")}</div>`;
   const filterEmpty = `<div class="empty-line">${I18N.t("empty.no_alerts_filtered")}</div>`;
-  $("alerts").innerHTML = filtered.length ? filtered.map(row).join("") : (n ? filterEmpty : empty);
+  // 告警页与概览迷你列表共用差量更新，避免全量 innerHTML 闪烁
+  diffUpdateList($("alerts"), filtered, row, alertKey, n ? filterEmpty : empty);
+  refreshAlertRowTimes($("alerts"), now);
   // 概览页告警列表：差量更新，避免全量 innerHTML 重建导致闪烁
   diffUpdateList($("ovAlerts"), alerts.slice(0, 6), row, alertKey, empty);
   // 轻量级更新“已持续”相对时间文本（仅 textContent，不重建 DOM）
@@ -236,16 +290,20 @@ function renderAlerts(alerts) {
 }
 
 /* ---------- 概览：资源 TOP10 排行榜（多面板横向条形图） ---------- */
+let _topPanelsSig = "";
 function renderTop(hosts) {
   const el = $("topPanels");
   if (!el) return;
   const live = hosts.filter(h => h.latest && h.online);
 
   if (!live.length) {
-    el.innerHTML = `<div class="top-empty">
+    if (_topPanelsSig !== "empty") {
+      _topPanelsSig = "empty";
+      el.innerHTML = `<div class="top-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
       <span>${I18N.t("empty.no_online_hosts")}</span>
     </div>`;
+    }
     return;
   }
 
@@ -259,10 +317,6 @@ function renderTop(hosts) {
   const iopsTotal = m => (m.disk_read_iops || 0) + (m.disk_write_iops || 0);
 
   // GPU host filter: include any host that has GPU data (gs.length > 0).
-  // Hosts with GPUs always appear in the GPU panel regardless of current load —
-  // this prevents the flickering behavior where hosts disappear when their GPUs
-  // are idle (util_percent = 0) or when nvidia-smi briefly times out and the
-  // cached data has empty gpus array for one cycle.
   const gpuLive = live.filter(h => {
     const gs = (h.latest.gpus || []);
     return gs.length > 0;
@@ -283,11 +337,57 @@ function renderTop(hosts) {
 
   const topN = (arr, fn, n) => arr.slice().sort((a, b) => fn(b.latest) - fn(a.latest)).slice(0, n);
 
+  // Signature: panel keys + top-N hostId:roundedValue — skip DOM when unchanged.
+  const checksSig = (typeof LAST_CHECKS !== "undefined" && Array.isArray(LAST_CHECKS))
+    ? LAST_CHECKS.filter(c => !c.builtin).map(c => `${c.id}:${c.last_ok}:${c.last_latency_ms||0}`).join("|")
+    : "";
+  const dataSig = panels.map(panel => {
+    const source = panel.dataSource || live;
+    return panel.key + "=" + topN(source, panel.fn, 10).map(h => {
+      const v = panel.fn(h.latest);
+      const rv = panel.isPct || panel.key === "load" ? (Math.round(v * 10) / 10) : Math.round(v);
+      return `${h.id}:${rv}`;
+    }).join(",");
+  }).join(";") + "#chk:" + checksSig;
+  if (dataSig === _topPanelsSig && el.querySelector(".top-panel")) {
+    // Patch bar widths / values in place when structure matches.
+    panels.forEach(panel => {
+      const source = panel.dataSource || live;
+      const sorted = topN(source, panel.fn, 10);
+      if (!sorted.length) return;
+      const maxVal = Math.max(1, ...sorted.map(h => panel.fn(h.latest)));
+      const panelEl = el.querySelector(`.top-panel[data-top-key="${panel.key}"]`);
+      if (!panelEl) return;
+      sorted.forEach((h, idx) => {
+        const item = panelEl.querySelector(`.top-item[data-id="${CSS.escape(h.id)}"]`);
+        if (!item) return;
+        const v = panel.fn(h.latest);
+        const pct = panel.isPct ? v : Math.min(100, v / maxVal * 100);
+        const width = Math.max(3, pct);
+        const color = panel.key === "net" ? "var(--info)" : usageColor(panel.isPct ? v : pct);
+        let disp;
+        if (panel.isPct) disp = v.toFixed(1) + "%";
+        else if (panel.key === "net") disp = fmtRate(v);
+        else if (panel.key === "iops") disp = fmtIOPS(v) + " " + I18N.t("unit.iops");
+        else if (panel.key === "load") disp = v.toFixed(2);
+        else if (panel.key === "proc") disp = v.toFixed(0);
+        else disp = v.toFixed(1);
+        const fill = item.querySelector(".top-bar-fill");
+        if (fill) { fill.style.width = width + "%"; fill.style.background = color; }
+        const valEl = item.querySelector(".top-val");
+        if (valEl) valEl.textContent = disp;
+        item.title = `${h.hostname || h.id} · ${disp}`;
+      });
+    });
+    return;
+  }
+  _topPanelsSig = dataSig;
+
   function renderPanel(panel) {
     const source = panel.dataSource || live;
     const sorted = topN(source, panel.fn, 10);
     if (!sorted.length) {
-      return `<div class="top-panel">
+      return `<div class="top-panel" data-top-key="${esc(panel.key)}">
         <div class="top-title">${esc(panel.title)}<span class="top-unit">${esc(panel.unit)}</span></div>
         <div class="top-empty">${I18N.t("empty.no_data")}</div>
       </div>`;
@@ -311,7 +411,7 @@ function renderTop(hosts) {
         <span class="top-val mono">${esc(disp)}</span>
       </div>`;
     }).join("");
-    return `<div class="top-panel">
+    return `<div class="top-panel" data-top-key="${esc(panel.key)}">
       <div class="top-title">${esc(panel.title)}<span class="top-unit">${esc(panel.unit)}</span></div>
       ${items}
     </div>`;

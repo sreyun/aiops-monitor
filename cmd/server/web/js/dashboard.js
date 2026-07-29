@@ -951,9 +951,22 @@ function dashDisposePanelChart(panelId) {
   delete DASH_CHART_ARGS[panelId];
 }
 function dashMountEchart(body, panelId) {
+  if (!body) return null;
+  const wantId = "dashEchart_" + panelId;
+  let el = document.getElementById(wantId);
+  // 复用已挂载且仍在当前 body 内的实例 DOM，避免时间范围切换时 dispose+闪白
+  if (el && body.contains(el)) {
+    DASH_ECHART_ELS[panelId] = el;
+    return el;
+  }
+  const existing = body.querySelector(".dash-echart");
+  if (existing && existing.id === wantId) {
+    DASH_ECHART_ELS[panelId] = existing;
+    return existing;
+  }
   dashDisposePanelChart(panelId);
-  body.innerHTML = `<div class="dash-echart" id="dashEchart_${panelId}"></div>`;
-  const el = document.getElementById("dashEchart_" + panelId);
+  body.innerHTML = `<div class="dash-echart" id="${wantId}"></div>`;
+  el = document.getElementById(wantId);
   if (el) DASH_ECHART_ELS[panelId] = el;
   return el;
 }
@@ -1045,7 +1058,13 @@ async function loadPanelContent(p, body, chartKey, loadSeq) {
   const seq = loadSeq != null ? loadSeq : DASH_LOAD_SEQ;
   const key = chartKey != null ? chartKey : p.id;
   const pView = key === p.id ? p : Object.assign({}, p, { id: key });
-  dashDisposePanelChart(key);
+  const echartTypes = {
+    timeseries: 1, graph: 1, gauge: 1, piechart: 1, pie: 1, barchart: 1, bar: 1,
+    histogram: 1, heatmap: 1, candlestick: 1, radar: 1, sankey: 1, bargauge: 1
+  };
+  const reuseEl = document.getElementById("dashEchart_" + key);
+  const canReuseEchart = !!(echartTypes[p.type] && reuseEl && body.contains(reuseEl));
+  if (!canReuseEchart) dashDisposePanelChart(key);
   if (p.type === "text" || p.type === "markdown") {
     body.innerHTML = `<div class="dash-text">${renderAIMarkdown(p.text || "")}</div>`;
     return;
@@ -1063,8 +1082,15 @@ async function loadPanelContent(p, body, chartKey, loadSeq) {
     return;
   }
   if (p.type === "alertlist") { await loadAlertListPanel(pView, body); return; }
-  if (!(p.targets || []).length) { body.innerHTML = `<div class="dash-empty">未配置查询</div>`; return; }
-  body.innerHTML = `<div class="dash-panel-skeleton" aria-busy="true" aria-label="加载中"></div>`;
+  if (!(p.targets || []).length) {
+    dashDisposePanelChart(key);
+    body.innerHTML = `<div class="dash-empty">未配置查询</div>`;
+    return;
+  }
+  // Keep existing chart visible while refetching — avoids flash on range change.
+  if (!canReuseEchart) {
+    body.innerHTML = `<div class="dash-panel-skeleton" aria-busy="true" aria-label="加载中"></div>`;
+  }
   const { from, to } = dashRange();
   const panelLoad = dashBeginPanelLoad(key);
   const stillCurrent = () => (seq === DASH_LOAD_SEQ || key === "zoom") && panelLoad.isCurrent();
@@ -1304,8 +1330,16 @@ async function loadTimeseriesPanel(p, body, from, to, panelLoad) {
     if (useForecastAPI && collected.length >= 32) break;
   }
   if (!alive()) return;
-  if (naOff) { body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`; return; }
-  if (!collected.length) { body.innerHTML = dashEmptyHint(metaMsg || "该范围无数据", p); return; }
+  if (naOff) {
+    dashDisposePanelChart(p.id);
+    body.innerHTML = `<div class="dash-empty">数据源不可用（${esc(dsLabel(resolveDS(p)))}）—— 请在「数据源」配置或改选面板数据源</div>`;
+    return;
+  }
+  if (!collected.length) {
+    dashDisposePanelChart(p.id);
+    body.innerHTML = dashEmptyHint(metaMsg || "该范围无数据", p);
+    return;
+  }
   const histOnly = collected.filter(c => !c.kind || c.kind === "history");
   const labels = dashLegends(histOnly.length ? histOnly : collected);
   let li = 0;
@@ -1364,6 +1398,7 @@ async function loadTimeseriesPanel(p, body, from, to, panelLoad) {
   }
   const el = dashMountEchart(body, p.id);
   if (!el) return;
+  body.querySelectorAll(":scope > .dash-fc-meta").forEach(n => n.remove());
   if (metaBadge) el.insertAdjacentHTML("beforebegin", metaBadge);
   DashCharts.render(el, { type: "timeseries", panel: p, series: collected, fmtUnit, nowTs: nowTs || 0 });
 }

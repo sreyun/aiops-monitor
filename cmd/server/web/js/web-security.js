@@ -1349,13 +1349,62 @@ async function wsRunScanSelected() {
   }
 }
 
-function wsSoftRefresh() {
+function wsSoftRefresh(opts) {
+  const full = !!(opts && opts.full);
+  const selectedRunning = wsSelected && wsSelected.status === "running";
+  if (!full && selectedRunning && !wsNeedsFullHistoryPaint()) {
+    wsPatchRunningUI();
+    return;
+  }
   const body = $("wsHistoryBody");
-  if (body) {
-    body.innerHTML = wsHistoryRowsHTML();
-    body.querySelectorAll("tr[data-wsscanid]").forEach(tr => tr.addEventListener("click", () => wsLoadScan(tr.dataset.wsscanid)));
+  if (body) body.innerHTML = wsHistoryRowsHTML();
+  // KPI running count
+  const metrics = document.querySelectorAll("#webSecurityPanel .sec-metrics .sec-metric b");
+  if (metrics.length >= 4) {
+    const sum = wsLatestSummary();
+    metrics[3].textContent = String(sum.running);
   }
   if (wsSelected) wsPaintDetail(wsSelected);
+}
+
+function wsCssEsc(id) {
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(String(id));
+  return String(id).replace(/([^a-zA-Z0-9_-])/g, "\\$1");
+}
+
+function wsNeedsFullHistoryPaint() {
+  const body = $("wsHistoryBody");
+  if (!body) return true;
+  return (wsScans || []).slice(0, 30).some(s => !body.querySelector(`tr[data-wsscanid="${wsCssEsc(s.id)}"]`));
+}
+
+function wsPatchRunningUI() {
+  const body = $("wsHistoryBody");
+  if (body) {
+    (wsScans || []).slice(0, 30).forEach(s => {
+      const tr = body.querySelector(`tr[data-wsscanid="${wsCssEsc(s.id)}"]`);
+      if (!tr) return;
+      const statusTd = tr.children[1];
+      if (statusTd) statusTd.innerHTML = wsStatusBadge(s.status);
+      const actionTd = tr.lastElementChild;
+      if (!actionTd) return;
+      const hasCancel = !!actionTd.querySelector("[data-ws-cancel]");
+      if (s.status === "running" && !hasCancel) {
+        actionTd.innerHTML = `<button type="button" class="btn sm danger" data-ws-cancel="${wsEsc(s.id)}">${wsEsc(wsT("ws.cancel_scan", "取消"))}</button>`;
+      } else if (s.status !== "running" && hasCancel) {
+        actionTd.innerHTML = "";
+      }
+    });
+  }
+  const metrics = document.querySelectorAll("#webSecurityPanel .sec-metrics .sec-metric b");
+  if (metrics.length >= 4) {
+    const sum = wsLatestSummary();
+    metrics[3].textContent = String(sum.running);
+  }
+  if (wsSelected && wsSelected.status === "running") {
+    const box = $("wsDetail");
+    if (box && !box.querySelector(".ws-progress")) wsPaintDetail(wsSelected);
+  }
 }
 
 function wsMaybePoll() {
@@ -1382,7 +1431,12 @@ function wsMaybePoll() {
           wsSelected = await wsFetchJSON(`${API}/security/web/scans/` + encodeURIComponent(wsSelected.id));
         }
       }
-      if (changed || (wsSelected && wsSelected.status === "running")) wsSoftRefresh();
+      const transitioned = prevStatus === "running" && wsSelected && wsSelected.status !== "running";
+      if (transitioned || (changed && wsNeedsFullHistoryPaint())) {
+        wsSoftRefresh({ full: true });
+      } else if (changed || (wsSelected && wsSelected.status === "running")) {
+        wsSoftRefresh();
+      }
       if (!(wsScans || []).some(x => x.status === "running")) {
         clearInterval(wsPollTimer); wsPollTimer = null;
         wsEngine = await wsFetchJSON(`${API}/security/web/engine`).catch(() => wsEngine);

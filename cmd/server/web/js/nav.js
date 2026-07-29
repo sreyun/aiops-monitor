@@ -18,16 +18,39 @@ function updateFavicon(critCount) {
   if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
   link.href = canvas.toDataURL();
 }
+let _refreshPromise = null;
+let _lastAlertsActivityAt = 0;
+const REFRESH_CORE_VIEWS = new Set(["overview", "hosts", "alerts", "log", "checks", "forward"]);
+const ALERTS_ACTIVITY_TTL_MS = 45000;
+
 async function refresh(force) {
+  if (_refreshPromise && !force) return _refreshPromise;
+  const run = (async () => {
   try {
+    const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
+    const coreView = REFRESH_CORE_VIEWS.has(activeView);
+    const needAlertsActivity = force || coreView ||
+      (Date.now() - _lastAlertsActivityAt > ALERTS_ACTIVITY_TTL_MS);
+
     const rs = await fetch(`${API}/summary`);
     if (rs.status === 401) { $("loginView").classList.add("show"); return; }
     const s = await rs.json();
-    const [hostsRaw, alertsRaw, activityRaw] = await Promise.all([
-      fetch(`${API}/hosts`, { credentials: "same-origin" }).then(r => r.json()),
-      fetch(`${API}/alerts`, { credentials: "same-origin" }).then(r => r.json()),
-      fetch(`${API}/activity`, { credentials: "same-origin" }).then(r => r.json())
-    ]);
+
+    const fetches = [
+      fetch(`${API}/hosts`, { credentials: "same-origin" }).then(r => r.json())
+    ];
+    if (needAlertsActivity) {
+      fetches.push(
+        fetch(`${API}/alerts`, { credentials: "same-origin" }).then(r => r.json()),
+        fetch(`${API}/activity`, { credentials: "same-origin" }).then(r => r.json())
+      );
+    }
+    const results = await Promise.all(fetches);
+    const hostsRaw = results[0];
+    let alertsRaw = needAlertsActivity ? results[1] : (typeof LAST_ALERTS !== "undefined" ? LAST_ALERTS : []);
+    let activityRaw = needAlertsActivity ? results[2] : (typeof LAST_LOG !== "undefined" ? LAST_LOG : []);
+    if (needAlertsActivity) _lastAlertsActivityAt = Date.now();
+
     await loadHostFolders();
     // P0-#2: Connection state feedback
     if (FIRST_LOAD) { FIRST_LOAD = false; }
@@ -35,24 +58,18 @@ async function refresh(force) {
       if (CONN_STATE === "disconnected") toast(I18N.t("toast.reconnected"), "ok");
       CONN_STATE = "connected";
     }
-    // 概览不沿用主机树 CUR_FOLDER（首页无树 UI，静默过滤会污染 KPI/TOP）
-    // 性能优化：按当前活动视图只渲染其拥有的 DOM，避免每 5s 全量重建隐藏视图（主机网格/TOP/日志/告警列表）
-    // 抢占主线程，导致新建/查看/编辑时卡顿。汇总计数、图标、通知与主机元数据仍全局保持最新。
-    const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "overview";
+    // 性能优化：按当前活动视图只渲染其拥有的 DOM；非核心视图降载 alerts/activity 拉取。
     const onOverview = activeView === "overview";
-    // CRITICAL: always sync host cache — not only on the Hosts page. Automation /
-    // Inspect / Security historically saw empty pickers until「主机」was opened.
     const hosts = typeof syncHostCache === "function" ? syncHostCache(hostsRaw) : normalizeHostsPayload(hostsRaw);
     const alerts = Array.isArray(alertsRaw) ? alertsRaw : [];
     const activity = Array.isArray(activityRaw) ? activityRaw : [];
-    // 侧栏计数徽标需跨所有视图保持最新（其原本在被门控的 render* 里更新），用已取数据全局轻量刷新。
     const setTxt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
     setTxt("navHosts", hosts.length); setTxt("hostsCount", hosts.length);
     setTxt("navAlerts", alerts.length); setTxt("alertsCount", alerts.length); setTxt("ovAlertsCount", alerts.length);
     setTxt("navLog", activity.length);
     if (onOverview) { renderCards(s); renderStatsHealth(s); renderTop(hosts); }
     if (onOverview || activeView === "alerts") renderAlerts(alerts);
-    if (onOverview || activeView === "log") renderLog(activity);
+    if ((onOverview || activeView === "log") && (needAlertsActivity || activeView === "log")) renderLog(activity);
     if (activeView === "hosts") renderHosts(hosts);
     updateFavicon(s.critical_alerts || 0);
     notifyCriticalAlerts(s.critical_alerts || 0);
@@ -64,6 +81,9 @@ async function refresh(force) {
       toast(I18N.t("ui.reconnecting"), "err");
     }
   }
+  })();
+  _refreshPromise = run.finally(() => { if (_refreshPromise === run) _refreshPromise = null; });
+  return _refreshPromise;
 }
 
 /* ---------- 事件绑定（委托） ---------- */

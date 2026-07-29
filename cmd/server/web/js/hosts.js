@@ -666,10 +666,20 @@ function bindHostTreeOnce() {
   const tree = $("hostTree");
   if (!tree || tree.dataset.bound) return;
   tree.dataset.bound = "1";
+  let _hostTreeSearchTimer = null;
   tree.addEventListener("input", (e) => {
     if (e.target && e.target.id === "hostTreeSearch") {
       HOST_TREE_Q = e.target.value || "";
-      renderHostTree();
+      if (_hostTreeSearchTimer) { clearTimeout(_hostTreeSearchTimer); _hostTreeSearchTimer = null; }
+      // 清空立即重建；输入防抖 250ms，避免每键全量重建树
+      if (!(HOST_TREE_Q || "").trim()) {
+        renderHostTree();
+        return;
+      }
+      _hostTreeSearchTimer = setTimeout(() => {
+        _hostTreeSearchTimer = null;
+        renderHostTree();
+      }, 250);
     }
   });
   tree.addEventListener("contextmenu", (e) => {

@@ -1018,11 +1018,72 @@ async function hsRunScan() {
   }
 }
 
-function hsSoftRefresh() {
+function hsSoftRefresh(opts) {
+  const full = !!(opts && opts.full);
+  const anyRunning = (hsScans || []).some(s => s.status === "running") ||
+    (hsSelected && hsSelected.status === "running");
+  if (!full && anyRunning && !hsNeedsFullHistoryPaint()) {
+    hsPatchRunningUI();
+    return;
+  }
   hsCapturePick("scan");
   if (hsShowCfg) hsCapturePick("cfg");
   paintHostSecurity();
   if (hsSelected) hsPaintDetail(hsSelected);
+}
+
+function hsCssEsc(id) {
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(String(id));
+  return String(id).replace(/([^a-zA-Z0-9_-])/g, "\\$1");
+}
+
+function hsNeedsFullHistoryPaint() {
+  const panel = $("hostSecurityPanel");
+  if (!panel || !panel.querySelector(".hs-shell")) return true;
+  return (hsScans || []).slice(0, 25).some(s => !panel.querySelector(`tr[data-scan="${hsCssEsc(s.id)}"]`));
+}
+
+function hsPatchRunningUI() {
+  const panel = $("hostSecurityPanel");
+  if (!panel) return;
+  const crit = hsSummary.filter(h => h.risk === "critical" || h.risk === "crit").length;
+  const high = hsSummary.filter(h => h.risk === "high").length;
+  const running = (hsScans || []).filter(s => s.status === "running").length;
+  const metrics = panel.querySelectorAll(".sec-metrics .sec-metric b");
+  if (metrics.length >= 4) {
+    metrics[0].textContent = String(hsSummary.length);
+    metrics[1].textContent = String(crit);
+    metrics[2].textContent = String(high);
+    metrics[3].textContent = String(running);
+  }
+  (hsScans || []).slice(0, 25).forEach(s => {
+    const tr = panel.querySelector(`tr[data-scan="${hsCssEsc(s.id)}"]`);
+    if (!tr) return;
+    const statusTd = tr.querySelector("td.col-risk");
+    if (statusTd) statusTd.innerHTML = hsStatusBadge(s.status);
+    const actionTd = tr.lastElementChild;
+    if (!actionTd) return;
+    const hasCancel = !!actionTd.querySelector("[data-hs-cancel]");
+    if (s.status === "running" && !hasCancel) {
+      actionTd.innerHTML = `<button type="button" class="btn sm danger" data-hs-cancel="${hsEsc(s.id)}">${hsEsc(hsT("hs.cancel_scan", "取消"))}</button>`;
+      const btn = actionTd.querySelector("[data-hs-cancel]");
+      if (btn) btn.addEventListener("click", async e => {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          await hsFetchJSON(`${API}/security/host/scans/${encodeURIComponent(btn.dataset.hsCancel)}/cancel`, { method: "POST" });
+          toast(hsT("hs.cancel_ok", "已取消扫描"), "ok");
+          renderHostSecurity();
+        } catch (err) { toast(err.message || String(err), "err"); }
+      });
+    } else if (s.status !== "running" && hasCancel) {
+      actionTd.innerHTML = "";
+    }
+  });
+  if (hsSelected && hsSelected.status === "running") {
+    const box = $("hsDetail");
+    if (box && !box.querySelector(".hs-progress")) hsPaintDetail(hsSelected);
+  }
 }
 
 function hsMaybePoll() {
@@ -1054,7 +1115,12 @@ function hsMaybePoll() {
           hsSelected = await hsFetchJSON(`${API}/security/host/scans/` + encodeURIComponent(hsSelected.id));
         }
       }
-      if (changed || (hsSelected && hsSelected.status === "running")) hsSoftRefresh();
+      const transitioned = prevStatus === "running" && hsSelected && hsSelected.status !== "running";
+      if (transitioned || (changed && hsNeedsFullHistoryPaint())) {
+        hsSoftRefresh({ full: true });
+      } else if (changed || (hsSelected && hsSelected.status === "running")) {
+        hsSoftRefresh();
+      }
       if (!(hsScans || []).some(s => s.status === "running")) {
         clearInterval(hsPollTimer); hsPollTimer = null;
       }

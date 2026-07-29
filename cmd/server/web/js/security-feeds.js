@@ -13,6 +13,7 @@ let SF_POLL = null;       // 轮询定时器
 let SF_TESTING = false;   // 连通性测试中
 let SF_TEST_RESULT = null;
 let SF_LOAD_ERROR = "";   // 最近一次加载失败原因
+let SF_PAINT_SIG = "";    // 上次 paint 签名，避免无变化重复重建
 
 // 常用加速镜像：国内直连 GitHub 经常超时，给出可直接选用的预设而不是让用户去查。
 const SF_MIRRORS = [
@@ -77,6 +78,30 @@ async function sfLoad() {
     SF_LOAD_ERROR = String((e && e.message) || e || sfT("sf.load_failed", "加载失败"));
   }
   return SF_STATE;
+}
+
+function sfStateSig() {
+  if (SF_LOAD_ERROR) return "err:" + SF_LOAD_ERROR;
+  if (!SF_STATE) return "empty";
+  const j = SF_STATE.job || {};
+  const feeds = (SF_STATE.feeds || []).map(f =>
+    `${f.id || ""}:${f.updated_at || 0}:${f.status || ""}:${f.size || 0}`
+  ).join("|");
+  return [
+    j.running ? 1 : 0,
+    j.progress == null ? "" : j.progress,
+    j.updated_at || 0,
+    j.message || "",
+    SF_STATE.updated_at || 0,
+    feeds
+  ].join(";");
+}
+
+function sfPaintIfChanged(force) {
+  const sig = sfStateSig();
+  if (!force && sig === SF_PAINT_SIG) return false;
+  SF_PAINT_SIG = sig;
+  return sfPaint();
 }
 
 function sfScrollIntoView() {
@@ -313,13 +338,13 @@ async function sfCancel() {
 }
 
 // Polling stops as soon as the job finishes so an idle dashboard makes no
-// background requests.
+// background requests. Signature skip avoids redundant full paints while progress stalls.
 function sfStartPoll() {
   sfStopPoll();
   const tick = async () => {
     await sfLoad();
     const running = SF_STATE && SF_STATE.job && SF_STATE.job.running;
-    if (SF_OPEN && document.querySelector("#view-web-security.active")) sfPaint();
+    if (SF_OPEN && document.querySelector("#view-web-security.active")) sfPaintIfChanged(false);
     if (!running) {
       sfStopPoll();
       // The template count in the engine bar only changes once a run finishes.
@@ -328,7 +353,7 @@ function sfStartPoll() {
         const h = sfHost();
         if (h && typeof h.setEngine === "function") h.setEngine(eng);
       } catch (_) {}
-      if (SF_OPEN) sfPaint();
+      if (SF_OPEN) sfPaintIfChanged(true);
     }
   };
   tick();
