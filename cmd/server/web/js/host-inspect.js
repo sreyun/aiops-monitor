@@ -242,21 +242,91 @@ safeAddEventListener("inspRunBtn", "click", async () => {
 
 function startInspPoll(id) {
   stopInspPoll();
+  let lastSig = "";
   INSP_POLL = setInterval(async () => {
     try {
-      const b = await fetch(`${API}/host-inspect/${encodeURIComponent(id)}`).then(r => r.json());
+      // compact=1：轮询不含完整 report，避免多机每 2s 拉数十 MB。
+      const b = await fetch(`${API}/host-inspect/${encodeURIComponent(id)}?compact=1`).then(r => r.json());
+      const sig = inspBatchProgressSig(b);
       const idx = INSP_BATCHES.findIndex(x => x.id === id);
-      if (idx >= 0) INSP_BATCHES[idx] = b; else INSP_BATCHES.unshift(b);
-      renderInspBatches();
-      if (INSP_VIEW_MODE === "fleet" && INSP_ACTIVE_ID === id) {
-        showInspFleetSummary(b);
-      } else if (INSP_VIEW_ITEM && INSP_VIEW_ITEM.batchId === id) {
-        const it = (b.items || []).find(x => x.host_id === INSP_VIEW_ITEM.hostId);
-        if (it && it.report) showInspReport(b, it);
+      if (idx >= 0) INSP_BATCHES[idx] = inspMergeBatch(INSP_BATCHES[idx], b); else INSP_BATCHES.unshift(b);
+      if (sig !== lastSig) {
+        lastSig = sig;
+        renderInspBatches();
+        if (INSP_VIEW_MODE === "fleet" && INSP_ACTIVE_ID === id) {
+          showInspFleetSummary(INSP_BATCHES.find(x => x.id === id) || b);
+        } else if (INSP_VIEW_ITEM && INSP_VIEW_ITEM.batchId === id) {
+          await inspEnsureHostReport(id, INSP_VIEW_ITEM.hostId);
+        }
       }
-      if (b.status === "done") stopInspPoll();
+      if (b.status === "done") {
+        stopInspPoll();
+        // Final pass: refresh fleet aggregation with any newly finished briefs.
+        renderInspBatches();
+        if (INSP_VIEW_MODE === "fleet" && INSP_ACTIVE_ID === id) {
+          showInspFleetSummary(INSP_BATCHES.find(x => x.id === id) || b);
+        }
+      }
     } catch (e) { /* ignore transient */ }
-  }, 2000);
+  }, 2500);
+}
+
+function inspBatchProgressSig(b) {
+  if (!b) return "";
+  const parts = [b.status || "", b.done_count || 0, b.ok_count || 0, b.warn_count || 0, b.crit_count || 0, b.err_count || 0];
+  (b.items || []).forEach(it => parts.push(it.host_id, it.status || "", it.warnings || 0, it.critical || 0, (it.findings_brief || []).length));
+  return parts.join("|");
+}
+
+/** Merge poll snapshot into cached batch without wiping already-fetched full reports. */
+function inspMergeBatch(prev, next) {
+  if (!prev || !prev.items) return next;
+  const reportByHost = {};
+  (prev.items || []).forEach(it => {
+    if (it && it.report) reportByHost[it.host_id] = it.report;
+  });
+  const merged = Object.assign({}, next, { items: (next.items || []).map(it => {
+    const cp = Object.assign({}, it);
+    if (!cp.report && reportByHost[cp.host_id]) {
+      cp.report = reportByHost[cp.host_id];
+      cp.has_report = true;
+    }
+    return cp;
+  })});
+  return merged;
+}
+
+async function inspFetchFullBatch(id) {
+  const b = await fetch(`${API}/host-inspect/${encodeURIComponent(id)}`).then(r => r.json());
+  const idx = INSP_BATCHES.findIndex(x => x.id === id);
+  if (idx >= 0) INSP_BATCHES[idx] = b; else INSP_BATCHES.unshift(b);
+  return b;
+}
+
+async function inspEnsureHostReport(batchId, hostId) {
+  const batch = INSP_BATCHES.find(x => x.id === batchId);
+  const item = batch && (batch.items || []).find(x => x.host_id === hostId);
+  if (!item) return null;
+  if (item.report) {
+    showInspReport(batch, item);
+    return item;
+  }
+  if (!item.has_report && item.status !== "ok" && item.status !== "warn" && item.status !== "crit") {
+    showInspReport(batch, item);
+    return item;
+  }
+  try {
+    const b = await fetch(`${API}/host-inspect/${encodeURIComponent(batchId)}?host_id=${encodeURIComponent(hostId)}`).then(r => r.json());
+    const idx = INSP_BATCHES.findIndex(x => x.id === batchId);
+    if (idx >= 0) INSP_BATCHES[idx] = inspMergeBatch(INSP_BATCHES[idx], b); else INSP_BATCHES.unshift(b);
+    const fresh = (INSP_BATCHES.find(x => x.id === batchId) || b);
+    const it = (fresh.items || []).find(x => x.host_id === hostId);
+    if (it) showInspReport(fresh, it);
+    return it;
+  } catch (e) {
+    showInspReport(batch, item);
+    return item;
+  }
 }
 
 function stopInspPoll() {
@@ -291,17 +361,36 @@ function inspAggregateBatch(batch) {
   const hostScores = [];
   (batch.items || []).forEach(it => {
     const rep = inspParseReport(it);
+    const hn = it.hostname || it.host_id;
     if (!rep) {
+      // Compact poll / list: use briefs + status metrics (no multi‑MB report JSON).
+      if (it.status === "pending" || it.status === "running") return;
       if (it.status === "error") {
         const key = "error:" + (it.error || "fail");
         if (!findingMap.has(key)) findingMap.set(key, { level: "crit", message: it.error || "巡检失败", section: "error", hosts: [] });
-        findingMap.get(key).hosts.push(it.hostname || it.host_id);
+        findingMap.get(key).hosts.push(hn);
+      } else if (it.status) {
+        hostScores.push({
+          host: hn, host_id: it.host_id, status: it.status,
+          warnings: it.warnings || 0, critical: it.critical || 0,
+          cpu: it.cpu_pct != null ? it.cpu_pct : null,
+          mem: it.mem_pct != null ? it.mem_pct : null,
+        });
       }
+      (it.findings_brief || []).forEach(f => {
+        const msg = String(f.message || "").trim();
+        if (!msg) return;
+        const level = String(f.level || "warn").toLowerCase();
+        const key = level + "|" + msg;
+        if (!findingMap.has(key)) findingMap.set(key, { level, message: msg, section: "", hosts: [] });
+        const row = findingMap.get(key);
+        if (!row.hosts.includes(hn)) row.hosts.push(hn);
+      });
       return;
     }
     const res = rep.result || {};
     hostScores.push({
-      host: it.hostname || it.host_id,
+      host: hn,
       host_id: it.host_id,
       status: it.status,
       warnings: res.warnings || it.warnings || 0,
@@ -316,7 +405,6 @@ function inspAggregateBatch(batch) {
       const key = level + "|" + msg;
       if (!findingMap.has(key)) findingMap.set(key, { level, message: msg, section: f.section || "", hosts: [] });
       const row = findingMap.get(key);
-      const hn = it.hostname || it.host_id;
       if (!row.hosts.includes(hn)) row.hosts.push(hn);
     });
     const recommend = (rep.sections || []).find(s => s.id === "recommend");
@@ -326,7 +414,7 @@ function inspAggregateBatch(batch) {
       if (!val) return;
       const bucket = /短|short|立即|urgent/.test(label) ? "short"
         : /中|mid|本周|week/.test(label) ? "mid" : "long";
-      const line = `【${it.hostname || it.host_id}】${val}`;
+      const line = `【${hn}】${val}`;
       if (!rec[bucket].includes(line)) rec[bucket].push(line);
     });
   });
@@ -419,7 +507,7 @@ function renderInspBatches() {
       INSP_VIEW_ITEM = { batchId: bid, hostId: hid };
       INSP_VIEW_MODE = "host";
       renderInspBatches();
-      showInspReport(batch, item);
+      inspEnsureHostReport(bid, hid);
     });
   });
   list.querySelectorAll("[data-insp-fleet]").forEach(btn => {
@@ -435,17 +523,27 @@ function renderInspBatches() {
     });
   });
   list.querySelectorAll("[data-insp-export-batch]").forEach(btn => {
-    btn.addEventListener("click", e => {
+    btn.addEventListener("click", async e => {
       e.stopPropagation();
-      const batch = INSP_BATCHES.find(x => x.id === btn.getAttribute("data-insp-export-batch"));
-      if (batch) inspExportBatch(batch, "pdf");
+      const bid = btn.getAttribute("data-insp-export-batch");
+      let batch = INSP_BATCHES.find(x => x.id === bid);
+      if (!batch) return;
+      try {
+        batch = await inspFetchFullBatch(bid);
+      } catch (_) {}
+      inspExportBatch(batch, "pdf");
     });
   });
   list.querySelectorAll("[data-insp-ai-fleet]").forEach(btn => {
-    btn.addEventListener("click", e => {
+    btn.addEventListener("click", async e => {
       e.stopPropagation();
-      const batch = INSP_BATCHES.find(x => x.id === btn.getAttribute("data-insp-ai-fleet"));
-      if (batch) openInspectFleetAI(batch);
+      const bid = btn.getAttribute("data-insp-ai-fleet");
+      let batch = INSP_BATCHES.find(x => x.id === bid);
+      if (!batch) return;
+      try {
+        batch = await inspFetchFullBatch(bid);
+      } catch (_) {}
+      openInspectFleetAI(batch);
     });
   });
 
@@ -545,16 +643,22 @@ function showInspFleetSummary(batch) {
       INSP_VIEW_MODE = "host";
       INSP_VIEW_ITEM = { batchId: batch.id, hostId: hid };
       renderInspBatches();
-      showInspReport(batch, item);
+      inspEnsureHostReport(batch.id, hid);
     });
   });
   const expBtn = view.querySelector("#inspExportFleetBtn");
-  if (expBtn) expBtn.onclick = () => {
+  if (expBtn) expBtn.onclick = async () => {
     const fmt = ($("inspExportFleetFmt") || {}).value || "pdf";
-    inspExportBatch(batch, fmt);
+    let full = batch;
+    try { full = await inspFetchFullBatch(batch.id); } catch (_) {}
+    inspExportBatch(full, fmt);
   };
   const aiBtn = view.querySelector("#inspAIFleetBtn");
-  if (aiBtn) aiBtn.onclick = () => openInspectFleetAI(batch);
+  if (aiBtn) aiBtn.onclick = async () => {
+    let full = batch;
+    try { full = await inspFetchFullBatch(batch.id); } catch (_) {}
+    openInspectFleetAI(full);
+  };
 }
 
 function showInspReport(batch, item) {

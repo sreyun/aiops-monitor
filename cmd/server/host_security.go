@@ -229,20 +229,20 @@ type hsAgentFIMStats struct {
 }
 
 type hsAgentReport struct {
-	CollectedAt   int64             `json:"collected_at"`
-	Hostname      string            `json:"hostname"`
-	OS            string            `json:"os"`
-	Arch          string            `json:"arch"`
-	Kernel        string            `json:"kernel,omitempty"`
-	Distro        string            `json:"distro,omitempty"`
-	PkgMgr        string            `json:"pkg_mgr,omitempty"`
-	Packages      []hsAgentPkg      `json:"packages"`
-	Listeners     []string          `json:"listeners"`
-	Processes     []string          `json:"processes"`
-	Hardening     []hsAgentFinding  `json:"hardening"`
-	IOC           []hsAgentFinding  `json:"ioc"`
-	Malware       hsAgentMalware    `json:"malware"`
-	Firewall      hsAgentFirewall   `json:"firewall"`
+	CollectedAt   int64               `json:"collected_at"`
+	Hostname      string              `json:"hostname"`
+	OS            string              `json:"os"`
+	Arch          string              `json:"arch"`
+	Kernel        string              `json:"kernel,omitempty"`
+	Distro        string              `json:"distro,omitempty"`
+	PkgMgr        string              `json:"pkg_mgr,omitempty"`
+	Packages      []hsAgentPkg        `json:"packages"`
+	Listeners     []string            `json:"listeners"`
+	Processes     []string            `json:"processes"`
+	Hardening     []hsAgentFinding    `json:"hardening"`
+	IOC           []hsAgentFinding    `json:"ioc"`
+	Malware       hsAgentMalware      `json:"malware"`
+	Firewall      hsAgentFirewall     `json:"firewall"`
 	FileInventory []hsAgentFileInv    `json:"file_inventory,omitempty"`
 	FileTextDiffs []hsAgentTextDiff   `json:"file_text_diffs,omitempty"`
 	FileChanges   []hsAgentFileChange `json:"file_changes,omitempty"`
@@ -541,23 +541,45 @@ func (m *hostSecurityManager) list(limit int) []*HostScanResult {
 		if s == nil {
 			continue
 		}
-		cp := *s
-		// Shallow-copy slices so API consumers cannot mutate manager state.
-		if s.Findings != nil {
-			cp.Findings = append([]HostFinding(nil), s.Findings...)
-		}
-		if s.OpenPorts != nil {
-			cp.OpenPorts = append([]HostOpenPort(nil), s.OpenPorts...)
-		}
-		if s.Remediation != nil {
-			cp.Remediation = append([]string(nil), s.Remediation...)
-		}
-		if s.PortSample != nil {
-			cp.PortSample = append([]int(nil), s.PortSample...)
-		}
-		out = append(out, &cp)
+		out = append(out, summarizeHostScanForList(s))
 	}
 	return out
+}
+
+// summarizeHostScanForList drops bulky fields (findings / FIM inventory / ports)
+// so poll+history tables stay fast; detail GET still returns the full scan.
+func summarizeHostScanForList(s *HostScanResult) *HostScanResult {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	cp.Findings = nil
+	cp.OpenPorts = nil
+	cp.FileInventory = nil
+	cp.FileChanges = nil
+	cp.Remediation = nil
+	cp.BaselineDiff = nil
+	cp.AISummary = ""
+	if s.PortSample != nil {
+		cp.PortSample = append([]int(nil), s.PortSample...)
+	}
+	if s.Summary != nil {
+		cp.Summary = make(map[string]int, len(s.Summary))
+		for k, v := range s.Summary {
+			cp.Summary[k] = v
+		}
+	}
+	if s.Compliance != nil {
+		cp.Compliance = make(map[string]int, len(s.Compliance))
+		for k, v := range s.Compliance {
+			cp.Compliance[k] = v
+		}
+	}
+	if s.FIMStats != nil {
+		st := *s.FIMStats
+		cp.FIMStats = &st
+	}
+	return &cp
 }
 
 func (m *hostSecurityManager) get(id string) *HostScanResult {
@@ -594,7 +616,6 @@ func (m *hostSecurityManager) summary() []map[string]any {
 			"port_count":       s.PortCount,
 			"risky_port_count": s.RiskyPortCount,
 			"port_sample":      s.PortSample,
-			"open_ports":       s.OpenPorts,
 			"os":               s.OS,
 			"distro":           s.Distro,
 			"finished_at":      s.FinishedAt,

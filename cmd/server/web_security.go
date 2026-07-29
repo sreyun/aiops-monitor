@@ -772,10 +772,24 @@ func (m *webScanManager) list(limit int) []*WebScanResult {
 		if m.scans[i] == nil {
 			continue
 		}
-		cp := *m.scans[i]
-		out = append(out, &cp)
+		out = append(out, summarizeWebScanForList(m.scans[i]))
 	}
 	return out
+}
+
+func summarizeWebScanForList(s *WebScanResult) *WebScanResult {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	cp.Findings = nil
+	if s.Summary != nil {
+		cp.Summary = make(map[string]int, len(s.Summary))
+		for k, v := range s.Summary {
+			cp.Summary[k] = v
+		}
+	}
+	return &cp
 }
 
 func (m *webScanManager) get(id string) *WebScanResult {

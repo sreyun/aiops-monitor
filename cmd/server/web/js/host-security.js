@@ -565,6 +565,11 @@ function hsPortsCell(row, compact) {
     chips = `<span class="hs-port-chips">${show.map(p =>
       `<span class="hs-port-chip ${hsPortRiskCls(p.risk)}">${hsEsc(String(p.port))}</span>`
     ).join("")}${total > show.length ? `<span class="hs-port-chip more">+${total - show.length}</span>` : ""}</span>`;
+  } else if (sample.length) {
+    const n = compact ? 2 : 3;
+    chips = `<span class="hs-port-chips">${sample.slice(0, n).map(p =>
+      `<span class="hs-port-chip">${hsEsc(String(p))}</span>`
+    ).join("")}${sample.length > n || total > n ? `<span class="hs-port-chip more">+${Math.max(0, total - n)}</span>` : ""}</span>`;
   }
   const inner = `<span class="hs-ports-meta"><strong>${total}</strong>${riskBit}</span>${chips}`;
   if (!scanId) return `<div class="hs-ports-cell" title="${hsEsc(tip)}">${inner}</div>`;
@@ -664,8 +669,17 @@ async function renderHostSecurity() {
     hsScans = scans.scans || [];
     hsCfg = cfg;
     if (hsPendingFilter && hsPendingFilter.level && !hsSelected) {
-      const hit = (hsScans || []).find(s => s.status === "completed" && (s.findings || []).some(f => hsFindingMatchesFilter(f, hsPendingFilter.level)));
-      if (hit) hsSelected = hit;
+      const lv = hsPendingFilter.level;
+      const hit = (hsScans || []).find(s => {
+        if (s.status !== "completed") return false;
+        const sum = s.summary || {};
+        if (Number(sum[lv] || 0) > 0) return true;
+        return (s.findings || []).some(f => hsFindingMatchesFilter(f, lv));
+      });
+      if (hit) {
+        try { hsSelected = await hsFetchJSON(`${API}/security/host/scans/` + encodeURIComponent(hit.id)); }
+        catch (_) { hsSelected = hit; }
+      }
     }
     paintHostSecurity();
     hsMaybePoll();

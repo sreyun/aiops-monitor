@@ -615,6 +615,11 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 	if maxParallel > 100 {
 		maxParallel = 100
 	}
+	// Heavy modules (deep inspect / security scan) open large agent sessions —
+	// align with hostInspectConcLimit to avoid thundering herd + UI/DB stalls.
+	if playbookHasHeavySteps(pb.Steps) && maxParallel > hostInspectConcLimit {
+		maxParallel = hostInspectConcLimit
+	}
 	sem := make(chan struct{}, maxParallel) // per-playbook bounded fleet concurrency
 	for _, h := range hosts {
 		wg.Add(1)
@@ -625,7 +630,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 			result := HostExecResult{Hostname: h.Hostname, Status: "running"}
 			// Progressive status: leave「等待中」as soon as the host goroutine starts.
 			s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
-			s.persistPlaybookExecution(exec.ID)
+			s.persistPlaybookExecutionDebounced(exec.ID, false)
 			vars := playbookHostVars(h) // 变量存储：预置主机 facts，register 逐步累加
 			type rollbackAction struct {
 				step PlaybookStep
@@ -634,7 +639,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 			var rollbacks []rollbackAction
 			pushProgress := func() {
 				s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
-				s.persistPlaybookExecution(exec.ID)
+				s.persistPlaybookExecutionDebounced(exec.ID, false)
 			}
 			for _, step := range pb.Steps {
 				sr := StepResult{Name: step.Name, Status: "running"}
@@ -716,10 +721,13 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 				}
 				if failed {
 					sr.Status = "failed"
-					sr.Output = output + "\n[error] " + err.Error()
+					sr.Output = truncatePlaybookStoreOutput(step.Module, output+"\n[error] "+err.Error())
 					result.Status = "failed"
 					result.Reason = execKindReason(kind)
-					result.Output += sr.Output + "\n"
+					// Avoid duplicating multi‑MB stdout on the host-level Output field.
+					if len(sr.Output) < playbookOutputPreview {
+						result.Output += sr.Output + "\n"
+					}
 					result.Steps = append(result.Steps, sr)
 					pushProgress()
 					if !step.ContinueErr {
@@ -727,13 +735,16 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					}
 				} else {
 					sr.Status = "success"
-					sr.Output = output
-					result.Output += output + "\n"
+					fullOut := output
+					if strings.TrimSpace(step.Module) == "host_inspect" {
+						s.ingestPlaybookHostInspect(pb.Name, exec.ID, h, exec.Operator, fullOut, sr.Duration)
+					}
+					sr.Output = truncatePlaybookStoreOutput(step.Module, fullOut)
+					if len(sr.Output) < playbookOutputPreview {
+						result.Output += sr.Output + "\n"
+					}
 					result.Steps = append(result.Steps, sr)
 					pushProgress()
-					if strings.TrimSpace(step.Module) == "host_inspect" {
-						s.ingestPlaybookHostInspect(pb.Name, exec.ID, h, exec.Operator, output, sr.Duration)
-					}
 					if rb := strings.TrimSpace(resolvePlaybookRollback(step, h, vars)); rb != "" {
 						rollbacks = append(rollbacks, rollbackAction{step: step, cmd: rb})
 					}
@@ -779,6 +790,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 				result.Status = "success"
 			}
 			s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
+			s.persistPlaybookExecutionDebounced(exec.ID, true)
 		}(h)
 	}
 	wg.Wait()
@@ -802,7 +814,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		status = "failed"
 	}
 	s.playbooks.FinishExecution(exec.ID, status)
-	s.persistPlaybookExecution(exec.ID)
+	s.persistPlaybookExecutionDebounced(exec.ID, true)
 	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: exec.Operator, Message: Tz("log.playbook_done", pb.Name, status)})
 	// 学习闭环 B：把执行结果沉淀为经验记忆，全成功则强化——让后续「AI 生成剧本 / 事件诊断」
 	// 复用被现实验证有效的自动化做法。异步、尽力而为。
@@ -936,13 +948,20 @@ func parseExecOutput(output []byte, timedOut bool) (string, execKind, error) {
 }
 
 func (s *Server) handleListExecutions(w http.ResponseWriter, r *http.Request) {
+	var list []PlaybookExecution
 	if s.pg != nil {
-		if list := s.pg.listPlaybookExecutions(500); len(list) > 0 {
-			writeJSON(w, http.StatusOK, list)
-			return
+		if pgList := s.pg.listPlaybookExecutions(200); len(pgList) > 0 {
+			list = pgList
 		}
 	}
-	writeJSON(w, http.StatusOK, s.playbooks.ExecutionHistory())
+	if len(list) == 0 {
+		list = s.playbooks.ExecutionHistory()
+	}
+	out := make([]PlaybookExecution, 0, len(list))
+	for _, e := range list {
+		out = append(out, summarizePlaybookExecution(e))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
@@ -960,6 +979,12 @@ func (s *Server) handleGetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "playbook.exec_not_found")})
+		return
+	}
+	view := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("view")))
+	compact := r.URL.Query().Get("compact") == "1" || view == "compact"
+	if compact {
+		writeJSON(w, http.StatusOK, compactPlaybookExecution(exec, playbookOutputPreview))
 		return
 	}
 	writeJSON(w, http.StatusOK, exec)

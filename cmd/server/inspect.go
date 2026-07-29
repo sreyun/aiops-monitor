@@ -20,19 +20,29 @@ const (
 	hostInspectConcLimit = 8
 )
 
+// hostInspectFindingBrief is a tiny finding row for list/poll without full reports.
+type hostInspectFindingBrief struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
 type hostInspectItem struct {
-	HostID     string          `json:"host_id"`
-	Hostname   string          `json:"hostname"`
-	OS         string          `json:"os"`
-	IP         string          `json:"ip"`
-	Status     string          `json:"status"` // pending|running|ok|warn|crit|error
-	Error      string          `json:"error,omitempty"`
-	Warnings   int             `json:"warnings"`
-	Critical   int             `json:"critical"`
-	OSFamily   string          `json:"os_family,omitempty"`
-	Report     json.RawMessage `json:"report,omitempty"`
-	FinishedAt int64           `json:"finished_at,omitempty"`
-	DurationMs int64           `json:"duration_ms,omitempty"`
+	HostID        string                    `json:"host_id"`
+	Hostname      string                    `json:"hostname"`
+	OS            string                    `json:"os"`
+	IP            string                    `json:"ip"`
+	Status        string                    `json:"status"` // pending|running|ok|warn|crit|error
+	Error         string                    `json:"error,omitempty"`
+	Warnings      int                       `json:"warnings"`
+	Critical      int                       `json:"critical"`
+	OSFamily      string                    `json:"os_family,omitempty"`
+	CPUPct        *float64                  `json:"cpu_pct,omitempty"`
+	MemPct        *float64                  `json:"mem_pct,omitempty"`
+	FindingsBrief []hostInspectFindingBrief `json:"findings_brief,omitempty"`
+	HasReport     bool                      `json:"has_report,omitempty"`
+	Report        json.RawMessage           `json:"report,omitempty"`
+	FinishedAt    int64                     `json:"finished_at,omitempty"`
+	DurationMs    int64                     `json:"duration_ms,omitempty"`
 }
 
 type hostInspectBatch struct {
@@ -209,7 +219,39 @@ func cloneInspectBatch(b *hostInspectBatch) *hostInspectBatch {
 	cp := *b
 	cp.Items = make([]hostInspectItem, len(b.Items))
 	copy(cp.Items, b.Items)
+	for i := range cp.Items {
+		if len(b.Items[i].Report) > 0 {
+			cp.Items[i].Report = append(json.RawMessage(nil), b.Items[i].Report...)
+		}
+		if len(b.Items[i].FindingsBrief) > 0 {
+			cp.Items[i].FindingsBrief = append([]hostInspectFindingBrief(nil), b.Items[i].FindingsBrief...)
+		}
+	}
 	return &cp
+}
+
+// compactInspectBatch strips bulky report JSON for list/poll responses.
+// Keeps status counts, metrics hints and findings_brief for fleet UI.
+func compactInspectBatch(b *hostInspectBatch) *hostInspectBatch {
+	out := cloneInspectBatch(b)
+	if out == nil {
+		return nil
+	}
+	for i := range out.Items {
+		if len(out.Items[i].Report) > 0 {
+			out.Items[i].HasReport = true
+			out.Items[i].Report = nil
+		}
+	}
+	return out
+}
+
+func compactInspectBatches(list []*hostInspectBatch) []*hostInspectBatch {
+	out := make([]*hostInspectBatch, len(list))
+	for i, b := range list {
+		out[i] = compactInspectBatch(b)
+	}
+	return out
 }
 
 func recalcInspectBatchCounts(b *hostInspectBatch) {
@@ -254,6 +296,15 @@ func parseHostInspectOutput(host *Host, output string, durationMs int64) hostIns
 			Warnings int `json:"warnings"`
 			Critical int `json:"critical"`
 		} `json:"result"`
+		Metrics struct {
+			CPU *float64 `json:"cpu_usage_pct"`
+			Mem *float64 `json:"mem_usage_pct"`
+		} `json:"metrics"`
+		Findings []struct {
+			Level   string `json:"level"`
+			Message string `json:"message"`
+			Title   string `json:"title"`
+		} `json:"findings"`
 	}
 	if err := json.Unmarshal([]byte(body), &rep); err != nil {
 		item.Status = "error"
@@ -264,9 +315,31 @@ func parseHostInspectOutput(host *Host, output string, durationMs int64) hostIns
 		return item
 	}
 	item.Report = json.RawMessage(body)
+	item.HasReport = true
 	item.Warnings = rep.Result.Warnings
 	item.Critical = rep.Result.Critical
 	item.OSFamily = rep.Host.OSFamily
+	item.CPUPct = rep.Metrics.CPU
+	item.MemPct = rep.Metrics.Mem
+	if n := len(rep.Findings); n > 0 {
+		limit := n
+		if limit > 60 {
+			limit = 60
+		}
+		item.FindingsBrief = make([]hostInspectFindingBrief, 0, limit)
+		for _, f := range rep.Findings[:limit] {
+			msg := strings.TrimSpace(f.Message)
+			if msg == "" {
+				msg = strings.TrimSpace(f.Title)
+			}
+			if msg == "" {
+				continue
+			}
+			item.FindingsBrief = append(item.FindingsBrief, hostInspectFindingBrief{
+				Level: strings.TrimSpace(f.Level), Message: msg,
+			})
+		}
+	}
 	switch {
 	case rep.Result.Critical > 0:
 		item.Status = "crit"
@@ -364,7 +437,8 @@ func (s *Server) handleListHostInspect(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.inspect.list())
+	// Always compact list: full reports can be tens of MB across batches.
+	writeJSON(w, http.StatusOK, compactInspectBatches(s.inspect.list()))
 }
 
 func (s *Server) handleGetHostInspect(w http.ResponseWriter, r *http.Request) {
@@ -372,6 +446,26 @@ func (s *Server) handleGetHostInspect(w http.ResponseWriter, r *http.Request) {
 	b, ok := s.inspect.get(id)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "巡检批次不存在"})
+		return
+	}
+	view := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("view")))
+	compact := r.URL.Query().Get("compact") == "1" || view == "compact" || view == "summary"
+	hostID := strings.TrimSpace(r.URL.Query().Get("host_id"))
+	if hostID != "" {
+		// One host full report + compact siblings — avoids pulling N×2MiB for a single view.
+		out := compactInspectBatch(b)
+		for i, it := range b.Items {
+			if it.HostID == hostID && len(it.Report) > 0 {
+				out.Items[i].Report = append(json.RawMessage(nil), it.Report...)
+				out.Items[i].HasReport = true
+				break
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	if compact {
+		writeJSON(w, http.StatusOK, compactInspectBatch(b))
 		return
 	}
 	writeJSON(w, http.StatusOK, b)
@@ -568,5 +662,3 @@ func (s *Server) execCommandOnHostSized(h *Host, command string, timeoutSec, max
 		}
 	}
 }
-
-

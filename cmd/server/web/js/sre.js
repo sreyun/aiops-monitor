@@ -909,20 +909,46 @@ async function pollExecution(execId, pbId) {
   $("execResultMask").classList.add("show");
   // Long playbooks (host_inspect / security) can run several minutes — keep
   // polling until terminal status or ~30 minutes, with mild backoff.
+  // compact=1：仅回传输出预览，避免多机巡检时每轮拉数十 MB JSON 卡死页面。
   let delay = 1500;
   const deadline = Date.now() + 30 * 60 * 1000;
+  let lastSig = "";
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, delay));
     try {
-      const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(execId)}`).then(r => r.json());
-      renderExecResult(exec);
-      if (exec.status !== "running") break;
+      const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(execId)}?compact=1`).then(r => r.json());
+      const sig = pbExecProgressSig(exec);
+      if (sig !== lastSig) {
+        lastSig = sig;
+        renderExecResult(exec, { compact: true });
+      } else {
+        $("execResultTitle").textContent = translateExecStatus(exec.status);
+      }
+      if (exec.status !== "running" && exec.status !== "pending_approval") break;
       if (delay < 4000) delay += 250;
     } catch (e) {}
   }
 }
 
-function renderExecResult(exec) {
+function pbExecProgressSig(exec) {
+  if (!exec) return "";
+  const parts = [exec.status || "", exec.end_time || 0];
+  Object.entries(exec.host_results || {}).forEach(([hid, r]) => {
+    parts.push(hid, r.status || "", r.reason || "", (r.steps || []).length);
+    (r.steps || []).forEach(s => parts.push(s.status || "", s.duration_ms || 0, (s.output || "").length));
+  });
+  return parts.join("|");
+}
+
+function pbTruncateOut(s, max) {
+  s = String(s || "");
+  max = max || 3500;
+  if (s.length <= max) return esc(s);
+  return esc(s.slice(0, max)) + `\n… (${s.length} ${I18N.t("exec.chars", "字符")}，${I18N.t("exec.click_expand", "点击展开全文")})`;
+}
+
+function renderExecResult(exec, opts) {
+  opts = opts || {};
   window._lastExecResult = exec; // 供「AI 复盘」按钮取用
   $("execResultTitle").textContent = translateExecStatus(exec.status);
   // 有任何主机未成功 → 显示「AI 复盘」按钮（执行中不显示）
@@ -938,26 +964,40 @@ function renderExecResult(exec) {
       <button type="button" class="btn sm primary" id="execApproveBtn">批准执行</button>
       <button type="button" class="btn sm danger" id="execRejectBtn">拒绝</button>
     </div>` : "";
-  const rows = Object.entries(exec.host_results || {}).map(([hid, r]) => {
+  const running = exec.status === "running";
+  const hostEntries = Object.entries(exec.host_results || {});
+  const doneN = hostEntries.filter(([, r]) => r.status && r.status !== "pending" && r.status !== "running").length;
+  const progress = hostEntries.length
+    ? `<div class="hint" style="margin:6px 0">${I18N.t("exec.host_progress", "主机进度")}：${doneN}/${hostEntries.length}${running ? " · " + I18N.t("ui.executing", "执行中…") : ""}</div>`
+    : "";
+  const rows = hostEntries.map(([hid, r]) => {
     const statusCls = r.status === "success" ? "ok" : (r.status === "failed" || r.status === "timeout") ? "crit" : "warn";
     const reason = r.reason ? ` <span class="mono muted">(${esc(r.reason)})</span>` : "";
-    const steps = (r.steps || []).map(s => `<div class="exec-step ${s.status}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${translateStepStatus(s.status)}</span><pre class="exec-step-out">${esc(s.output||"")}</pre></div>`).join("");
-    return `<div class="exec-row">
+    const steps = (r.steps || []).map((s, si) => {
+      const out = s.output || "";
+      const big = out.length > 3500 || /truncated|完整巡检报告/.test(out);
+      const body = (opts.compact || running || big) ? pbTruncateOut(out, 3500) : esc(out);
+      const expand = (big || opts.compact) && !running
+        ? `<button type="button" class="btn sm ghost exec-expand-out" data-exec-id="${esc(String(exec.id))}" data-host-id="${esc(hid)}" data-step-idx="${si}">${I18N.t("exec.expand_out", "展开全文")}</button>`
+        : "";
+      return `<div class="exec-step ${esc(s.status || "")}"><span class="exec-step-name">${esc(s.name)}</span><span class="exec-step-status">${translateStepStatus(s.status)}</span>${expand}<pre class="exec-step-out">${body}</pre></div>`;
+    }).join("");
+    return `<div class="exec-row" data-host-id="${esc(hid)}">
       <div class="exec-row-head"><strong>${esc(r.hostname)}</strong> <span class="badge ${statusCls}">${translateExecStatus(r.status)}</span>${reason}</div>
-      <div class="exec-steps">${steps}</div>
+      <div class="exec-steps">${steps || (r.status === "pending" || r.status === "running" ? `<div class="hint">${I18N.t("exec.waiting_steps", "等待步骤输出…")}</div>` : "")}</div>
     </div>`;
   }).join("");
   const failAgg = (() => {
     const counts = {};
     Object.values(exec.host_results || {}).forEach(r => {
-      if (r.status === "success") return;
+      if (r.status === "success" || r.status === "pending" || r.status === "running") return;
       const k = r.reason || r.status || "unknown";
       counts[k] = (counts[k] || 0) + 1;
     });
     const parts = Object.entries(counts).map(([k, n]) => `${k}:${n}`);
     return parts.length ? `<div class="hint" style="margin:6px 0">失败聚合：${esc(parts.join(" · "))}</div>` : "";
   })();
-  $("execResultBody").innerHTML = `<div class="exec-meta">${I18N.t("exec.operator")}: ${esc(exec.operator)} · ${I18N.t("exec.start_time")}: ${fmtDateTime(exec.start_time)}${exec.end_time?" · "+I18N.t("exec.end_time")+": "+fmtDateTime(exec.end_time):""} · ${I18N.t("exec.status_label")}: ${translateExecStatus(exec.status)}${exec.trigger ? " · " + esc(exec.trigger) : ""}</div>${approveBar}${failAgg}${rows}`;
+  $("execResultBody").innerHTML = `<div class="exec-meta">${I18N.t("exec.operator")}: ${esc(exec.operator)} · ${I18N.t("exec.start_time")}: ${fmtDateTime(exec.start_time)}${exec.end_time?" · "+I18N.t("exec.end_time")+": "+fmtDateTime(exec.end_time):""} · ${I18N.t("exec.status_label")}: ${translateExecStatus(exec.status)}${exec.trigger ? " · " + esc(exec.trigger) : ""}</div>${approveBar}${progress}${failAgg}${rows}`;
   const ab = $("execApproveBtn"), rj = $("execRejectBtn");
   if (ab) ab.onclick = async () => {
     const r = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}/approve`, { method: "POST" });
@@ -972,9 +1012,25 @@ function renderExecResult(exec) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { toast(j.error || "拒绝失败", "err"); return; }
     toast("已拒绝", "ok");
-    const exec2 = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}`).then(x => x.json());
-    renderExecResult(exec2);
+    const exec2 = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}?compact=1`).then(x => x.json());
+    renderExecResult(exec2, { compact: true });
   };
+  $("execResultBody").querySelectorAll(".exec-expand-out").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        btn.disabled = true;
+        const full = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(btn.dataset.execId)}`).then(r => r.json());
+        const hr = (full.host_results || {})[btn.dataset.hostId];
+        const step = hr && (hr.steps || [])[parseInt(btn.dataset.stepIdx, 10)];
+        const pre = btn.parentElement && btn.parentElement.querySelector(".exec-step-out");
+        if (pre && step) pre.textContent = step.output || "";
+        btn.remove();
+      } catch (e) {
+        toast(I18N.t("toast.load_failed", "加载失败") + ": " + e, "err");
+        btn.disabled = false;
+      }
+    };
+  });
 }
 
 async function loadExecHistory() {
@@ -995,8 +1051,8 @@ async function loadExecHistory() {
     $("execHistBody").innerHTML = rows || `<div class="empty-line">${I18N.t("empty.no_executions")}</div>`;
     $("execHistBody").querySelectorAll("[data-exec-id]").forEach(el => {
       el.onclick = async () => {
-        const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(el.dataset.execId)}`).then(r => r.json());
-        renderExecResult(exec);
+        const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(el.dataset.execId)}?compact=1`).then(r => r.json());
+        renderExecResult(exec, { compact: true });
         $("execHistMask").classList.remove("show");
         $("execResultMask").classList.add("show");
       };

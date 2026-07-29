@@ -611,13 +611,13 @@ func (pm *playbookManager) FinishExecution(execID int64, status string) {
 	}
 }
 
-// GetExecution returns a specific execution by ID.
+// GetExecution returns a specific execution by ID (deep-copied host results).
 func (pm *playbookManager) GetExecution(id int64) (PlaybookExecution, bool) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	for _, e := range pm.executions {
 		if e.ID == id {
-			return e, true
+			return clonePlaybookExecution(e), true
 		}
 	}
 	return PlaybookExecution{}, false
