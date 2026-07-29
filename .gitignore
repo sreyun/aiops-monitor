@@ -99,6 +99,9 @@ android/
 .android/
 .android-publish/
 
+# HarmonyOS（鸿蒙）App 工程（独立管理，不纳入主项目源码 / 不随主仓推送）
+harmony/
+
 # 临时截图
 datasource-view-screenshot.png
 screenshot_1_home.png
