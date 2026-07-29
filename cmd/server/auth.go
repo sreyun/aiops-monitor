@@ -55,7 +55,8 @@ func isPublicPath(r *http.Request) bool {
 		return true
 	}
 	// 拆分后的前端静态模块（/js/*.js、/css/*）与 /app.js、/style.css 同属登录前外壳，需放行。
-	if strings.HasPrefix(p, "/js/") || strings.HasPrefix(p, "/css/") {
+	// React v2 SPA（/v2/*）同样在登录前加载。
+	if strings.HasPrefix(p, "/js/") || strings.HasPrefix(p, "/css/") || strings.HasPrefix(p, "/v2/") {
 		return true
 	}
 	// Agent-facing terminal reverse channels are token-gated, not session-gated.

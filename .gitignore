@@ -67,6 +67,10 @@ node_modules/
 # 评估报告和临时文档
 *.html
 !cmd/server/web/index.html
+!cmd/server/web/v2/index.html
+!frontend/index.html
+!frontend/**/*.html
+
 evaluation-report.html
 evaluation-report-v2.html
 fix-summary.html

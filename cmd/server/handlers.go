@@ -796,6 +796,10 @@ func (s *Server) Routes() http.Handler {
 		// 注意：不能 StripPrefix——文件在 web/js、web/css 子目录下，需保留前缀映射到子目录。
 		mux.Handle("GET /css/", fsrv)
 		mux.Handle("GET /js/", fsrv)
+		mux.Handle("GET /v2/", fsrv) // React SPA assets (base=/v2/)
+		mux.HandleFunc("GET /v2", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/v2/", http.StatusFound)
+		})
 		mux.Handle("GET /manifest.json", fsrv)
 		mux.Handle("GET /icon.svg", fsrv)
 		// Service Worker: needs Service-Worker-Allowed header for root scope control

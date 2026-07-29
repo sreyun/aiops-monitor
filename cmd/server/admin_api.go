@@ -261,11 +261,21 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// 绞杀者默认：新 React 壳（/?ui=legacy 回退经典版；v2 未构建时自动回退）
+	if r.URL.Query().Get("ui") != "legacy" {
+		if data, err := webFS.ReadFile("web/v2/index.html"); err == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			_, _ = w.Write(data)
+			return
+		}
+	}
 	data, err := webFS.ReadFile("web/index.html")
 	if err != nil {
 		http.Error(w, "dashboard not found", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(data)
 }
