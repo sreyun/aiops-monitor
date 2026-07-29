@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.19.47">
+<link rel="stylesheet" href="/style.css?v=0.19.48">
 <script src="/theme-init.js"></script>
 <script src="/js/vendor/echarts.min.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
@@ -3090,7 +3090,7 @@
       <div class="subhead" data-i18n="playbook.steps">步骤列表</div>
       <div id="pbSteps" style="display:flex; flex-direction:column; gap:10px"></div>
       <button class="btn" id="pbAddStep" type="button" style="margin-top:8px" data-i18n="playbook.add_step">+ 添加步骤</button>
-      <div class="hint" data-i18n="playbook.hint">每个步骤在选定的目标主机上并行执行。目标可选：全部主机 / 分组树 / 系统类型 / 指定主机（显示主机名与 IP）。</div>
+      <div class="hint" data-i18n="playbook.hint">每个步骤在选定的目标主机上并行执行。目标可多选：全部主机 / 分组树 / 系统类型 / 指定主机（显示主机名与 IP）。</div>
 
       <div class="subhead" data-i18n="playbook.schedule">定时触发</div>
       <label class="switch" style="margin-bottom:2px"><input type="checkbox" id="pbSchedEnabled"> <span data-i18n="playbook.sched_enable">启用定时触发（到点自动在目标主机上执行）</span></label>
@@ -4200,6 +4200,6 @@
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.19.47" defer></script>
+<script src="/app.js?v=0.19.48" defer></script>
 </body>
 </html>

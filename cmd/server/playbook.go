@@ -50,7 +50,7 @@ type PlaybookStep struct {
 	Command       string `json:"command"`
 	CommandWin    string `json:"command_win,omitempty"` // Windows 覆盖命令（留空=用 Command）
 	CommandMac    string `json:"command_mac,omitempty"` // macOS 覆盖命令（留空=用 Command）
-	Target        string `json:"target"`                // "all" | "folder:ID" | "category:xxx" | "system:os" | "host:ID"
+	Target        string `json:"target"`                // "all" | "folder:ID" | "host:ID" | multi comma-joined
 	TimeoutSec    int    `json:"timeout_sec"`
 	ContinueErr   bool   `json:"continue_on_error"`
 	IgnoreExit    bool   `json:"ignore_exit,omitempty"`     // 非零退出码也算成功（grep/diff 等过滤命令）
@@ -302,6 +302,23 @@ func validPlaybookTarget(target string) bool {
 	if target == "" || target == "all" {
 		return true
 	}
+	parts := splitPlaybookTargets(target)
+	if len(parts) == 0 {
+		return false
+	}
+	for _, p := range parts {
+		if !validPlaybookTargetOne(p) {
+			return false
+		}
+	}
+	return true
+}
+
+func validPlaybookTargetOne(target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" || target == "all" {
+		return true
+	}
 	for _, prefix := range []string{"folder:", "category:", "system:", "host:"} {
 		if strings.HasPrefix(target, prefix) {
 			value := strings.TrimSpace(strings.TrimPrefix(target, prefix))
@@ -321,19 +338,68 @@ func validPlaybookTarget(target string) bool {
 	return false
 }
 
+// splitPlaybookTargets splits a multi-select target string into selectors.
+// Selectors are comma-separated (e.g. "host:a,folder:b,system:linux").
+func splitPlaybookTargets(target string) []string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil
+	}
+	if !strings.Contains(target, ",") {
+		return []string{target}
+	}
+	raw := strings.Split(target, ",")
+	out := make([]string, 0, len(raw))
+	seen := map[string]struct{}{}
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
 // Delete removes a playbook by ID.
 func (pm *playbookManager) Delete(id string) error {
 	return pm.cfg.DeletePlaybook(id)
 }
 
-// ResolveTargets expands a target selector into a list of host IDs.
-// Supported prefixes: "all" = every host; "folder:ID" = hosts assigned to that
-// folder or any descendant (incl. virtual "__ungrouped__");
-// "category:xxx" = hosts in category xxx;
-// "system:xxx" = GOOS (linux/macos/windows) or distro alias (rocky/kylin/rhel/…),
-// matching Host.OS + Host.Platform (e.g. "Rocky Linux 9.4", "Kylin … V10");
-// "host:ID" = a single host by ID.
+// ResolveTargets expands a target selector into a list of hosts.
+// A single selector uses the classic prefixes; multiple selectors may be
+// comma-joined (multi-select UI) and are resolved as a union (deduped by host ID).
+// Supported prefixes: "all"; "folder:ID"; "category:xxx"; "system:xxx"; "host:ID".
 func (pm *playbookManager) ResolveTargets(target string, hosts []*Host) []*Host {
+	parts := splitPlaybookTargets(strings.TrimSpace(target))
+	if len(parts) == 0 {
+		parts = []string{"all"}
+	}
+	if len(parts) == 1 {
+		return pm.resolveOneTarget(parts[0], hosts)
+	}
+	seen := make(map[string]struct{})
+	var result []*Host
+	for _, p := range parts {
+		if p == "all" {
+			return pm.resolveOneTarget("all", hosts)
+		}
+		for _, h := range pm.resolveOneTarget(p, hosts) {
+			if _, ok := seen[h.ID]; ok {
+				continue
+			}
+			seen[h.ID] = struct{}{}
+			result = append(result, h)
+		}
+	}
+	return result
+}
+
+func (pm *playbookManager) resolveOneTarget(target string, hosts []*Host) []*Host {
 	target = strings.TrimSpace(target)
 	var result []*Host
 	switch {

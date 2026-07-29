@@ -250,6 +250,45 @@ func TestResolveTargetsFolder(t *testing.T) {
 	}
 }
 
+func TestResolveTargetsMulti(t *testing.T) {
+	cs := testConfigStore(t)
+	cs.cfg.HostFolders = []HostFolderNode{{
+		ID: "p", Name: "Prod", Children: []HostFolderNode{{ID: "db", Name: "DB"}},
+	}}
+	cs.cfg.HostFolderAssign = map[string]string{
+		"1": "db",
+		"2": "p",
+	}
+	pm := &playbookManager{cfg: cs}
+	hosts := []*Host{
+		{ID: "1", OS: "linux", Platform: "Ubuntu"},
+		{ID: "2", OS: "linux", Platform: "Ubuntu"},
+		{ID: "3", OS: "windows", Platform: "Windows 11"},
+		{ID: "4", OS: "linux", Platform: "Rocky Linux 9"},
+	}
+
+	if !validPlaybookTarget("host:1,host:3") {
+		t.Fatal("multi host target should be valid")
+	}
+	got := pm.ResolveTargets("host:1,host:3", hosts)
+	if len(got) != 2 {
+		t.Fatalf("host:1,host:3 count=%d want 2 ids=%v", len(got), idsOf(got))
+	}
+	got = pm.ResolveTargets("folder:db,system:windows", hosts)
+	if len(got) != 2 { // host 1 + host 3
+		t.Fatalf("folder:db,system:windows = %#v", idsOf(got))
+	}
+	got = pm.ResolveTargets("host:1,host:1,folder:db", hosts)
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("dedupe union = %#v", idsOf(got))
+	}
+	// Presence of "all" in a multi list expands to everyone.
+	got = pm.ResolveTargets("host:1,all", hosts)
+	if len(got) != 4 {
+		t.Fatalf("all in multi should win, got %d", len(got))
+	}
+}
+
 func idsOf(hosts []*Host) []string {
 	out := make([]string, 0, len(hosts))
 	for _, h := range hosts {

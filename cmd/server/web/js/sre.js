@@ -491,16 +491,21 @@ function paintPbTargetPicker(step) {
   }
   let st = PB_STEP_PICK.get(step);
   if (!st) {
-    st = { collapsed: new Set(), q: "", uid: "pb" + (++_pbPickUid) };
+    st = { collapsed: new Set(), q: "", uid: "pb" + (++_pbPickUid), tokens: null };
     PB_STEP_PICK.set(step, st);
   }
-  const target = hidden.value || "all";
+  if (!st.tokens) st.tokens = HostPicker.parseTargetTokens(hidden.value || "all");
+  const syncHidden = () => {
+    hidden.value = HostPicker.serializeTargetTokens(st.tokens);
+    pbTargetPreviewFromStep(step);
+  };
   wrap.innerHTML = HostPicker.renderHTML({
     id: "pbTgt_" + st.uid,
     name: "pb_tgt_" + st.uid,
     mode: "target",
     hosts: PB_HOSTS,
-    targetValue: target,
+    targetTokens: st.tokens,
+    targetValue: HostPicker.serializeTargetTokens(st.tokens),
     collapsed: st.collapsed,
     q: st.q,
     systemOptions: pbSystemOptions(),
@@ -514,12 +519,51 @@ function paintPbTargetPicker(step) {
       paintPbTargetPicker(step);
     },
     onSearch: (q) => { st.q = q; paintPbTargetPicker(step); },
+    onQuick: (act) => {
+      if (act === "clear") {
+        st.tokens = new Set(["all"]);
+      }
+      syncHidden();
+      paintPbTargetPicker(step);
+    },
     onTargetChange: (val) => {
-      hidden.value = val || "all";
-      pbTargetPreviewFromStep(step);
+      // "全部主机" chip
+      if (val === "all") st.tokens = new Set(["all"]);
+      else if (!val) st.tokens = new Set(["all"]);
+      syncHidden();
+      paintPbTargetPicker(step);
+    },
+    onTargetToggle: (token, checked) => {
+      st.tokens.delete("all");
+      if (checked) {
+        st.tokens.add(token);
+        // Checking a folder: drop redundant host: tokens under that folder (keep folder selector)
+        if (token.startsWith("folder:")) {
+          const fid = token.slice(7);
+          const ids = pbFolderSubtreeIds(fid);
+          PB_HOSTS.forEach(h => {
+            const hf = h.folder_id || "__ungrouped__";
+            if (ids.has(hf)) st.tokens.delete("host:" + h.id);
+          });
+        }
+      } else {
+        st.tokens.delete(token);
+        // Unchecking folder that was visually "all hosts checked": also clear host tokens under it
+        if (token.startsWith("folder:")) {
+          const fid = token.slice(7);
+          const ids = pbFolderSubtreeIds(fid);
+          PB_HOSTS.forEach(h => {
+            const hf = h.folder_id || "__ungrouped__";
+            if (ids.has(hf)) st.tokens.delete("host:" + h.id);
+          });
+        }
+      }
+      if (!st.tokens.size) st.tokens.add("all");
+      syncHidden();
+      paintPbTargetPicker(step);
     },
   });
-  pbTargetPreviewFromStep(step);
+  syncHidden();
 }
 
 // Legacy flat <option> builder kept for any leftover callers / AI helpers.
@@ -626,25 +670,30 @@ function pbHostMatchesSystem(h, sys) {
 }
 
 function pbCountForTarget(target) {
-  if (target === "all" || target === "") return PB_HOSTS.length;
-  if (target.startsWith("folder:")) {
-    const fid = target.slice("folder:".length);
-    const ids = pbFolderSubtreeIds(fid);
-    return PB_HOSTS.filter(h => {
-      const hf = h.folder_id || "__ungrouped__";
-      return ids.has(hf);
-    }).length;
-  }
-  if (target.startsWith("category:")) {
-    const cat = target.slice("category:".length);
-    return PB_HOSTS.filter(h => (h.category || I18N.t("section.uncategorized")) === cat).length;
-  }
-  if (target.startsWith("system:")) {
-    const sys = target.slice("system:".length).toLowerCase();
-    return PB_HOSTS.filter(h => pbHostMatchesSystem(h, sys)).length;
-  }
-  if (target.startsWith("host:")) return 1;
-  return 0;
+  const parts = String(target || "all").split(",").map(s => s.trim()).filter(Boolean);
+  if (!parts.length || parts.includes("all")) return PB_HOSTS.length;
+  const ids = new Set();
+  parts.forEach(p => {
+    if (p.startsWith("folder:")) {
+      const fid = p.slice("folder:".length);
+      const fids = pbFolderSubtreeIds(fid);
+      PB_HOSTS.forEach(h => {
+        const hf = h.folder_id || "__ungrouped__";
+        if (fids.has(hf)) ids.add(h.id);
+      });
+    } else if (p.startsWith("category:")) {
+      const cat = p.slice("category:".length);
+      PB_HOSTS.forEach(h => {
+        if ((h.category || I18N.t("section.uncategorized")) === cat) ids.add(h.id);
+      });
+    } else if (p.startsWith("system:")) {
+      const sys = p.slice("system:".length).toLowerCase();
+      PB_HOSTS.forEach(h => { if (pbHostMatchesSystem(h, sys)) ids.add(h.id); });
+    } else if (p.startsWith("host:")) {
+      ids.add(p.slice(5));
+    }
+  });
+  return ids.size;
 }
 
 function pbTargetPreviewFromStep(step) {
