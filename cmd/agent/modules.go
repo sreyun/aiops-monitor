@@ -27,12 +27,22 @@ type moduleCall struct {
 
 // runModule 解析封套并分派到对应内置模块，返回合并输出与退出码（0=成功）。
 func (a *Agent) runModule(payload string) (out []byte, code int) {
+	return a.runModuleCtx(context.Background(), payload)
+}
+
+func (a *Agent) runModuleCtx(ctx context.Context, payload string) (out []byte, code int) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = []byte(fmt.Sprintf("模块执行异常(已隔离): %v", r))
 			code = 1
 		}
 	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return []byte("（剧本已停止）"), 130
+	}
 	var mc moduleCall
 	if err := json.Unmarshal([]byte(payload), &mc); err != nil {
 		return []byte("模块参数解析失败: " + err.Error()), 1
@@ -41,7 +51,7 @@ func (a *Agent) runModule(payload string) (out []byte, code int) {
 	case "gather_facts":
 		return moduleGatherFacts()
 	case "host_inspect":
-		return moduleHostInspect(mc.Args)
+		return moduleHostInspectCtx(ctx, mc.Args)
 	case "disk_usage":
 		return moduleDiskUsage()
 	case "mem_info":

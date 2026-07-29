@@ -66,21 +66,21 @@
 
   function parseTargetTokens(raw) {
     const s = String(raw || "").trim();
-    if (!s || s === "all") return new Set(["all"]);
     const set = new Set();
+    if (!s) return set;
     s.split(",").forEach(p => {
       p = p.trim();
       if (p) set.add(p);
     });
-    if (!set.size) set.add("all");
     return set;
   }
 
   function serializeTargetTokens(tokens) {
     const set = tokens instanceof Set ? tokens : new Set(tokens || []);
-    if (!set.size || set.has("all")) return "all";
-    const list = [...set].filter(Boolean);
-    return list.length ? list.join(",") : "all";
+    // Preserve legacy single "all" if still present in old data being edited.
+    if (set.has("all") && [...set].every(x => x === "all")) return "all";
+    const list = [...set].filter(x => x && x !== "all");
+    return list.join(",");
   }
 
   function folderNodeHTML(node, ctx, depth) {
@@ -109,16 +109,15 @@
     } else if (mode === "target") {
       const val = `folder:${node.id}`;
       const on = ctx.targetTokens.has(val);
-      const allOn = ctx.targetTokens.has("all");
       // Indeterminate when some descendant hosts selected but folder token not set
       let folderState = on ? "checked" : "";
-      if (!on && !allOn && hostIds.length) {
+      if (!on && hostIds.length) {
         const hostTokN = hostIds.filter(id => ctx.targetTokens.has("host:" + id)).length;
         if (hostTokN > 0 && hostTokN < hostIds.length) folderState = "data-indeterminate=\"1\"";
         else if (hostTokN === hostIds.length && hostIds.length) folderState = "checked";
       }
       folderCtrl = `<label class="hs-pick-folder-lab hs-pick-folder-target${on ? " is-on" : ""}">
-        <input type="checkbox" class="hs-pick-target-cb" value="${e(val)}" data-hp-folder="${e(node.id)}" ${folderState} ${allOn ? "disabled" : ""}>
+        <input type="checkbox" class="hs-pick-target-cb" value="${e(val)}" data-hp-folder="${e(node.id)}" ${folderState}>
         <span class="hs-pick-folder-name">${e(node.name || node.id)}</span>
         <span class="hs-pick-count">${own.length || hostIds.length}</span>
       </label>`;
@@ -159,10 +158,9 @@
     }
     if (mode === "target") {
       const val = `host:${h.id}`;
-      const on = ctx.targetTokens.has(val) || ctx.targetTokens.has("all");
-      const disabled = false;
-      return `<label class="hs-pick-row${disabled ? " off" : ""}${ctx.targetTokens.has(val) ? " is-on" : ""}" style="padding-left:${pad + 22}px" title="${e(hostTitle(h))}">
-        <input type="checkbox" class="hs-pick-target-cb hs-pick-host" value="${e(val)}" ${ctx.targetTokens.has(val) ? "checked" : ""} ${ctx.targetTokens.has("all") ? "disabled" : ""}>
+      const on = ctx.targetTokens.has(val);
+      return `<label class="hs-pick-row${on ? " is-on" : ""}" style="padding-left:${pad + 22}px" title="${e(hostTitle(h))}">
+        <input type="checkbox" class="hs-pick-target-cb hs-pick-host" value="${e(val)}" ${on ? "checked" : ""}>
         <span class="hs-pick-name">${e(h.hostname || h.id)}</span>
         <span class="hs-pick-ip mono">${e(ip || "—")}</span>
         <span class="hs-pick-st ${online ? "ok" : ""}"><i class="hs-pick-dot" aria-hidden="true"></i>${online ? e(t("hs.online", "在线")) : e(t("hs.offline", "离线"))}</span>
@@ -260,7 +258,7 @@
     const selN = mode === "multi"
       ? [...selected].filter(id => filtered.some(h => h.id === id)).length
       : (mode === "target"
-        ? (targetTokens.has("all") ? filtered.length : Math.max(0, [...targetTokens].filter(x => x !== "all").length))
+        ? Math.max(0, [...targetTokens].filter(x => x && x !== "all").length)
         : (opts.targetValue && opts.targetValue !== "all" ? 1 : 0));
 
     const ctx = {
@@ -293,18 +291,13 @@
         <span class="hs-pick-meta">${selN}/${onlineN || filtered.length}</span>
       </div>`;
     } else if (mode === "target") {
-      const allOn = targetTokens.has("all");
-      quick = `<div class="hs-pick-quick hs-pick-target-quick">
-        <label class="hs-pick-chip${allOn ? " is-on" : ""}"><input type="checkbox" class="hs-pick-all-cb" value="all" ${allOn ? "checked" : ""}> ${e(t("ui.all_hosts", "全部主机"))}</label>
-        ${(opts.systemOptions || []).map(s => {
-          const val = `system:${s.val}`;
-          const on = targetTokens.has(val);
-          return `<label class="hs-pick-chip${on ? " is-on" : ""}"><input type="checkbox" class="hs-pick-target-cb hs-pick-sys-cb" value="${e(val)}" ${on ? "checked" : ""} ${allOn ? "disabled" : ""}> ${e(s.label)}</label>`;
-        }).join("")}
+      quick = `<div class="hs-pick-quick">
+        <button type="button" class="btn sm ghost" data-hp-act="all-online">${e(t("hs.select_all_online", "全选在线"))}</button>
+        <button type="button" class="btn sm ghost" data-hp-act="all-visible">${e(t("hs.select_all_visible", "全选可见"))}</button>
         <button type="button" class="btn sm ghost" data-hp-act="clear">${e(t("hs.clear_sel", "清空"))}</button>
-        <span class="hs-pick-meta">${allOn ? e(t("ui.all_hosts", "全部主机")) : `${selN} ${e(t("playbook.target_selected", "项"))}`}</span>
+        <span class="hs-pick-meta">${selN} ${e(t("playbook.target_selected", "项"))}</span>
       </div>
-      <div class="hs-pick-meta" style="margin:0;align-self:flex-start">${e(t("playbook.target_hint", "可多选分组 / 主机 / 系统类型"))}</div>`;
+      <div class="hs-pick-meta" style="margin:0;align-self:flex-start">${e(t("playbook.target_hint_tree", "请用主机树勾选分组或主机（支持多选 / 全选）"))}</div>`;
     }
 
     return `<div class="hs-pick-tree-wrap host-picker${opts.compact ? " is-compact" : ""}" data-hp-mode="${e(mode)}" data-hp-id="${e(treeId)}">
@@ -329,9 +322,7 @@
   }
 
   function readTarget(root) {
-    if (!root) return "all";
-    const allCb = root.querySelector(".hs-pick-all-cb");
-    if (allCb && allCb.checked) return "all";
+    if (!root) return "";
     const set = new Set();
     root.querySelectorAll(".hs-pick-target-cb:checked").forEach(cb => {
       if (cb.value) set.add(cb.value);
@@ -339,7 +330,7 @@
     // Legacy single-radio fallback
     if (!set.size) {
       const radio = root.querySelector('input[type="radio"]:checked');
-      if (radio) return radio.value || "all";
+      if (radio) return radio.value || "";
     }
     return serializeTargetTokens(set);
   }
@@ -434,8 +425,9 @@
   }
 
   function labelForTarget(target, hosts) {
-    const parts = String(target || "all").split(",").map(s => s.trim()).filter(Boolean);
-    if (!parts.length || (parts.length === 1 && parts[0] === "all")) return t("ui.all_hosts", "全部主机");
+    const parts = String(target || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (!parts.length) return t("playbook.target_none", "未选择目标");
+    if (parts.length === 1 && parts[0] === "all") return t("ui.all_hosts", "全部主机");
     const labels = parts.map(v => {
       if (v === "all") return t("ui.all_hosts", "全部主机");
       if (v.startsWith("host:")) {

@@ -287,6 +287,12 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	if command == "" {
 		return
 	}
+	// Cancelable budget: server cancel closes the session → alive probe fails →
+	// CommandContext kills the local process. No kill scripts are pushed to the host.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	go a.watchExecSessionCancel(server, sid, cancel)
+
 	// 关键：先开 tx POST（用管道作为请求体），让请求头立刻到达服务端，从而服务端 tx 处理器的
 	// markAgentUp 立即触发（标记「已接单」）。此前本函数是「跑完命令才 POST」，服务端 Phase1
 	// 等 agentUp 的窗口（40s）会被慢命令占满 → 被误判为 no-pickup 而失败并重试（甚至把同一命令
@@ -311,9 +317,13 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	var out []byte
 	var exit int
 	if payload, ok := strings.CutPrefix(command, modulePrefix); ok {
-		out, exit = a.runModule(strings.TrimSpace(payload))
+		out, exit = a.runModuleCtx(ctx, strings.TrimSpace(payload))
 	} else {
-		out, exit = runShellCommand(command)
+		out, exit = runShellCommandCtx(ctx, command)
+	}
+	if ctx.Err() != nil && exit == 0 && len(out) == 0 {
+		out = []byte("（剧本已在服务端停止，本机任务已中止）")
+		exit = 130
 	}
 	// Fallback: some programs bypass chcp and emit bytes in the system ANSI
 	// code page (e.g., a C program using printf with GBK literals). Convert any
@@ -326,10 +336,52 @@ func (a *Agent) runExecSession(server, sid, command string) {
 	<-posted
 }
 
+// watchExecSessionCancel polls session liveness; when the server cancelled/removed
+// the session, cancel the local command context so the process stops promptly.
+func (a *Agent) watchExecSessionCancel(server, sid string, cancel context.CancelFunc) {
+	ticker := time.NewTicker(1500 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		alive, ok := a.termSessionAlive(server, sid)
+		if !ok {
+			continue // transient network — keep waiting
+		}
+		if !alive {
+			cancel()
+			return
+		}
+	}
+}
+
+func (a *Agent) termSessionAlive(server, sid string) (alive bool, ok bool) {
+	q := url.Values{}
+	q.Set("session", sid)
+	resp, err := agentGet(termWaitHTTP, server+"/api/v1/agent/terminal/alive?"+q.Encode(), a.identity.Fingerprint)
+	if err != nil {
+		return false, false
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, true
+	case http.StatusGone, http.StatusNotFound:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
 // runShellCommand 用系统 shell 执行一条命令，返回合并输出（stdout+stderr）与退出码。
 func runShellCommand(command string) ([]byte, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	return runShellCommandCtx(ctx, command)
+}
+
+func runShellCommandCtx(ctx context.Context, command string) ([]byte, int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		// chcp 65001 让 cmd 内建命令尽量输出 UTF-8。但 Agent 作为 Windows 服务运行时无控制台，

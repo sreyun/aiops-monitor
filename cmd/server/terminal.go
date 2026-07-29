@@ -54,6 +54,7 @@ type termSession struct {
 	lang           string                     // operator's preferred UI language (for agent-side messages)
 	changeID       int64                      // linked approved change (audit glue)
 	incidentID     int64                      // linked incident loop (audit glue)
+	execID         int64                      // playbook execution id (exec mode); 0 = unrelated
 }
 
 func (s *termSession) markAgentUp() { s.upOnce.Do(func() { close(s.agentUp) }) }
@@ -274,7 +275,15 @@ func (m *termManager) create(hostID, hostname, operator string) *termSession {
 // dedicated exec path (no interactive PTY, no sentinel) — reliable across shells
 // and OSes, which the interactive-terminal approach was not (esp. Linux bash).
 func (m *termManager) createExec(hostID, hostname, command string) *termSession {
-	return m.createFull(hostID, hostname, "playbook-exec", "exec", command)
+	return m.createExecWithExecID(hostID, hostname, command, 0)
+}
+
+// createExecWithExecID tags the session with a playbook execution id so cancel can
+// close/remove every related exec session without touching interactive terminals.
+func (m *termManager) createExecWithExecID(hostID, hostname, command string, execID int64) *termSession {
+	s := m.createFull(hostID, hostname, "playbook-exec", "exec", command)
+	s.execID = execID
+	return s
 }
 
 func (m *termManager) createFull(hostID, hostname, operator, mode, command string) *termSession {
@@ -295,6 +304,43 @@ func (m *termManager) get(id string) *termSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.sessions[id]
+}
+
+// abortSessionsByExecID closes and removes all playbook-exec sessions for execID.
+// Pending queue entries are purged via remove(). Does not send commands to hosts.
+func (m *termManager) abortSessionsByExecID(execID int64) int {
+	if m == nil || execID == 0 {
+		return 0
+	}
+	m.mu.Lock()
+	ids := make([]string, 0, 8)
+	for id, s := range m.sessions {
+		if s != nil && s.execID == execID {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		if s := m.get(id); s != nil {
+			s.close()
+		}
+		m.remove(id)
+	}
+	return len(ids)
+}
+
+// sessionAlive reports whether an exec/interactive session still exists and is open.
+func (m *termManager) sessionAlive(id string) bool {
+	s := m.get(id)
+	if s == nil {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // remove deletes a session, first archiving its recording so an ended interactive
@@ -760,6 +806,32 @@ func (s *Server) handleAgentTermWait(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{})
 	case <-r.Context().Done():
 	}
+}
+
+// handleAgentTermAlive lets the agent notice a cancelled/removed session and stop
+// local CommandContext work — without the server sending kill scripts to the host.
+func (s *Server) handleAgentTermAlive(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimSpace(r.URL.Query().Get("session"))
+	if sid == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session required"})
+		return
+	}
+	sess := s.term.get(sid)
+	if sess == nil {
+		writeJSON(w, http.StatusGone, map[string]any{"alive": false, "reason": "gone"})
+		return
+	}
+	if !s.termFingerprintOKByHost(sess.hostID, agentFP(r)) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "auth.unauthorized")})
+		return
+	}
+	select {
+	case <-sess.done:
+		writeJSON(w, http.StatusGone, map[string]any{"alive": false, "reason": "closed"})
+		return
+	default:
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"alive": true})
 }
 
 // handleAgentTermRx streams operator keystrokes down to the agent (chunked).

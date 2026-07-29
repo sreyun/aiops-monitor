@@ -84,7 +84,7 @@ function openPlaybookModal(pb) {
   $("pbAutoRollback").checked = !!strategy.auto_rollback;
   const steps = pb ? pb.steps : [];
   renderPbSteps(steps.length > 0 ? steps : [{
-    name: "系统信息", module: "gather_facts", target: "all", timeout_sec: 30,
+    name: "系统信息", module: "gather_facts", target: "", timeout_sec: 30,
     continue_on_error: false, register: "facts"
   }]);
   // Populate the timed-trigger fields from the playbook's schedule (if any).
@@ -155,7 +155,7 @@ function renderPbSteps(steps) {
       <div class="grid2">
         <div class="field"><label>${I18N.t("form.step_name")}</label><input type="text" class="pb-step-name" value="${esc(s.name||"")}" placeholder="${I18N.t('form.hint_step_name')}"></div>
         <div class="field pb-target-field"><label>${I18N.t("form.target")}</label>
-          <input type="hidden" class="pb-step-target" value="${esc(s.target || "all")}">
+          <input type="hidden" class="pb-step-target" value="${esc(s.target || "")}">
           <div class="pb-step-target-picker"></div>
         </div>
       </div>
@@ -446,20 +446,37 @@ function collectModuleArgs(el, mod) {
 const PB_STEP_PICK = new WeakMap();
 let _pbPickUid = 0;
 
-function pbSystemOptions() {
-  return [
-    { val: "linux", label: "Linux" },
-    { val: "rocky", label: "Rocky Linux" },
-    { val: "centos", label: "CentOS" },
-    { val: "openeuler", label: "openEuler" },
-    { val: "euleros", label: "EulerOS" },
-    { val: "alinux", label: "Alibaba Cloud Linux" },
-    { val: "kylin", label: "麒麟 Kylin" },
-    { val: "debian", label: "Debian / Ubuntu" },
-    { val: "rhel", label: "RHEL 族" },
-    { val: "macos", label: "macOS" },
-    { val: "windows", label: "Windows" }
-  ];
+/** Expand legacy all / system: tokens into folder:/host: tree selections. */
+function pbNormalizeTargetTokens(rawTokens, hosts) {
+  const set = new Set();
+  const src = rawTokens instanceof Set ? rawTokens : HostPicker.parseTargetTokens(rawTokens);
+  const list = [...src];
+  if (!list.length) return set;
+  if (list.length === 1 && list[0] === "all") {
+    const folders = HostPicker.folderTree();
+    const walk = (nodes) => {
+      (nodes || []).forEach(n => {
+        set.add("folder:" + n.id);
+        walk(n.children || []);
+      });
+    };
+    walk(folders);
+    if ((hosts || []).some(h => !(h.folder_id || "").trim())) set.add("folder:__ungrouped__");
+    if (!set.size) (hosts || []).forEach(h => set.add("host:" + h.id));
+    return set;
+  }
+  list.forEach(tok => {
+    if (!tok || tok === "all") return;
+    if (tok.startsWith("system:")) {
+      const sys = tok.slice(7);
+      (hosts || []).forEach(h => {
+        if (pbHostMatchesSystem(h, sys)) set.add("host:" + h.id);
+      });
+      return;
+    }
+    set.add(tok);
+  });
+  return set;
 }
 
 function pbFolderSubtreeIds(fid) {
@@ -494,7 +511,10 @@ function paintPbTargetPicker(step) {
     st = { collapsed: new Set(), q: "", uid: "pb" + (++_pbPickUid), tokens: null };
     PB_STEP_PICK.set(step, st);
   }
-  if (!st.tokens) st.tokens = HostPicker.parseTargetTokens(hidden.value || "all");
+  if (!st.tokens) {
+    st.tokens = pbNormalizeTargetTokens(hidden.value || "", PB_HOSTS);
+    hidden.value = HostPicker.serializeTargetTokens(st.tokens);
+  }
   const syncHidden = () => {
     hidden.value = HostPicker.serializeTargetTokens(st.tokens);
     pbTargetPreviewFromStep(step);
@@ -508,7 +528,6 @@ function paintPbTargetPicker(step) {
     targetValue: HostPicker.serializeTargetTokens(st.tokens),
     collapsed: st.collapsed,
     q: st.q,
-    systemOptions: pbSystemOptions(),
     compact: true,
   });
   const root = wrap.querySelector(".host-picker");
@@ -521,15 +540,15 @@ function paintPbTargetPicker(step) {
     onSearch: (q) => { st.q = q; paintPbTargetPicker(step); },
     onQuick: (act) => {
       if (act === "clear") {
-        st.tokens = new Set(["all"]);
+        st.tokens = new Set();
+      } else if (act === "all-online") {
+        st.tokens = new Set();
+        PB_HOSTS.filter(h => h.online).forEach(h => st.tokens.add("host:" + h.id));
+      } else if (act === "all-visible") {
+        const q = (st.q || "").trim().toLowerCase();
+        st.tokens = new Set();
+        PB_HOSTS.filter(h => HostPicker.filterHost(h, q)).forEach(h => st.tokens.add("host:" + h.id));
       }
-      syncHidden();
-      paintPbTargetPicker(step);
-    },
-    onTargetChange: (val) => {
-      // "全部主机" chip
-      if (val === "all") st.tokens = new Set(["all"]);
-      else if (!val) st.tokens = new Set(["all"]);
       syncHidden();
       paintPbTargetPicker(step);
     },
@@ -537,7 +556,6 @@ function paintPbTargetPicker(step) {
       st.tokens.delete("all");
       if (checked) {
         st.tokens.add(token);
-        // Checking a folder: drop redundant host: tokens under that folder (keep folder selector)
         if (token.startsWith("folder:")) {
           const fid = token.slice(7);
           const ids = pbFolderSubtreeIds(fid);
@@ -548,7 +566,6 @@ function paintPbTargetPicker(step) {
         }
       } else {
         st.tokens.delete(token);
-        // Unchecking folder that was visually "all hosts checked": also clear host tokens under it
         if (token.startsWith("folder:")) {
           const fid = token.slice(7);
           const ids = pbFolderSubtreeIds(fid);
@@ -558,7 +575,6 @@ function paintPbTargetPicker(step) {
           });
         }
       }
-      if (!st.tokens.size) st.tokens.add("all");
       syncHidden();
       paintPbTargetPicker(step);
     },
@@ -568,7 +584,7 @@ function paintPbTargetPicker(step) {
 
 // Legacy flat <option> builder kept for any leftover callers / AI helpers.
 function buildTargetOptions(selectedTarget) {
-  const opts = [`<option value="all" ${selectedTarget==="all"?"selected":""}>${I18N.t("ui.all_hosts")}</option>`];
+  const opts = [`<option value="" ${!selectedTarget?"selected":""}>${I18N.t("playbook.target_none","未选择目标")}</option>`];
   if (PB_CATS.length > 0) {
     opts.push(`<optgroup label="${I18N.t("section.by_category")}">`);
     PB_CATS.forEach(cat => {
@@ -577,11 +593,6 @@ function buildTargetOptions(selectedTarget) {
     });
     opts.push("</optgroup>");
   }
-  opts.push(`<optgroup label="${I18N.t("section.by_system")}">`);
-  pbSystemOptions().forEach(s => {
-    opts.push(`<option value="system:${s.val}" ${selectedTarget===`system:${s.val}`?"selected":""}>${s.label}</option>`);
-  });
-  opts.push("</optgroup>");
   if (PB_HOSTS.length > 0) {
     opts.push(`<optgroup label="${I18N.t("section.target_host")}">`);
     PB_HOSTS.forEach(h => {
@@ -860,6 +871,11 @@ async function savePlaybook() {
   const pb = collectPlaybook();
   if (!pb.name) { toast(I18N.t("valid.fill_playbook_name"), "err"); return; }
   if (pb.steps.length === 0) { toast(I18N.t("valid.need_step"), "err"); return; }
+  const missing = (pb.steps || []).findIndex(s => !String(s.target || "").trim());
+  if (missing >= 0) {
+    toast(I18N.t("valid.need_step_target", "请为每个步骤在主机树中勾选目标（分组或主机）") + ` (#${missing + 1})`, "err");
+    return;
+  }
   await withLoading("pbSaveBtn", async () => {
     try {
       const r = await fetch(`${API}/playbooks`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(pb) });
@@ -955,8 +971,15 @@ function renderExecResult(exec, opts) {
   const rb = $("execRetroBtn");
   if (rb) {
     const done = exec.status !== "running" && exec.status !== "pending_approval";
-    const hasFail = exec.status === "failed" || exec.status === "partial" || Object.values(exec.host_results || {}).some(r => r.status !== "success");
+    const hasFail = exec.status === "failed" || exec.status === "partial" || exec.status === "cancelled" || Object.values(exec.host_results || {}).some(r => r.status !== "success");
     rb.style.display = (done && hasFail) ? "" : "none";
+  }
+  const cb = $("execCancelBtn");
+  if (cb) {
+    const canStop = exec.status === "running" || exec.status === "pending_approval";
+    cb.style.display = canStop ? "" : "none";
+    cb.disabled = false;
+    cb.onclick = () => cancelPlaybookExecution(exec.id);
   }
   const pending = exec.status === "pending_approval";
   const approveBar = pending ? `<div class="exec-approve-bar" style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap;align-items:center">
@@ -971,7 +994,7 @@ function renderExecResult(exec, opts) {
     ? `<div class="hint" style="margin:6px 0">${I18N.t("exec.host_progress", "主机进度")}：${doneN}/${hostEntries.length}${running ? " · " + I18N.t("ui.executing", "执行中…") : ""}</div>`
     : "";
   const rows = hostEntries.map(([hid, r]) => {
-    const statusCls = r.status === "success" ? "ok" : (r.status === "failed" || r.status === "timeout") ? "crit" : "warn";
+    const statusCls = r.status === "success" ? "ok" : (r.status === "failed" || r.status === "timeout") ? "crit" : (r.status === "cancelled" ? "warn" : "warn");
     const reason = r.reason ? ` <span class="mono muted">(${esc(r.reason)})</span>` : "";
     const steps = (r.steps || []).map((s, si) => {
       const out = s.output || "";
@@ -1033,6 +1056,28 @@ function renderExecResult(exec, opts) {
   });
 }
 
+async function cancelPlaybookExecution(execId) {
+  if (!execId) return;
+  if (!confirm(I18N.t("exec.confirm_cancel", "确认彻底停止该剧本执行？未开始的主机将不再下发任务；进行中的会话会中止（不会向主机下发 kill 脚本）。"))) return;
+  const btn = $("execCancelBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(execId)}/cancel`, { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      toast(j.error || I18N.t("exec.cancel_fail", "停止失败"), "err");
+      if (btn) btn.disabled = false;
+      return;
+    }
+    toast(I18N.t("exec.cancel_ok", "已停止剧本执行"), "ok");
+    const exec2 = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(execId)}?compact=1`).then(x => x.json());
+    renderExecResult(exec2, { compact: true });
+  } catch (e) {
+    toast(String(e), "err");
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function loadExecHistory() {
   try {
     const list = await fetch(`${API}/playbooks/executions`).then(r => r.json());
@@ -1040,17 +1085,29 @@ async function loadExecHistory() {
       const success = Object.values(e.host_results || {}).filter(r => r.status === "success").length;
       const total = Object.keys(e.host_results || {}).length;
       const badge = e.status === "completed" ? "ok" : (e.status === "failed" || e.status === "rejected") ? "crit" : "warn";
+      const stopBtn = (e.status === "running" || e.status === "pending_approval")
+        ? `<button type="button" class="btn sm danger exec-hist-cancel" data-exec-id="${e.id}">${I18N.t("exec.stop", "停止")}</button>`
+        : "";
       return `<div class="exec-hist-row" data-exec-id="${e.id}">
         <strong>${esc(e.playbook_name)}</strong>
         <span class="badge ${badge}">${translateExecStatus(e.status)}</span>
         <span class="mono" style="color:var(--muted)">${success}/${total} ${I18N.t("exec.success_count")}</span>
         <span class="mono" style="color:var(--muted)">${fmtDateTime(e.start_time)}</span>
         <span class="mono" style="color:var(--muted)">${esc(e.operator)}${e.trigger === "schedule" ? " · 定时" : ""}</span>
+        ${stopBtn}
       </div>`;
     }).join("");
     $("execHistBody").innerHTML = rows || `<div class="empty-line">${I18N.t("empty.no_executions")}</div>`;
-    $("execHistBody").querySelectorAll("[data-exec-id]").forEach(el => {
-      el.onclick = async () => {
+    $("execHistBody").querySelectorAll(".exec-hist-cancel").forEach(btn => {
+      btn.onclick = async (ev) => {
+        ev.stopPropagation();
+        await cancelPlaybookExecution(btn.dataset.execId);
+        loadExecHistory();
+      };
+    });
+    $("execHistBody").querySelectorAll(".exec-hist-row").forEach(el => {
+      el.onclick = async (ev) => {
+        if (ev.target && ev.target.closest && ev.target.closest(".exec-hist-cancel")) return;
         const exec = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(el.dataset.execId)}?compact=1`).then(r => r.json());
         renderExecResult(exec, { compact: true });
         $("execHistMask").classList.remove("show");
@@ -1066,7 +1123,7 @@ safeAddEventListener("addPlaybookBtn", "click", () => openPlaybookModal(null));
 safeAddEventListener("pbAddStep", "click", () => {
   const pb = collectPlaybook();
   const steps = pb.steps || [];
-  steps.push({ name: "", module: "gather_facts", target: "all", timeout_sec: 30, continue_on_error: false });
+  steps.push({ name: "", module: "gather_facts", target: "", timeout_sec: 30, continue_on_error: false });
   renderPbSteps(steps);
 });
 

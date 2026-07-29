@@ -407,6 +407,7 @@ const translateExecStatus = s => {
   if (s === "rejected") return I18N.t("exec.status.rejected", "已拒绝");
   if (s === "partial") return I18N.t("exec.status.partial", "部分成功");
   if (s === "skipped") return I18N.t("ui.skipped", "已跳过");
+  if (s === "cancelled") return I18N.t("exec.status.cancelled", "已停止");
   return s;
 };
 // Translate step status from English enum to display text
@@ -420,6 +421,7 @@ const translateStepStatus = s => {
   if (s === "skipped") return I18N.t("ui.skipped", "已跳过");
   if (s === "rollback_success") return I18N.t("exec.step.rollback_success", "回滚成功");
   if (s === "rollback_failed") return I18N.t("exec.step.rollback_failed", "回滚失败");
+  if (s === "cancelled") return I18N.t("exec.status.cancelled", "已停止");
   return s;
 };
 // 与 agent 端一致的系统目录过滤（前端再兜一道，防旧 agent / 持久化历史里残留 /boot、/System 盘）

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -615,13 +616,25 @@ func (s *Server) runHostInspectBatch(batchID string, hosts []*Host, timeoutSec i
 
 // execCommandOnHostSized is like execCommandOnHost but allows a larger output buffer (for JSON reports).
 func (s *Server) execCommandOnHostSized(h *Host, command string, timeoutSec, maxBytes int) (string, execKind, error) {
+	return s.execCommandOnHostCtx(context.Background(), 0, h, command, timeoutSec, maxBytes)
+}
+
+// execCommandOnHostCtx runs a one-shot agent exec, honouring ctx cancellation and
+// tagging the session with execID so fleet cancel can abort it without host kill scripts.
+func (s *Server) execCommandOnHostCtx(ctx context.Context, execID int64, h *Host, command string, timeoutSec, maxBytes int) (string, execKind, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return "", execCancelled, fmt.Errorf("%s", "剧本已停止")
+	}
 	if timeoutSec < 5 {
 		timeoutSec = 30
 	}
 	if maxBytes < 64*1024 {
 		maxBytes = 512 * 1024
 	}
-	sess := s.term.createExec(h.ID, h.Hostname, command)
+	sess := s.term.createExecWithExecID(h.ID, h.Hostname, command, execID)
 	defer s.term.remove(sess.id)
 	defer sess.close()
 	s.term.notifyAgent(h.ID, sess.id)
@@ -632,6 +645,8 @@ func (s *Server) execCommandOnHostSized(h *Host, command string, timeoutSec, max
 		return "", execNoPickup, fmt.Errorf("%s", Tz("playbook.no_pickup"))
 	case <-sess.done:
 		return "", execAbnormal, fmt.Errorf("%s", Tz("playbook.abnormal"))
+	case <-ctx.Done():
+		return "", execCancelled, fmt.Errorf("%s", "剧本已停止")
 	}
 
 	var output []byte
@@ -659,6 +674,12 @@ func (s *Server) execCommandOnHostSized(h *Host, command string, timeoutSec, max
 			}
 			out, kind, err := parseExecOutput(output, false)
 			return out, kind, err
+		case <-ctx.Done():
+			out := strings.TrimRight(string(output), "\r\n")
+			if out != "" {
+				out += "\n"
+			}
+			return out + "（剧本已手动停止）", execCancelled, fmt.Errorf("%s", "剧本已停止")
 		}
 	}
 }

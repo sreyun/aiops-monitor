@@ -86,7 +86,7 @@ type PlaybookExecution struct {
 // HostExecResult tracks one host's execution outcome.
 type HostExecResult struct {
 	Hostname string       `json:"hostname"`
-	Status   string       `json:"status"`           // pending | running | success | failed | timeout | skipped
+	Status   string       `json:"status"`           // pending | running | success | failed | timeout | skipped | cancelled
 	Reason   string       `json:"reason,omitempty"` // no_pickup | timeout | exit | skipped_when | cancelled | error
 	Output   string       `json:"output"`
 	Steps    []StepResult `json:"steps"`
@@ -299,8 +299,11 @@ func (pm *playbookManager) Upsert(p Playbook) (Playbook, error) {
 
 func validPlaybookTarget(target string) bool {
 	target = strings.TrimSpace(target)
-	if target == "" || target == "all" {
-		return true
+	if target == "" {
+		return false // must pick hosts/folders in the tree (no empty / implicit all)
+	}
+	if target == "all" {
+		return true // legacy playbooks / readonly templates
 	}
 	parts := splitPlaybookTargets(target)
 	if len(parts) == 0 {
@@ -518,9 +521,38 @@ func (pm *playbookManager) importExecutions(execs []PlaybookExecution) {
 		pm.executions = pm.executions[len(pm.executions)-100:]
 	}
 	// Restore nextExecID to max seen so new IDs are monotonically increasing.
-	for _, e := range execs {
+	for i := range pm.executions {
+		e := &pm.executions[i]
 		if e.ID >= pm.nextExecID {
 			pm.nextExecID = e.ID + 1
+		}
+		// Process restart cannot resume in-flight runners — mark orphaned
+		// running/pending_approval as cancelled so UI is not stuck forever.
+		if e.Status == "running" || e.Status == "pending_approval" {
+			e.Status = "cancelled"
+			if e.EndTime == 0 {
+				e.EndTime = time.Now().Unix()
+			}
+			for hid, hr := range e.HostResults {
+				st := strings.TrimSpace(hr.Status)
+				if st == "pending" || st == "running" || st == "" {
+					hr.Status = "cancelled"
+					hr.Reason = "cancelled"
+					if len(hr.Steps) == 0 {
+						hr.Steps = []StepResult{{Name: "（服务重启）", Status: "cancelled", Output: "服务重启，执行中断"}}
+					} else {
+						for j := range hr.Steps {
+							if hr.Steps[j].Status == "running" || hr.Steps[j].Status == "pending" || hr.Steps[j].Status == "" {
+								hr.Steps[j].Status = "cancelled"
+								if strings.TrimSpace(hr.Steps[j].Output) == "" {
+									hr.Steps[j].Output = "服务重启，执行中断"
+								}
+							}
+						}
+					}
+					e.HostResults[hid] = hr
+				}
+			}
 		}
 	}
 }

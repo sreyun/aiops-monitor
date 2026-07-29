@@ -1029,22 +1029,37 @@ function hsMaybePoll() {
   if (hsPollTimer) { clearInterval(hsPollTimer); hsPollTimer = null; }
   const running = (hsScans || []).some(s => s.status === "running") || (hsSelected && hsSelected.status === "running");
   if (!running) return;
+  let lastSig = "";
   hsPollTimer = setInterval(async () => {
     if (!document.querySelector("#view-host-security.active")) {
       clearInterval(hsPollTimer); hsPollTimer = null; return;
     }
     try {
+      const prevStatus = hsSelected && hsSelected.status;
       hsScans = (await hsFetchJSON(`${API}/security/host/scans?limit=40`)).scans || [];
-      hsSummary = (await hsFetchJSON(`${API}/security/host/summary`)).hosts || [];
-      if (hsSelected && hsSelected.id) {
-        hsSelected = await hsFetchJSON(`${API}/security/host/scans/` + encodeURIComponent(hsSelected.id));
+      const sig = (hsScans || []).map(s => `${s.id}:${s.status}:${s.finished_at || 0}`).join("|");
+      const changed = sig !== lastSig;
+      if (changed) {
+        lastSig = sig;
+        hsSummary = (await hsFetchJSON(`${API}/security/host/summary`)).hosts || [];
       }
-      hsSoftRefresh();
+      if (hsSelected && hsSelected.id) {
+        const row = (hsScans || []).find(s => s.id === hsSelected.id);
+        if (row && row.status === "running") {
+          // Keep slim list row while running — avoid pulling findings/FIM every tick.
+          hsSelected = Object.assign({}, hsSelected, row);
+        } else if (row && prevStatus === "running" && row.status !== "running") {
+          hsSelected = await hsFetchJSON(`${API}/security/host/scans/` + encodeURIComponent(hsSelected.id));
+        } else if (row && row.status !== "running" && (!(hsSelected.findings || []).length)) {
+          hsSelected = await hsFetchJSON(`${API}/security/host/scans/` + encodeURIComponent(hsSelected.id));
+        }
+      }
+      if (changed || (hsSelected && hsSelected.status === "running")) hsSoftRefresh();
       if (!(hsScans || []).some(s => s.status === "running")) {
         clearInterval(hsPollTimer); hsPollTimer = null;
       }
     } catch (_) {}
-  }, 2500);
+  }, 3000);
 }
 
 async function hsLoadDetail(id, opts) {

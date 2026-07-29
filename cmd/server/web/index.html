@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.19.49">
+<link rel="stylesheet" href="/style.css?v=0.19.51">
 <script src="/theme-init.js"></script>
 <script src="/js/vendor/echarts.min.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
@@ -3138,7 +3138,8 @@
   <div class="modal modal-wide">
     <div class="modal-head">
       <h3 id="execResultTitle">执行结果</h3>
-      <button type="button" class="btn sm ai-assist-btn" id="execRetroBtn" style="display:none;margin-left:auto"><span class="ai-assist-btn-ic">🤖</span>AI 复盘</button>
+      <button type="button" class="btn sm danger" id="execCancelBtn" style="display:none;margin-left:auto">停止执行</button>
+      <button type="button" class="btn sm ai-assist-btn" id="execRetroBtn" style="display:none"><span class="ai-assist-btn-ic">🤖</span>AI 复盘</button>
       <button class="btn ghost close" data-close-btn aria-label="关闭">✕</button>
     </div>
     <div class="modal-body" id="execResultBody"></div>
@@ -4194,12 +4195,12 @@
 </div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.19.46"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.19.46"></script>
-<script src="/i18n-dashboard.js?v=0.19.46"></script>
+<script src="/i18n-dashboard.en.js?v=0.19.51"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.19.51"></script>
+<script src="/i18n-dashboard.js?v=0.19.51"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.19.49" defer></script>
+<script src="/app.js?v=0.19.51" defer></script>
 </body>
 </html>

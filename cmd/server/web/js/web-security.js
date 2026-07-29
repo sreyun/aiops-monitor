@@ -1361,22 +1361,34 @@ function wsSoftRefresh() {
 function wsMaybePoll() {
   if (wsPollTimer) { clearInterval(wsPollTimer); wsPollTimer = null; }
   if (!(wsScans || []).some(s => s.status === "running") && !(wsSelected && wsSelected.status === "running")) return;
+  let lastSig = "";
   wsPollTimer = setInterval(async () => {
     if (!document.querySelector("#view-web-security.active")) {
       clearInterval(wsPollTimer); wsPollTimer = null; return;
     }
     try {
+      const prevStatus = wsSelected && wsSelected.status;
       wsScans = (await wsFetchJSON(`${API}/security/web/scans?limit=40`)).scans || [];
+      const sig = (wsScans || []).map(s => `${s.id}:${s.status}:${s.finished_at || 0}`).join("|");
+      const changed = sig !== lastSig;
+      if (changed) lastSig = sig;
       if (wsSelected && wsSelected.id) {
-        wsSelected = await wsFetchJSON(`${API}/security/web/scans/` + encodeURIComponent(wsSelected.id));
+        const row = (wsScans || []).find(s => s.id === wsSelected.id);
+        if (row && row.status === "running") {
+          wsSelected = Object.assign({}, wsSelected, row);
+        } else if (row && prevStatus === "running" && row.status !== "running") {
+          wsSelected = await wsFetchJSON(`${API}/security/web/scans/` + encodeURIComponent(wsSelected.id));
+        } else if (row && row.status !== "running" && (!(wsSelected.findings || []).length)) {
+          wsSelected = await wsFetchJSON(`${API}/security/web/scans/` + encodeURIComponent(wsSelected.id));
+        }
       }
-      wsSoftRefresh();
+      if (changed || (wsSelected && wsSelected.status === "running")) wsSoftRefresh();
       if (!(wsScans || []).some(x => x.status === "running")) {
         clearInterval(wsPollTimer); wsPollTimer = null;
         wsEngine = await wsFetchJSON(`${API}/security/web/engine`).catch(() => wsEngine);
       }
     } catch (_) {}
-  }, 2500);
+  }, 3000);
 }
 
 async function wsLoadScan(id) {

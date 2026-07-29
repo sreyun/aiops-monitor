@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -607,6 +608,9 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		slog.Warn("playbook blocked by cmd policy", "exec", exec.ID, "err", err)
 		return
 	}
+	ctx := s.registerPlaybookRun(exec.ID)
+	defer s.unregisterPlaybookRun(exec.ID)
+
 	var wg sync.WaitGroup
 	maxParallel := pb.Strategy.MaxParallel
 	if maxParallel <= 0 {
@@ -625,8 +629,30 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 		wg.Add(1)
 		go func(h *Host) {
 			defer wg.Done()
-			sem <- struct{}{}
+			if ctx.Err() != nil {
+				s.playbooks.UpdateHostResult(exec.ID, h.ID, HostExecResult{
+					Hostname: h.Hostname, Status: "cancelled", Reason: "cancelled",
+					Steps: []StepResult{{Name: "（未开始）", Status: "cancelled", Output: "（剧本已手动停止，未向主机下发任务）"}},
+				})
+				return
+			}
+			select {
+			case <-ctx.Done():
+				s.playbooks.UpdateHostResult(exec.ID, h.ID, HostExecResult{
+					Hostname: h.Hostname, Status: "cancelled", Reason: "cancelled",
+					Steps: []StepResult{{Name: "（未开始）", Status: "cancelled", Output: "（剧本已手动停止，未向主机下发任务）"}},
+				})
+				return
+			case sem <- struct{}{}:
+			}
 			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				s.playbooks.UpdateHostResult(exec.ID, h.ID, HostExecResult{
+					Hostname: h.Hostname, Status: "cancelled", Reason: "cancelled",
+					Steps: []StepResult{{Name: "（未开始）", Status: "cancelled", Output: "（剧本已手动停止，未向主机下发任务）"}},
+				})
+				return
+			}
 			result := HostExecResult{Hostname: h.Hostname, Status: "running"}
 			// Progressive status: leave「等待中」as soon as the host goroutine starts.
 			s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
@@ -642,6 +668,15 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 				s.persistPlaybookExecutionDebounced(exec.ID, false)
 			}
 			for _, step := range pb.Steps {
+				if ctx.Err() != nil {
+					result.Status = "cancelled"
+					result.Reason = "cancelled"
+					result.Steps = append(result.Steps, StepResult{
+						Name: step.Name, Status: "cancelled", Output: "（剧本已手动停止）",
+					})
+					pushProgress()
+					break
+				}
 				sr := StepResult{Name: step.Name, Status: "running"}
 				start := time.Now()
 				// when 条件：不满足则跳过本步
@@ -688,9 +723,21 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 				if strings.TrimSpace(step.Module) == "host_inspect" {
 					outCap = hostInspectOutCap
 				}
+				cancelled := false
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
+					if ctx.Err() != nil {
+						kind = execCancelled
+						err = fmt.Errorf("%s", "剧本已停止")
+						output = "（剧本已手动停止）"
+						cancelled = true
+						break
+					}
 					attemptsUsed = attempt
-					output, kind, err = s.execCommandOnHostSized(h, cmd, step.TimeoutSec, outCap)
+					output, kind, err = s.execCommandOnHostCtx(ctx, exec.ID, h, cmd, step.TimeoutSec, outCap)
+					if kind == execCancelled || ctx.Err() != nil {
+						cancelled = true
+						break
+					}
 					if err == nil {
 						if attempt > 1 {
 							output += "\n" + Tz("playbook.retry_recovered", attempt)
@@ -701,13 +748,32 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 						break // real command failure — retrying is pointless
 					}
 					if attempt < maxAttempts {
-						time.Sleep(time.Duration(attempt*retryDelay) * time.Second)
+						select {
+						case <-ctx.Done():
+							cancelled = true
+							kind = execCancelled
+							err = fmt.Errorf("%s", "剧本已停止")
+							output = "（剧本已手动停止）"
+						case <-time.After(time.Duration(attempt*retryDelay) * time.Second):
+						}
+						if cancelled {
+							break
+						}
 						continue
 					}
 					output += "\n" + Tz("playbook.attempts_failed", attempt)
 				}
 				sr.Duration = time.Since(start).Milliseconds()
 				sr.Attempts = attemptsUsed
+				if cancelled {
+					sr.Status = "cancelled"
+					sr.Output = truncatePlaybookStoreOutput(step.Module, output)
+					result.Status = "cancelled"
+					result.Reason = "cancelled"
+					result.Steps = append(result.Steps, sr)
+					pushProgress()
+					break
+				}
 				// ignore_exit：仅「命令跑完但退出码非零」可被忽略（no-pickup/超时等基础设施失败不忽略）
 				failed := err != nil
 				if failed && step.IgnoreExit && kind == execExit {
@@ -750,8 +816,12 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					}
 				}
 			}
-			if result.Status == "failed" && pb.Strategy.AutoRollback && len(rollbacks) > 0 {
+			// Do not auto-rollback after operator cancel — that would add host load.
+			if result.Status == "failed" && pb.Strategy.AutoRollback && len(rollbacks) > 0 && ctx.Err() == nil {
 				for i := len(rollbacks) - 1; i >= 0; i-- {
+					if ctx.Err() != nil {
+						break
+					}
 					action := rollbacks[i]
 					start := time.Now()
 					var out string
@@ -763,8 +833,11 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 						maxAttempts = playbookMaxAttempts
 					}
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
+						if ctx.Err() != nil {
+							break
+						}
 						rbAttempts = attempt
-						out, rbKind, rbErr = s.execCommandOnHost(h, action.cmd, action.step.TimeoutSec)
+						out, rbKind, rbErr = s.execCommandOnHostCtx(ctx, exec.ID, h, action.cmd, action.step.TimeoutSec, 512*1024)
 						if rbErr == nil || !rbKind.retryable() || attempt == maxAttempts {
 							break
 						}
@@ -772,7 +845,10 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 						if delay <= 0 {
 							delay = int(playbookRetryBackoff / time.Second)
 						}
-						time.Sleep(time.Duration(attempt*delay) * time.Second)
+						select {
+						case <-ctx.Done():
+						case <-time.After(time.Duration(attempt*delay) * time.Second):
+						}
 					}
 					rb := StepResult{
 						Name: "回滚 · " + action.step.Name, Status: "rollback_success",
@@ -786,7 +862,7 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 					result.Output += rb.Output + "\n"
 				}
 			}
-			if result.Status != "failed" {
+			if result.Status != "failed" && result.Status != "cancelled" {
 				result.Status = "success"
 			}
 			s.playbooks.UpdateHostResult(exec.ID, h.ID, result)
@@ -799,6 +875,14 @@ func (s *Server) runPlaybookExecution(pb Playbook, exec *PlaybookExecution, host
 	}
 	// Re-read host results (local exec snapshot is stale after UpdateHostResult).
 	fresh, _ := s.playbooks.GetExecution(exec.ID)
+	if fresh.Status == "cancelled" || ctx.Err() != nil {
+		// Cancel handler may have already finished; ensure unfinished hosts are marked.
+		s.playbooks.CancelUnfinishedHosts(exec.ID)
+		s.playbooks.FinishExecution(exec.ID, "cancelled")
+		s.persistPlaybookExecutionDebounced(exec.ID, true)
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: exec.Operator, Message: Tz("log.playbook_done", pb.Name, "cancelled")})
+		return
+	}
 	okN, failN := 0, 0
 	for _, r := range fresh.HostResults {
 		if r.Status == "success" {
@@ -831,6 +915,8 @@ func execKindReason(k execKind) string {
 		return "exit"
 	case execAbnormal:
 		return "error"
+	case execCancelled:
+		return "cancelled"
 	default:
 		return "error"
 	}
@@ -844,11 +930,12 @@ func execKindReason(k execKind) string {
 type execKind int
 
 const (
-	execOK       execKind = iota // ran, exit 0
-	execExit                     // ran, non-zero exit — NOT retryable
-	execTimeout                  // timed out with partial output — retryable
-	execNoPickup                 // timed out with NO output: agent never picked up — retryable
-	execAbnormal                 // session ended without an exit marker — retryable
+	execOK        execKind = iota // ran, exit 0
+	execExit                      // ran, non-zero exit — NOT retryable
+	execTimeout                   // timed out with partial output — retryable
+	execNoPickup                  // timed out with NO output: agent never picked up — retryable
+	execAbnormal                  // session ended without an exit marker — retryable
+	execCancelled                 // playbook cancelled by operator — NOT retryable
 )
 
 // retryable reports whether a failure of this kind is an infrastructure issue
@@ -862,63 +949,7 @@ func (k execKind) retryable() bool {
 // combined output until the process exits (tx EOF → session done) or the timer
 // fires. The outcome is classified via parseExecOutput.
 func (s *Server) execCommandOnHost(h *Host, command string, timeoutSec int) (string, execKind, error) {
-	if timeoutSec < 5 {
-		timeoutSec = 30
-	}
-	sess := s.term.createExec(h.ID, h.Hostname, command)
-	defer s.term.remove(sess.id)
-	defer sess.close()
-	// Summon the agent. notifyAgent now queues the session if the agent is
-	// between polls (no active waiter), so it always succeeds immediately.
-	// The agent will pick it up on its next long-poll cycle (up to 25s).
-	s.term.notifyAgent(h.ID, sess.id)
-
-	// Phase 1 — wait for the agent to actually attach (markAgentUp fires when the
-	// agent opens its tx stream). If it never attaches within the pickup window,
-	// this is a pure "agent didn't pick up" miss: return fast (execNoPickup) so the
-	// batch runner can retry quickly, instead of blocking for the whole command
-	// timeout. execPickupTimeout covers the agent's ≤25s long-poll cycle + margin.
-	select {
-	case <-sess.agentUp:
-		// attached — proceed to stream output
-	case <-time.After(execPickupTimeout):
-		return "", execNoPickup, fmt.Errorf("%s", Tz("playbook.no_pickup"))
-	case <-sess.done:
-		return "", execAbnormal, fmt.Errorf("%s", Tz("playbook.abnormal"))
-	}
-
-	// Phase 2 — the agent runs the command as a ONE-SHOT process (sh -c / cmd /c,
-	// no PTY) and streams combined output up the tx channel, ending it when the
-	// process exits (tx EOF → session done). Because the agent has already
-	// attached, the timer is the command's real budget (no poll-latency buffer
-	// needed). The exit code arrives as a trailing "[AIOPS_EXIT]<code>" marker.
-	var output []byte
-	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case b := <-sess.toBrowser:
-			output = append(output, b...)
-			if len(output) > 512*1024 {
-				output = output[len(output)-512*1024:]
-			}
-		case <-timer.C:
-			out, kind, err := parseExecOutput(output, true)
-			return out, kind, err
-		case <-sess.done:
-			draining := true
-			for draining {
-				select {
-				case b := <-sess.toBrowser:
-					output = append(output, b...)
-				default:
-					draining = false
-				}
-			}
-			out, kind, err := parseExecOutput(output, false)
-			return out, kind, err
-		}
-	}
+	return s.execCommandOnHostCtx(context.Background(), 0, h, command, timeoutSec, 512*1024)
 }
 
 // parseExecOutput splits the agent's exec result into clean output text and an

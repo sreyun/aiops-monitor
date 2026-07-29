@@ -359,8 +359,8 @@ func (s *Server) checkSlowDegradation(hostID string) {
 			}
 		}
 		type fcCheck struct {
-			key string
-			thr float64
+			key  string
+			thr  float64
 			hist [][2]float64
 		}
 		checks := []fcCheck{
@@ -2212,7 +2212,7 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 		return "你是自动化运维专家。根据运维人员的描述，生成一个可直接导入本平台的「运维剧本」JSON。" +
 			"严格输出一个 ```json 代码块，结构为：{\"name\":\"剧本名\",\"description\":\"用途\",\"steps\":[{" +
 			"\"name\":\"步骤名\",\"module\":\"内置模块名(可选,优先于command)\",\"args\":{},\"command\":\"Shell命令(module为空时)\"," +
-			"\"command_win\":\"Windows 覆盖(可选)\",\"target\":\"all|folder:分组ID|category:分类|system:linux|host:ID（可逗号多选）\"," +
+			"\"command_win\":\"Windows 覆盖(可选)\",\"target\":\"folder:分组ID|category:分类|host:ID（可逗号多选；勿再用 system: 与 all，请用主机树勾选）\"," +
 			"\"timeout_sec\":30,\"continue_on_error\":false,\"ignore_exit\":false,\"register\":\"变量名(可选)\",\"when\":\"条件(可选)\"}]}。" +
 			"内置只读模块优先：gather_facts/host_inspect(args.profile=quick|standard|deep)/disk_usage/mem_info/cpu_load/process_top/" +
 			"net_ifaces/net_listen/journal_recent/docker_ps/users_logged 等；变更模块 service/package/copy 须在 description 标明风险。" +
@@ -2645,10 +2645,10 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	stats := s.pg.memoryKindStats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":            items,
-		"total":            total,
-		"stats":            stats,
-		"verified_count":   s.pg.countVerifiedMemories(),
+		"items":          items,
+		"total":          total,
+		"stats":          stats,
+		"verified_count": s.pg.countVerifiedMemories(),
 	})
 }
 

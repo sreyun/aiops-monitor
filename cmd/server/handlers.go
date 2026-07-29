@@ -38,36 +38,36 @@ type Server struct {
 	inspect   *hostInspectManager // deep host inspect batches (host_inspect)
 	push      *pushHub            // P3-1: WebSocket push hub for real-time updates
 	// --- SRE workflow layer ---
-	incidents   *incidentManager         // incident hub (alert/SLO/manual)
-	remediation *remediationManager      // closed-loop auto-remediation
-	slos        *sloManager              // SLO + error budgets
-	distProbes  *distProbeManager        // 分布式多点探测（迭代 D）
-	tickets     *ticketManager           // work orders
-	oncall      *onCallManager           // on-call escalation pages
-	changes     *changeManager           // change records
-	logs        *logStore                // aggregated agent logs
-	hw          *hardwareStore           // latest Redfish snapshots per host (feeds hardware alerts)
-	hv          *hypervStore             // latest Hyper-V guest inventory per host (feeds VM alerts)
-	snmp        *snmpStore               // latest SNMP device snapshots per host (feeds SNMP alerts)
-	nf          *nfStore                 // per-host NetFlow window stats + baseline (feeds traffic-anomaly alerts)
-	ai          *aiManager               // AI inspection + diagnosis
-	vm          *vmWriter                // optional VictoriaMetrics remote-write
-	messages    *messageHub              // unified notification center (SRE/alert/AI feed)
-	distDir     string                   // directory of downloadable agent binaries + plugins.zip
-	pg          *pgStore                 // PostgreSQL persistence (optional, for pgvector/RAG)
-	sreyun      *SreyunCore              // Sreyun Agent (autonomous SRE agent)
-	mcpClients  *MCPClientManager        // external MCP Servers bridged into Sreyun tools
-	aiStats     *aiStatsHub              // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
-	aiGov       *aiGovHub                // AI 治理：配额 + 写工具审计
-	assistStore *assistStore             // Assist 服务端原文（反馈防投毒）
-	hostSec     *hostSecurityManager     // 主机安全扫描结果
-	webSec      *webScanManager          // Web Nuclei 扫描结果
-	feeds       *feedManager             // 威胁情报/模板库更新（Nuclei 模板、sqlmap 特征等）
-	sqlChanges  *sqlChangeRequestManager // SQL DDL approval tickets
-	sqlHistory  *sqlQueryHistoryManager  // per-user SQL workbench history (full SQL)
-	sqlSlow     *slowSQLManager          // multi-DB slow SQL digests + advice
-	secFindings  *securityFindingManager // security finding lifecycle states
-	agentUpdates *agentUpdateManager     // fleet agent binary update jobs
+	incidents    *incidentManager         // incident hub (alert/SLO/manual)
+	remediation  *remediationManager      // closed-loop auto-remediation
+	slos         *sloManager              // SLO + error budgets
+	distProbes   *distProbeManager        // 分布式多点探测（迭代 D）
+	tickets      *ticketManager           // work orders
+	oncall       *onCallManager           // on-call escalation pages
+	changes      *changeManager           // change records
+	logs         *logStore                // aggregated agent logs
+	hw           *hardwareStore           // latest Redfish snapshots per host (feeds hardware alerts)
+	hv           *hypervStore             // latest Hyper-V guest inventory per host (feeds VM alerts)
+	snmp         *snmpStore               // latest SNMP device snapshots per host (feeds SNMP alerts)
+	nf           *nfStore                 // per-host NetFlow window stats + baseline (feeds traffic-anomaly alerts)
+	ai           *aiManager               // AI inspection + diagnosis
+	vm           *vmWriter                // optional VictoriaMetrics remote-write
+	messages     *messageHub              // unified notification center (SRE/alert/AI feed)
+	distDir      string                   // directory of downloadable agent binaries + plugins.zip
+	pg           *pgStore                 // PostgreSQL persistence (optional, for pgvector/RAG)
+	sreyun       *SreyunCore              // Sreyun Agent (autonomous SRE agent)
+	mcpClients   *MCPClientManager        // external MCP Servers bridged into Sreyun tools
+	aiStats      *aiStatsHub              // AI 调用观测（延迟/失败率/粗估 token，管理页仪表）
+	aiGov        *aiGovHub                // AI 治理：配额 + 写工具审计
+	assistStore  *assistStore             // Assist 服务端原文（反馈防投毒）
+	hostSec      *hostSecurityManager     // 主机安全扫描结果
+	webSec       *webScanManager          // Web Nuclei 扫描结果
+	feeds        *feedManager             // 威胁情报/模板库更新（Nuclei 模板、sqlmap 特征等）
+	sqlChanges   *sqlChangeRequestManager // SQL DDL approval tickets
+	sqlHistory   *sqlQueryHistoryManager  // per-user SQL workbench history (full SQL)
+	sqlSlow      *slowSQLManager          // multi-DB slow SQL digests + advice
+	secFindings  *securityFindingManager  // security finding lifecycle states
+	agentUpdates *agentUpdateManager      // fleet agent binary update jobs
 	// --- AI 记忆异步写入通道 ---
 	memoryCh  chan memoryJob // 异步记忆写入队列
 	memorySem chan struct{}  // Embedding API 并发信号量（最多 3 并发）
@@ -77,35 +77,35 @@ type Server struct {
 func NewServer(store *Store, cfg *ConfigStore, notifier *Notifier, distDir string, selfAddr string) *Server {
 	s := &Server{
 		store: store, cfg: cfg, notifier: notifier, distDir: distDir,
-		auth:        NewAuth(cfg),
-		checks:      newCheckRunner(cfg, store, notifier, selfAddr),
-		term:        newTermManager(),
-		desk:        newDeskManager(),
-		forward:     newForwardManager(cfg),
-		emailMgr:    newEmailManager(),
+		auth:         NewAuth(cfg),
+		checks:       newCheckRunner(cfg, store, notifier, selfAddr),
+		term:         newTermManager(),
+		desk:         newDeskManager(),
+		forward:      newForwardManager(cfg),
+		emailMgr:     newEmailManager(),
 		playbooks:    newPlaybookManager(cfg),
 		inspect:      newHostInspectManager(),
 		push:         newPushHub(),
 		agentUpdates: newAgentUpdateManager(),
-		incidents:   newIncidentManager(),
-		remediation: newRemediationManager(cfg),
-		slos:        newSLOManager(cfg),
-		distProbes:  newDistProbeManager(),
-		tickets:     newTicketManager(),
-		oncall:      newOnCallManager(),
-		changes:     newChangeManager(),
-		logs:        newLogStore(),
-		hw:          newHardwareStore(),
-		hv:          newHypervStore(),
-		snmp:        newSNMPStore(),
-		nf:          newNFStore(),
-		ai:          newAIManager(cfg),
-		vm:          newVMWriter(cfg),
-		messages:    newMessageHub(),
-		aiStats:     newAIStatsHub(),
-		assistStore: newAssistStore(),
-		aiGov:       newAIGovHub(),
-		sqlChanges:  newSQLChangeRequestManager(),
+		incidents:    newIncidentManager(),
+		remediation:  newRemediationManager(cfg),
+		slos:         newSLOManager(cfg),
+		distProbes:   newDistProbeManager(),
+		tickets:      newTicketManager(),
+		oncall:       newOnCallManager(),
+		changes:      newChangeManager(),
+		logs:         newLogStore(),
+		hw:           newHardwareStore(),
+		hv:           newHypervStore(),
+		snmp:         newSNMPStore(),
+		nf:           newNFStore(),
+		ai:           newAIManager(cfg),
+		vm:           newVMWriter(cfg),
+		messages:     newMessageHub(),
+		aiStats:      newAIStatsHub(),
+		assistStore:  newAssistStore(),
+		aiGov:        newAIGovHub(),
+		sqlChanges:   newSQLChangeRequestManager(),
 	}
 	s.checks.vm = s.vm                                            // 拨测结果持久化到 VM（重启后仍可查历史趋势）
 	s.apimon = newAPIRunner(s.checks, cfg, store, notifier, s.vm) // API 性能监控（复用高级探测引擎）
@@ -208,6 +208,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/{id}/remote-preflight", s.handleRemotePreflight)
 	mux.HandleFunc("GET /api/v1/agent/terminal/wait", s.handleAgentTermWait)
 	mux.HandleFunc("GET /api/v1/agent/terminal/rx", s.handleAgentTermRx)
+	mux.HandleFunc("GET /api/v1/agent/terminal/alive", s.handleAgentTermAlive)
 	mux.HandleFunc("POST /api/v1/agent/terminal/tx", s.handleAgentTermTx)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	mux.HandleFunc("GET /api/v1/agent-dist/manifest", s.handleAgentDistManifest)
@@ -354,6 +355,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/playbooks/executions/by-id/{id}", s.handleGetExecution)
 	mux.HandleFunc("POST /api/v1/playbooks/executions/by-id/{id}/approve", s.handleApprovePlaybookExecution)
 	mux.HandleFunc("POST /api/v1/playbooks/executions/by-id/{id}/reject", s.handleRejectPlaybookExecution)
+	mux.HandleFunc("POST /api/v1/playbooks/executions/by-id/{id}/cancel", s.handleCancelPlaybookExecution)
 	// Host deep inspect (linux_inspect-style, agent module host_inspect)
 	mux.HandleFunc("GET /api/v1/host-inspect", s.handleListHostInspect)
 	mux.HandleFunc("GET /api/v1/host-inspect/compare", s.handleCompareHostInspect)
@@ -492,14 +494,14 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/mcp-clients/sync", s.handleSyncMCPClient)
 	mux.HandleFunc("POST /api/v1/ai/terminal-access", s.handleAITerminalAccess)
 	mux.HandleFunc("POST /api/v1/ai/chat", s.handleAIChat)
-	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                  // 全站「AI 辅助」按钮统一入口（任务化 SSE）
-	mux.HandleFunc("POST /api/v1/ai/assist/feedback", s.handleAIAssistFeedback) // 采纳/评价 AI 辅助结果 → 学习闭环强化
+	mux.HandleFunc("POST /api/v1/ai/assist", s.handleAIAssist)                     // 全站「AI 辅助」按钮统一入口（任务化 SSE）
+	mux.HandleFunc("POST /api/v1/ai/assist/feedback", s.handleAIAssistFeedback)    // 采纳/评价 AI 辅助结果 → 学习闭环强化
 	mux.HandleFunc("POST /api/v1/ai/write-approval", s.handleIssueAIWriteApproval) // 写工具 per-action 审批令牌
-	mux.HandleFunc("GET /api/v1/ai/runs", s.handleListAIRuns)                     // Wave2 AI Run 列表
-	mux.HandleFunc("GET /api/v1/ai/runs/{id}", s.handleGetAIRun)                  // Wave2 AI Run 详情
-	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)            // 值班晨报态势汇总（供前端流式生成）
-	mux.HandleFunc("GET /api/v1/ai/copilot/context", s.handleAICopilotContext)    // On-call Copilot 工作台上下文
-	mux.HandleFunc("GET /api/v1/ai/skill-packs", s.handleListSkillPacks)          // 行业知识包清单
+	mux.HandleFunc("GET /api/v1/ai/runs", s.handleListAIRuns)                      // Wave2 AI Run 列表
+	mux.HandleFunc("GET /api/v1/ai/runs/{id}", s.handleGetAIRun)                   // Wave2 AI Run 详情
+	mux.HandleFunc("GET /api/v1/ai/duty-context", s.handleDutyContext)             // 值班晨报态势汇总（供前端流式生成）
+	mux.HandleFunc("GET /api/v1/ai/copilot/context", s.handleAICopilotContext)     // On-call Copilot 工作台上下文
+	mux.HandleFunc("GET /api/v1/ai/skill-packs", s.handleListSkillPacks)           // 行业知识包清单
 	mux.HandleFunc("POST /api/v1/ai/skill-packs/import", s.handleImportSkillPacks)
 	mux.HandleFunc("GET /api/v1/ai/skills/export", s.handleExportCustomerSkillPack)
 	mux.HandleFunc("POST /api/v1/ai/skills/import", s.handleImportCustomerSkillPack)
@@ -511,9 +513,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ai/skills/distill", s.handleDistillSkills) // 手动触发技能提炼
 	mux.HandleFunc("GET /api/v1/ai/memories", s.handleListMemories)         // AI 记忆浏览器（只读列表 + 可删）
 	mux.HandleFunc("DELETE /api/v1/ai/memories/{id}", s.handleDeleteMemory)
-	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats)                   // AI 调用延迟/失败率/粗估 token 仪表（PG 永久）
-	mux.HandleFunc("GET /api/v1/ai/usage/history", s.handleAIUsageHistory)    // 成本/Token 历史组合曲线
-	mux.HandleFunc("GET /api/v1/ai/usage/by-user", s.handleAIUsageByUser)     // 按用户成本分析
+	mux.HandleFunc("GET /api/v1/ai/stats", s.handleAIStats)                // AI 调用延迟/失败率/粗估 token 仪表（PG 永久）
+	mux.HandleFunc("GET /api/v1/ai/usage/history", s.handleAIUsageHistory) // 成本/Token 历史组合曲线
+	mux.HandleFunc("GET /api/v1/ai/usage/by-user", s.handleAIUsageByUser)  // 按用户成本分析
 	mux.HandleFunc("GET /api/v1/ai/experiments/stats", s.handleAIExperimentStats)
 	mux.HandleFunc("GET /api/v1/ai/experiments", s.handleListAIExperiments)
 	mux.HandleFunc("POST /api/v1/ai/experiments", s.handleUpsertAIExperiment)

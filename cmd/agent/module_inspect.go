@@ -115,6 +115,16 @@ type inspectBuilder struct {
 }
 
 func moduleHostInspect(args map[string]string) ([]byte, int) {
+	return moduleHostInspectCtx(context.Background(), args)
+}
+
+func moduleHostInspectCtx(ctx context.Context, args map[string]string) ([]byte, int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	start := time.Now()
 	profile := "standard"
 	if args != nil {
@@ -144,33 +154,84 @@ func moduleHostInspect(args map[string]string) ([]byte, int) {
 			},
 		},
 	}
+	check := func() bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		return true
+	}
 	// 基础（全平台）
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectHost()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectCPU()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectMem()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectDisk()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectNet()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectProcess()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectServices()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectSecurity()
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	b.collectTime()
 	// 深度（Linux 为主；其它 OS 返回 skip）
 	if profile != "quick" {
+		if !check() {
+			return []byte(`{"error":"cancelled"}`), 130
+		}
 		b.collectInode()
 		b.collectFD()
 		b.collectDiskIO()
+		if !check() {
+			return []byte(`{"error":"cancelled"}`), 130
+		}
 		b.collectContainers()
 		b.collectCron()
 		b.collectKernel()
+		if !check() {
+			return []byte(`{"error":"cancelled"}`), 130
+		}
 		b.collectLogs()
 		b.collectSSL()
 	}
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
+	}
 	if profile == "deep" {
 		b.collectLargeFiles()
+		if !check() {
+			return []byte(`{"error":"cancelled"}`), 130
+		}
 		b.collectUpdates()
 	} else if profile == "standard" {
 		// standard：轻量更新探测（仅本地缓存，不联网 apt update / yum check-update）
 		b.collectUpdatesLight()
+	}
+	if !check() {
+		return []byte(`{"error":"cancelled"}`), 130
 	}
 	b.collectRecommend()
 	b.finalize(start)
