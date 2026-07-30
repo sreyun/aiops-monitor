@@ -61,14 +61,14 @@ func (s *Server) handleUpsertScrapeTarget(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.scrapes.runNow(saved.ID)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存指标抓取目标：" + saved.Name})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "保存指标抓取目标：" + saved.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
 func (s *Server) handleDeleteScrapeTarget(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteScrapeTarget(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除指标抓取目标：" + id})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Message: "删除指标抓取目标：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -103,7 +103,7 @@ func (s *Server) handleSetPromWriteToken(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "更新 remote_write 接收令牌"})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "更新 remote_write 接收令牌"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

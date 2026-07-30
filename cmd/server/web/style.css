@@ -559,7 +559,16 @@ section{scroll-margin-top:80px; margin-bottom:24px}
 .row-item.warning{ border-left-color:var(--warn) }
 .row-item.info{ border-left-color:var(--info) }
 .row-item strong{flex:none; font-weight:600}
-.row-item .msg{color:var(--txt2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.row-item .msg{color:var(--txt2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; min-width:0}
+.row-item.log-row .log-user{
+  flex:0 0 112px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--txt2); font-weight:600; font-size:12px;
+}
+.row-item.log-row .src.log-ip{
+  margin-left:0; flex:0 0 128px; max-width:160px; overflow:hidden; text-overflow:ellipsis;
+  color:var(--muted2); font-size:12px; white-space:nowrap;
+}
+.row-item.log-row .log-time{flex:none; color:var(--muted2); font-size:11px}
 .badge{ font-size:11px; padding:2px 9px; border-radius:5px; font-weight:600; flex:none }
 .badge.critical{ background:var(--crit-soft); color:var(--crit-txt); border:1px solid var(--crit-border) }
 .badge.warning{ background:var(--warn-soft); color:var(--warn-txt); border:1px solid var(--warn-border) }
@@ -1785,6 +1794,18 @@ svg.sparkline{width:100%; height:46px; display:block}
 
 /* ---------- 趋势图交互 ---------- */
 .chart-controls{display:flex; gap:8px; margin-bottom:18px; padding:0 2px; flex-wrap:wrap; align-items:center}
+.chip-select,.fc-model-sel{
+  appearance:none; -webkit-appearance:none;
+  background:var(--panel2); border:1px solid var(--line2); color:var(--muted);
+  border-radius:999px; padding:4px 28px 4px 10px; font-size:12px; line-height:1.4;
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:calc(100% - 12px) 55%,calc(100% - 7px) 55%;
+  background-size:5px 5px,5px 5px; background-repeat:no-repeat;
+  cursor:pointer; max-width:200px;
+}
+.chip-select:hover,.fc-model-sel:hover{color:var(--txt); border-color:var(--hover-border)}
+.chip-select:disabled,.fc-model-sel:disabled{opacity:.45; cursor:not-allowed}
+.chip-select:focus-visible,.fc-model-sel:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 /* 自定义查询周期：datetime-local 起止 + 应用按钮，克制扁平·深色适配 */
 .chart-custom-range{display:inline-flex; align-items:center; gap:6px}
 .chart-custom-range[hidden]{display:none}
@@ -2417,6 +2438,7 @@ svg.sparkline{width:100%; height:46px; display:block}
   /* 列表项触摸增大 */
   .row-item{padding:14px 16px; flex-wrap:wrap; row-gap:4px}
   .row-item .msg{min-width:0; flex:1 1 100%; order:99}
+  .row-item.log-row .log-user{flex:0 0 auto; max-width:40%; font-size:12px}
   .alert-ip{display:none}
   .alert-time{font-size:10px; margin-left:auto}
   .src{display:none}

@@ -366,7 +366,7 @@ func (s *Server) authenticateUsernameLogin(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		s.auth.loginFailed(ip)
 		s.auth.loginAccountFailed(username)
-		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", username)})
+		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: username, Username: username, IP: ip, Message: Tz("log.login_failed", username)})
 		if !s.auth.loginAllowed(ip) {
 			s.autoDefendOnLoginLockout(ip, username)
 		}
@@ -395,7 +395,7 @@ func (s *Server) authenticatePhoneLogin(w http.ResponseWriter, r *http.Request, 
 	if !verifyPassword(password, acc.Salt, acc.Hash) {
 		s.auth.loginFailed(ip)
 		s.auth.loginAccountFailed(acc.Username)
-		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", acc.Username)})
+		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: acc.Username, Username: acc.Username, IP: ip, Message: Tz("log.login_failed", acc.Username)})
 		if !s.auth.loginAllowed(ip) {
 			s.autoDefendOnLoginLockout(ip, acc.Username)
 		}
@@ -435,13 +435,13 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 		case totpReplay:
 			// Valid code already spent — do NOT count toward lockout (common when
 			// the authenticator still shows the same digits and the user retries).
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: ip, IP: ip, Message: Tz("log.totp_replay", acc.Username)})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: acc.Username, Username: acc.Username, IP: ip, Message: Tz("log.totp_replay", acc.Username)})
 			s.writeTOTPFailure(w, r, totpReplay, http.StatusUnauthorized)
 			return
 		default:
 			s.auth.loginFailed(ip)
 			s.auth.loginAccountFailed(acc.Username)
-			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.totp_failed", acc.Username)})
+			s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: acc.Username, Username: acc.Username, IP: ip, Message: Tz("log.totp_failed", acc.Username)})
 			s.writeTOTPFailure(w, r, totpInvalid, http.StatusUnauthorized)
 			return
 		}
@@ -461,7 +461,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 		if acc.Username == "admin" && password == "admin" {
 			msg = Tz("log.default_credentials", acc.Username)
 		}
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: ip, IP: ip, Message: msg})
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: acc.Username, Username: acc.Username, IP: ip, Message: msg})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":                   true,
 			"must_change_password": true,
@@ -490,7 +490,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 		Secure:   s.isHTTPS(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: ip, IP: ip, Message: Tz("log.login_success", acc.Username)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: acc.Username, Username: acc.Username, IP: ip, Message: Tz("log.login_success", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

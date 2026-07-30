@@ -71,7 +71,7 @@ func (s *Server) handleUpsertDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存仪表盘：" + saved.Name})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "保存仪表盘：" + saved.Name})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "id": saved.ID, "revision": saved.Revision, "updated_at": saved.UpdatedAt,
 	})
@@ -81,7 +81,7 @@ func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteDashboard(id)
 	s.removeDashboardAssets(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除仪表盘：" + id})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Message: "删除仪表盘：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -446,6 +446,6 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 	} else if format == "aiops" {
 		kind = "AIOps 模板"
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "导入 " + kind + " 看板：" + saved.Name + "（" + strconv.Itoa(len(saved.Panels)) + " 面板）"})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "导入 " + kind + " 看板：" + saved.Name + "（" + strconv.Itoa(len(saved.Panels)) + " 面板）"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID, "name": saved.Name, "panels": len(saved.Panels), "unsupported": unsupported, "format": format})
 }

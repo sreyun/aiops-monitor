@@ -11,7 +11,7 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.19.52">
+<link rel="stylesheet" href="/style.css?v=0.19.54h">
 <script src="/theme-init.js"></script>
 <script src="/js/vendor/echarts.min.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
@@ -1056,7 +1056,7 @@
       <section class="view" id="view-ai-tool-audit">
         <div class="section-title"><span data-i18n="section.security">安全中心</span><span class="tag" data-i18n="sec.tab_ai_tools">AI 工具审计</span></div>
         <div id="aiToolAuditPanel" class="cfg-panel">
-          <p class="cfg-panel-desc" data-i18n="sec.ai_tools_desc">记录 Sreyun / Assist 高危写工具调用（执行结果、审批状态）。HTTPS 终端镜像无法解密明文；此处审计的是平台侧工具调用证据链。</p>
+          <p class="cfg-panel-desc" data-i18n="sec.ai_tools_desc">记录 AI / Assist 高危写工具调用（执行结果、审批状态）。HTTPS 终端镜像无法解密明文；此处审计的是平台侧工具调用证据链。</p>
           <div id="aiToolAuditList"><div class="hint">加载中…</div></div>
         </div>
       </section>
@@ -3878,7 +3878,7 @@
   </div>
 </div>
 
-<!-- （Sreyun 对话弹窗已并入上方 aiChatMask「AI 对话」——单窗口统一走 Sreyun Agent。） -->
+<!-- （AI 对话弹窗已并入上方 aiChatMask「AI 对话」——单窗口统一走 AI Agent。） -->
 
 <!-- ===== 新建转发弹窗 ===== -->
 <div class="mask" id="forwardMask" data-close>
@@ -4195,12 +4195,12 @@
 </div>
 <div class="term-dock" id="termDock" style="display:none"></div>
 
-<script src="/i18n-dashboard.en.js?v=0.19.52"></script>
-<script src="/i18n-dashboard.zh-TW.js?v=0.19.52"></script>
-<script src="/i18n-dashboard.js?v=0.19.52"></script>
+<script src="/i18n-dashboard.en.js?v=0.19.54h"></script>
+<script src="/i18n-dashboard.zh-TW.js?v=0.19.54h"></script>
+<script src="/i18n-dashboard.js?v=0.19.54h"></script>
 <!-- 源码按功能拆分在 web/js/*.js（便于维护）；服务端 /app.js 会把它们按序拼成【单脚本】返回，
      以保证整文件函数提升(hoisting)——运行时行为与拆分前的单文件完全一致。
      （不能改回 8 个独立 <script>：早模块顶层会调用晚模块的 helper/handler，独立提升会 ReferenceError。） -->
-<script src="/app.js?v=0.19.52" defer></script>
+<script src="/app.js?v=0.19.54h" defer></script>
 </body>
 </html>

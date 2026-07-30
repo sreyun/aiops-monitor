@@ -545,11 +545,17 @@ function renderPanels() {
     // 仅时序类面板提供预测/环比/同比；Top-N 柱图等瞬时面板不展示，避免误开未来轴
     const trendTypes = { timeseries: 1, graph: 1 };
     const tr = DASH_PANEL_TREND[p.id] || {};
+    const fcModel = tr.method || "auto";
+    const modelOpts = (typeof FC_MODEL_OPTIONS !== "undefined" ? FC_MODEL_OPTIONS : [
+      { id: "auto", label: "智能匹配（推荐）" }, { id: "damped-holt", label: "平滑波动" },
+      { id: "drift", label: "一路涨/跌" }, { id: "holt-winters", label: "有规律起伏" }, { id: "flat", label: "基本不变" }
+    ]).map(o => `<option value="${esc(o.id)}"${o.id === fcModel ? " selected" : ""}>${esc(o.label)}</option>`).join("");
     const trendBtns = trendTypes[p.type] ? `<div class="dash-trend-tools" data-trend-tools="${p.id}">
-        <button type="button" class="mini-btn dash-trend-btn${tr.forecast ? " active" : ""}" data-pact="forecast" data-id="${p.id}" title="趋势预测：左=历史 · 右=预测（默认窗=当前时间窗，居中对等）">预测</button>
+        <button type="button" class="mini-btn dash-trend-btn${tr.forecast ? " active" : ""}" data-pact="forecast" data-id="${p.id}" title="趋势预测：左=历史 · 右=预测（默认按数据类型智能匹配模型）">预测</button>
         <button type="button" class="mini-btn dash-trend-btn${tr.pop ? " active" : ""}" data-pact="pop" data-id="${p.id}" title="环比：与前一等长时间段对比">环比</button>
         <button type="button" class="mini-btn dash-trend-btn${tr.yoy ? " active" : ""}" data-pact="yoy" data-id="${p.id}" title="同比：与去年同期对比">同比</button>
-        ${tr.forecast ? `<select class="dash-horizon-sel" data-horizon="${p.id}" title="自定义预测时长">
+        ${tr.forecast ? `<select class="dash-horizon-sel chip-select" data-fc-model="${p.id}" title="预测模型">${modelOpts}</select>
+        <select class="dash-horizon-sel" data-horizon="${p.id}" title="自定义预测时长">
           <option value="0"${!tr.horizonSec ? " selected" : ""}>默认窗</option>
           <option value="3600"${tr.horizonSec === 3600 ? " selected" : ""}>未来 1h</option>
           <option value="7200"${tr.horizonSec === 7200 ? " selected" : ""}>未来 2h</option>
@@ -1306,6 +1312,8 @@ async function loadTimeseriesPanel(p, body, from, to, panelLoad) {
       if (useForecastAPI) {
         payload.mode = mode;
         if (st.horizonSec > 0) payload.horizon_sec = st.horizonSec;
+        if (st.method && st.method !== "auto") payload.method = st.method;
+        else payload.method = st.method || "auto";
       }
       const url = useForecastAPI ? `${API}/dashboards/query-forecast` : `${API}/dashboards/query`;
       const fetchOpts = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
@@ -1529,6 +1537,7 @@ async function loadStatPanel(p, body, from, to, panelLoad) {
       url = `${API}/dashboards/query-forecast`;
       payload.mode = mode;
       if (st.horizonSec > 0) payload.horizon_sec = st.horizonSec;
+      payload.method = st.method || "auto";
     }
     const fetchOpts = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
     if (panelLoad && panelLoad.signal) fetchOpts.signal = panelLoad.signal;
@@ -2037,6 +2046,16 @@ safeAddEventListener("dashDetail", "click", async e => {
   if (pa) { handlePanelAction(pa.dataset.pact, +pa.dataset.id); return; }
 });
 safeAddEventListener("dashDetail", "change", e => {
+  const modelSel = e.target.closest("[data-fc-model]");
+  if (modelSel) {
+    const pid = +modelSel.dataset.fcModel;
+    if (!DASH_PANEL_TREND[pid]) DASH_PANEL_TREND[pid] = {};
+    DASH_PANEL_TREND[pid].method = modelSel.value || "auto";
+    const p = CUR_DASH && CUR_DASH.panels && CUR_DASH.panels.find(x => x.id === pid);
+    const body = $("panelBody_" + pid);
+    if (p && body) loadPanel(p);
+    return;
+  }
   const hz = e.target.closest("[data-horizon]");
   if (hz) {
     const pid = +hz.dataset.horizon;
@@ -2182,7 +2201,7 @@ function applyDashCustom() {
   DASH_RANGE = { hours: 0, custom: { from, to } }; renderDashDetail();
 }
 function panelTrendState(pid) {
-  if (!DASH_PANEL_TREND[pid]) DASH_PANEL_TREND[pid] = { forecast: false, pop: false, yoy: false, horizonSec: 0 };
+  if (!DASH_PANEL_TREND[pid]) DASH_PANEL_TREND[pid] = { forecast: false, pop: false, yoy: false, horizonSec: 0, method: "auto" };
   return DASH_PANEL_TREND[pid];
 }
 function panelTrendMode(st) {

@@ -31,4 +31,18 @@ func TestRedactUserFacingText(t *testing.T) {
 	if !strings.Contains(out, "智能运维服务") {
 		t.Fatalf("brand rewrite missing: %q", out)
 	}
+
+	// Historical shortID (8 hex) in delete messages
+	short := redactUserFacingText("删除主机 ABCDEF01", map[string]string{"ABCDEF0123456789": "web-1 (10.0.0.1)"})
+	if strings.Contains(short, "ABCDEF01") {
+		t.Fatalf("short id leaked: %q", short)
+	}
+	if !strings.Contains(short, "web-1 (10.0.0.1)") {
+		t.Fatalf("short id label missing: %q", short)
+	}
+
+	orphan := redactUserFacingText("关闭远程终端 deadbeefcafe", nil)
+	if strings.Contains(orphan, "deadbeefcafe") {
+		t.Fatalf("orphan hex leaked: %q", orphan)
+	}
 }

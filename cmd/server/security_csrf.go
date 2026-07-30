@@ -36,13 +36,16 @@ func (s *Server) csrfOriginMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		slog.Warn("CSRF/Origin 校验拒绝", "method", r.Method, "path", p, "origin", r.Header.Get("Origin"), "referer", r.Header.Get("Referer"), "host", r.Host)
+		slog.Warn("CSRF/Origin 校验拒绝", "method", r.Method, "path", p,
+			"origin", r.Header.Get("Origin"), "referer", r.Header.Get("Referer"),
+			"host", r.Host, "public_host", s.requestPublicHost(r))
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin not allowed"})
 	})
 }
 
 func (s *Server) originAllowed(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	reqHost := s.requestPublicHost(r)
 	if origin == "" {
 		// Some same-origin navigations omit Origin; fall back to Referer host.
 		ref := strings.TrimSpace(r.Header.Get("Referer"))
@@ -55,16 +58,28 @@ func (s *Server) originAllowed(r *http.Request) bool {
 		if err != nil || u.Host == "" {
 			return false
 		}
-		return hostMatches(u.Host, r.Host) || s.corsOriginListed(u.Scheme+"://"+u.Host)
+		return hostMatches(u.Host, reqHost) || s.corsOriginListed(u.Scheme+"://"+u.Host)
 	}
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" {
 		return false
 	}
-	if hostMatches(u.Host, r.Host) {
+	if hostMatches(u.Host, reqHost) {
 		return true
 	}
 	return s.corsOriginListed(origin)
+}
+
+// requestPublicHost is the host the browser thinks it talked to. Behind a trusted
+// reverse proxy (TrustProxy) prefer X-Forwarded-Host so CSRF Origin checks still
+// match when the upstream container sees an internal listen address/port.
+func (s *Server) requestPublicHost(r *http.Request) string {
+	if s != nil && s.cfg != nil && s.cfg.TrustProxy() {
+		if h := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); h != "" {
+			return h
+		}
+	}
+	return r.Host
 }
 
 func hostMatches(a, b string) bool {

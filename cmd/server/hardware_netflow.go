@@ -204,8 +204,9 @@ func (s *Server) handleDeleteHardware(w http.ResponseWriter, r *http.Request) {
 	if s.pg != nil {
 		s.pg.deleteHardwareSnapshot(hostID, target)
 	}
+	label := s.hostLabelForID(hostID)
 	slog.Info("删除硬件资产记录", "host", hostID, "target", target, "actor", s.clientIP(r))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_hardware", hostID, target)})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Host: label, Message: Tz("log.delete_hardware", label, target)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

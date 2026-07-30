@@ -167,9 +167,10 @@ func (s *Server) handleDeleteHyperV(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hostID required"})
 		return
 	}
+	label := s.hostLabelForID(hostID)
 	s.removeHyperVForHost(hostID)
 	slog.Info("删除 Hyper-V 清单", "host", hostID, "actor", s.clientIP(r))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_hyperv", hostID)})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Host: label, Message: Tz("log.delete_hyperv", label)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

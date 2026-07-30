@@ -154,11 +154,12 @@ func (s *Server) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	cat := strings.TrimSpace(req.Category)
 	_ = s.cfg.SetCategory(id, cat)
-	msg := Tz("log.set_category", shortID(id), cat)
+	label := s.hostLabelForID(id)
+	msg := Tz("log.set_category", label, cat)
 	if cat == "" {
-		msg = Tz("log.clear_category", shortID(id))
+		msg = Tz("log.clear_category", label)
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: msg})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Host: label, Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": id, "category": cat})
 }
 
@@ -167,6 +168,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	if !s.requireHostAccess(w, r, id) {
 		return
 	}
+	label := s.hostLabelForID(id)
 	ok := s.store.DeleteHost(id)
 	_ = s.cfg.SetCategory(id, "") // drop override + folder assign for the removed host
 	if !ok {
@@ -175,7 +177,7 @@ func (s *Server) handleDeleteHost(w http.ResponseWriter, r *http.Request) {
 	}
 	// 主机删了，连带清掉该 host_id 下的 Hyper-V 清单，避免虚拟机树留下幽灵宿主机。
 	s.removeHyperVForHost(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.delete_host", shortID(id))})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Host: label, Message: Tz("log.delete_host", label)})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "host_id": id})
 }
 
@@ -277,12 +279,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleActivity returns the unified activity log (operations + system + plugin).
+// Messages / Host fields are sanitized so operators never see raw host IDs.
 func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	items := s.store.RecentActivity()
 	if items == nil {
 		items = []LogEntry{}
 	}
-	writeJSON(w, http.StatusOK, items)
+	labels := s.buildHostLabelMap()
+	out := make([]LogEntry, len(items))
+	for i, e := range items {
+		out[i] = s.sanitizeActivityEntry(e, labels)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleHostsMeta returns minimal host info (id + hostname) for the process-check UI.
@@ -356,11 +364,12 @@ func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
 	}
 	key := req.HostID + "/" + req.Type + "/" + req.Scope
 	s.store.SetAlertState(key, "acknowledged")
-	msg := Tz("log.alert_ack", shortID(req.HostID), req.Type)
+	label := s.hostLabelForID(req.HostID)
+	msg := Tz("log.alert_ack", label, req.Type)
 	if req.Scope != "" {
-		msg = Tz("log.alert_ack_scope", shortID(req.HostID), req.Type, req.Scope)
+		msg = Tz("log.alert_ack_scope", label, req.Type, req.Scope)
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: msg})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Host: label, Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": "acknowledged"})
 }
 
@@ -375,11 +384,12 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 	}
 	key := req.HostID + "/" + req.Type + "/" + req.Scope
 	s.store.SetAlertState(key, "silenced")
-	msg := Tz("log.alert_silence", shortID(req.HostID), req.Type)
+	label := s.hostLabelForID(req.HostID)
+	msg := Tz("log.alert_silence", label, req.Type)
 	if req.Scope != "" {
-		msg = Tz("log.alert_silence_scope", shortID(req.HostID), req.Type, req.Scope)
+		msg = Tz("log.alert_silence_scope", label, req.Type, req.Scope)
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: msg})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Host: label, Message: msg})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": "silenced"})
 }
 
@@ -391,6 +401,7 @@ func (s *Server) handleAlertClear(w http.ResponseWriter, r *http.Request) {
 	}
 	key := req.HostID + "/" + req.Type + "/" + req.Scope
 	s.store.ClearAlertState(key)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: Tz("log.alert_clear", shortID(req.HostID), req.Type)})
+	label := s.hostLabelForID(req.HostID)
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Host: label, Message: Tz("log.alert_clear", label, req.Type)})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "key": key, "new_status": ""})
 }

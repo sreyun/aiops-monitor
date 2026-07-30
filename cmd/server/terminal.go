@@ -522,14 +522,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	// Look up hostname for audit log
-	hostname := shortID(hostID)
-	for _, h := range s.store.ListHosts() {
-		if h.ID == hostID {
-			hostname = h.Hostname
-			break
-		}
-	}
+	// Look up hostname+IP for audit log (never surface raw host id)
+	hostname := s.hostLabelForID(hostID)
 	// operator = username (or IP fallback); clientIP always records the real
 	// client address for audit traceability (honoring TrustProxy / CF-Connecting-IP).
 	operator, clientIP := s.actorIP(r)
@@ -539,12 +533,16 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	sess.changeID, sess.incidentID = s.remoteSessionLinks(hostID)
 	defer s.term.remove(sess.id)
 	op := operator
+	user := op
+	if looksLikeIPAddr(op) {
+		user = ""
+	}
 	msg := Tz("log.open_terminal", hostname)
 	if sess.changeID > 0 || sess.incidentID > 0 {
-		msg += fmt.Sprintf(" [change_id=%d incident_id=%d]", sess.changeID, sess.incidentID)
+		msg += fmt.Sprintf(" [关联变更#%d · 事件#%d]", sess.changeID, sess.incidentID)
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: msg})
-	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname, Message: Tz("log.close_terminal", hostname)})
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, Username: user, IP: clientIP, Host: hostname, Message: msg})
+	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Username: user, IP: clientIP, Host: hostname, Message: Tz("log.close_terminal", hostname)})
 	s.serveTerminalWS(ws, sess, hostID, hostname, op, clientIP)
 }
 
@@ -594,17 +592,11 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	}
 	defer ws.Close()
 
-	hostname := shortID(hostID)
-	for _, h := range s.store.ListHosts() {
-		if h.ID == hostID {
-			hostname = h.Hostname
-			break
-		}
-	}
+	hostname := s.hostLabelForID(hostID)
 	cname := strings.TrimSpace(r.URL.Query().Get("name"))
-	label := hostname + "/ctr:" + cid
+	label := hostname + " · 容器"
 	if cname != "" {
-		label = hostname + "/" + cname
+		label = hostname + " · " + cname
 	}
 	operator, clientIP := s.actorIP(r)
 	sess := s.term.createFull(hostID, label, operator, "container_exec", cid+"|"+shell)
@@ -613,13 +605,17 @@ func (s *Server) handleContainerTerminal(w http.ResponseWriter, r *http.Request)
 	sess.changeID, sess.incidentID = s.remoteSessionLinks(hostID)
 	defer s.term.remove(sess.id)
 	op := operator
-	msg := fmt.Sprintf("打开容器终端：host=%s container=%s shell=%s", hostID, cid, shell)
-	if sess.changeID > 0 || sess.incidentID > 0 {
-		msg += fmt.Sprintf(" [change_id=%d incident_id=%d]", sess.changeID, sess.incidentID)
+	user := op
+	if looksLikeIPAddr(op) {
+		user = ""
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, IP: clientIP, Host: hostname, Message: msg})
-	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, IP: clientIP, Host: hostname,
-		Message: fmt.Sprintf("关闭容器终端：host=%s container=%s", hostID, cid)})
+	msg := fmt.Sprintf("打开容器终端：%s shell=%s", label, shell)
+	if sess.changeID > 0 || sess.incidentID > 0 {
+		msg += fmt.Sprintf(" [关联变更#%d · 事件#%d]", sess.changeID, sess.incidentID)
+	}
+	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: op, Username: user, IP: clientIP, Host: hostname, Message: msg})
+	defer s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: op, Username: user, IP: clientIP, Host: hostname,
+		Message: fmt.Sprintf("关闭容器终端：%s", label)})
 	s.serveTerminalWS(ws, sess, hostID, label, op, clientIP)
 }
 

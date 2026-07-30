@@ -8,8 +8,8 @@ import (
 
 var (
 	hermesWordRe = regexp.MustCompile(`(?i)\bhermes(?:\s+agent)?\b`)
-	// Typical AIOps host IDs: 8–32 hex chars (case-insensitive). Used only as a last-resort scrub.
-	hostIDHexRe = regexp.MustCompile(`\b[0-9a-fA-F]{12,32}\b`)
+	// Typical AIOps host IDs / shortIDs: 8–32 hex chars (case-insensitive). Last-resort scrub only.
+	hostIDHexRe = regexp.MustCompile(`\b[0-9a-fA-F]{8,32}\b`)
 )
 
 // hostDisplayLabel returns "hostname (ip)" for user-facing UI. Never returns a raw host ID.
@@ -52,7 +52,7 @@ func (s *Server) buildHostLabelMap() map[string]string {
 	return out
 }
 
-// redactUserFacingText replaces hermes branding and known host IDs for end-user copy.
+// redactUserFacingText replaces agent branding and known host IDs for end-user copy.
 func redactUserFacingText(text string, idToLabel map[string]string) string {
 	if text == "" {
 		return text
@@ -60,6 +60,10 @@ func redactUserFacingText(text string, idToLabel map[string]string) string {
 	t := hermesWordRe.ReplaceAllString(text, "智能运维服务")
 	t = strings.ReplaceAll(t, "hermes_auto_approve", "ai_auto_approve")
 	t = strings.ReplaceAll(t, "reason=hermes_auto_approve", "reason=ai_auto_approve")
+	t = strings.ReplaceAll(t, "hermes_enabled", "ai_agent_enabled")
+	t = strings.ReplaceAll(t, "hermes_terminal_enabled", "ai_terminal_enabled")
+	t = strings.ReplaceAll(t, "Hermes", "智能运维服务")
+	t = strings.ReplaceAll(t, "HERMES", "智能运维服务")
 	if len(idToLabel) > 0 {
 		// Replace longer IDs first to avoid partial clashes.
 		ids := make([]string, 0, len(idToLabel))
@@ -71,10 +75,68 @@ func redactUserFacingText(text string, idToLabel map[string]string) string {
 			if id == "" {
 				continue
 			}
-			t = strings.ReplaceAll(t, id, idToLabel[id])
+			lab := idToLabel[id]
+			t = strings.ReplaceAll(t, id, lab)
+			// Historical audit lines often used shortID (first 8 hex chars).
+			if len(id) >= 8 {
+				t = strings.ReplaceAll(t, id[:8], lab)
+			}
 		}
 	}
+	// Last resort: scrub leftover long hex blobs that look like host IDs.
+	t = hostIDHexRe.ReplaceAllStringFunc(t, func(m string) string {
+		if lab, ok := idToLabel[m]; ok {
+			return lab
+		}
+		for id, lab := range idToLabel {
+			if strings.HasPrefix(id, m) || strings.HasPrefix(m, id) {
+				return lab
+			}
+		}
+		return "未知主机"
+	})
 	return t
+}
+
+// hostLabelForID resolves a host id to "hostname (ip)" for user-facing audit/UI.
+func (s *Server) hostLabelForID(hostID string) string {
+	hostID = strings.TrimSpace(hostID)
+	if hostID == "" {
+		return "未知主机"
+	}
+	if s != nil && s.store != nil {
+		if h, ok := s.store.GetHost(hostID); ok && h != nil {
+			return hostDisplayLabelFromHost(h)
+		}
+	}
+	return "未知主机"
+}
+
+// sanitizeActivityEntry rewrites a log line for API consumers: no raw host IDs,
+// Host field is hostname (ip), Username is filled when possible.
+func (s *Server) sanitizeActivityEntry(e LogEntry, idToLabel map[string]string) LogEntry {
+	e.Message = redactUserFacingText(e.Message, idToLabel)
+	if e.Host != "" {
+		if lab, ok := idToLabel[e.Host]; ok {
+			e.Host = lab
+		} else if s != nil && s.store != nil {
+			if h, ok := s.store.GetHost(e.Host); ok && h != nil {
+				e.Host = hostDisplayLabelFromHost(h)
+			} else {
+				// Host may already be a bare hostname — enrich with IP when possible.
+				for _, h := range s.store.ListHosts() {
+					if h != nil && (h.Hostname == e.Host || hostDisplayLabelFromHost(h) == e.Host) {
+						e.Host = hostDisplayLabelFromHost(h)
+						break
+					}
+				}
+			}
+		}
+	}
+	if e.Username == "" && e.Actor != "" && !looksLikeIPAddr(e.Actor) {
+		e.Username = e.Actor
+	}
+	return e
 }
 
 // (s *Server) redactUserFacing is a convenience wrapper.

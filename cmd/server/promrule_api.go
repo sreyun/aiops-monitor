@@ -35,13 +35,13 @@ func (s *Server) handleUpsertPromRule(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存指标告警规则：" + saved.Name})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "保存指标告警规则：" + saved.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
 func (s *Server) handleDeletePromRule(w http.ResponseWriter, r *http.Request) {
 	_ = s.cfg.DeletePromRule(r.PathValue("id"))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除指标告警规则：" + r.PathValue("id")})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Message: "删除指标告警规则：" + r.PathValue("id")})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

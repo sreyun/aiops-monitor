@@ -66,10 +66,11 @@ type storedEvent struct {
 // and plugin findings (plugin).
 type LogEntry struct {
 	Timestamp int64  `json:"timestamp"`
-	Kind      string `json:"kind"`   // operation | system | plugin | terminal
-	Level     string `json:"level"`  // info | warning | critical
-	Actor     string `json:"actor"`  // operator name (or IP if anonymous)
-	IP        string `json:"ip,omitempty"` // real client IP for audit traceability
+	Kind      string `json:"kind"`               // operation | system | plugin | terminal
+	Level     string `json:"level"`              // info | warning | critical
+	Actor     string `json:"actor"`              // display identity (username, or IP if anonymous)
+	Username  string `json:"username,omitempty"` // dedicated login name for audit (independent of Actor/IP)
+	IP        string `json:"ip,omitempty"`       // real client IP for audit traceability
 	Host      string `json:"host,omitempty"`
 	Message   string `json:"message"`
 }
@@ -764,6 +765,14 @@ func (s *Store) DeleteHost(id string) bool {
 func (s *Store) appendLog(e LogEntry) {
 	if e.Timestamp == 0 {
 		e.Timestamp = time.Now().Unix()
+	}
+	// Ensure username is an independent audit field when Actor is a login name.
+	if e.Username == "" && e.Actor != "" {
+		a := strings.TrimSpace(e.Actor)
+		if a != "" && a != "scheduler" && a != "system" && a != "ai-chat" && a != "notify" &&
+			!strings.Contains(a, ".") && !strings.Contains(a, ":") && !strings.Contains(a, " ") {
+			e.Username = a
+		}
 	}
 	s.activity = append(s.activity, e)
 	if len(s.activity) > maxActivity {

@@ -5,6 +5,8 @@
 #
 #   cp .env.example .env
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#   # 推荐（macOS / Windows Docker Desktop 保留访问者真实 IP）：
+#   bash scripts/dev-up.sh
 #
 # 等价简写（可写入 .env）：
 #   COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
@@ -15,6 +17,8 @@
 #     （server 本机架构；agent 仍交叉编译全平台到 /dl，保证 macOS/Windows 一键安装可用）
 #   - postgres / VictoriaMetrics 改用 Docker Hub（无需登录 SWR，Apple Silicon 友好）
 #   - 默认启用本机 Agent（覆盖正式环境的 agent profile）
+#   - Web 端口仅绑定 127.0.0.1:18529；请用 scripts/dev-up.sh 在 :8529 启 hostproxy
+#     注入 X-Real-IP（否则审计日志只能看到 Docker 网关如 192.168.97.1）
 # ============================================================
 
 services:
@@ -28,6 +32,13 @@ services:
         VERSION: ${AIOPS_DEV_VERSION:-dev}
         BASE_REGISTRY: ${BASE_REGISTRY:-docker.io}
         GO_VERSION: ${GO_VERSION:-1.26}
+    # 不直接对外暴露 8529：Docker Desktop 会把来源改写成网桥网关 IP。
+    # 改由本机 hostproxy（scripts/dev-up.sh）监听 :8529 并注入真实访客 IP。
+    ports: !override
+      - "127.0.0.1:${AIOPS_DOCKER_HTTP_PORT:-18529}:8529"
+      - "${AIOPS_FORWARD_PORT_RANGE:-10100-10300}:10100-10300"
+    environment:
+      - AIOPS_TRUST_PROXY=true
 
   victoriametrics:
     image: ${VM_IMAGE:-victoriametrics/victoria-metrics:latest}

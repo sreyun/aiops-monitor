@@ -18,6 +18,27 @@ func normalizeIPv6Loopback(ip string) string {
 	return ip
 }
 
+// sanitizeClientIP trims and validates a candidate IP from a proxy header or
+// RemoteAddr. Returns "" when the value is not a usable IP address.
+func sanitizeClientIP(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// Some proxies send host:port
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
+	}
+	// Strip surrounding brackets from bare IPv6 ("[::1]")
+	raw = strings.TrimPrefix(raw, "[")
+	raw = strings.TrimSuffix(raw, "]")
+	ip := net.ParseIP(raw)
+	if ip == nil {
+		return ""
+	}
+	return normalizeIPv6Loopback(ip.String())
+}
+
 // clientIP returns the request's client address for audit logs and login
 // rate-limiting. Reverse-proxy headers are honored ONLY when trust_proxy is
 // enabled — otherwise they are attacker-forgeable and a directly-exposed
@@ -34,29 +55,32 @@ func normalizeIPv6Loopback(ip string) string {
 func (s *Server) clientIP(r *http.Request) string {
 	if s.cfg.TrustProxy() {
 		// 1. CF-Connecting-IP (Cloudflare — always the end-user's IP)
-		if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cf != "" {
-			return normalizeIPv6Loopback(cf)
+		if ip := sanitizeClientIP(r.Header.Get("CF-Connecting-IP")); ip != "" {
+			return ip
 		}
-		// 2. X-Real-IP (nginx single-value header)
-		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
-			return normalizeIPv6Loopback(xr)
+		// 2. X-Real-IP (nginx / hostproxy single-value header)
+		if ip := sanitizeClientIP(r.Header.Get("X-Real-IP")); ip != "" {
+			return ip
 		}
 		// 3. X-Forwarded-For — first (leftmost) entry is the original client.
-		//    Format: "client, proxy1, proxy2, ..." — each proxy appends the
-		//    address it received the connection from, so [0] is always the
-		//    originating client (the real public IP we want for audit logs).
 		if f := r.Header.Get("X-Forwarded-For"); f != "" {
 			if idx := strings.Index(f, ","); idx >= 0 {
 				f = f[:idx]
 			}
-			if ip := strings.TrimSpace(f); ip != "" {
-				return normalizeIPv6Loopback(ip)
+			if ip := sanitizeClientIP(f); ip != "" {
+				return ip
 			}
 		}
 	}
 	// 4. Fallback: raw TCP connection address
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if ip := sanitizeClientIP(host); ip != "" {
+			return ip
+		}
 		return normalizeIPv6Loopback(host)
+	}
+	if ip := sanitizeClientIP(r.RemoteAddr); ip != "" {
+		return ip
 	}
 	return r.RemoteAddr
 }
@@ -73,6 +97,60 @@ func (s *Server) actorIP(r *http.Request) (actor, ip string) {
 		return u.Username, ip
 	}
 	return ip, ip
+}
+
+// auditActor returns display actor, dedicated username field, and client IP.
+func (s *Server) auditActor(r *http.Request) (actor, username, ip string) {
+	ip = s.clientIP(r)
+	if u, ok := s.currentUser(r); ok && u.Username != "" {
+		return u.Username, u.Username, ip
+	}
+	return ip, "", ip
+}
+
+// addAuditLog fills Actor / Username / IP from the request when missing, then stores the entry.
+func (s *Server) addAuditLog(r *http.Request, e LogEntry) {
+	actor, user, ip := s.auditActor(r)
+	if e.IP == "" {
+		e.IP = ip
+	}
+	if e.Username == "" {
+		e.Username = user
+	}
+	if e.Actor == "" || e.Actor == ip {
+		e.Actor = actor
+	}
+	if e.Username == "" && e.Actor != "" && e.Actor != ip && !looksLikeIPAddr(e.Actor) {
+		e.Username = e.Actor
+	}
+	s.store.AddLog(e)
+}
+
+func looksLikeIPAddr(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	// rough: IPv4 or bracketed/colon IPv6 / host:port
+	if strings.Count(s, ".") == 3 {
+		ok := true
+		for _, p := range strings.Split(strings.Split(s, ":")[0], ".") {
+			if p == "" {
+				ok = false
+				break
+			}
+			for _, c := range p {
+				if c < '0' || c > '9' {
+					ok = false
+					break
+				}
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return strings.Contains(s, ":") && !strings.Contains(s, " ")
 }
 
 func shortID(id string) string {

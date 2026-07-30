@@ -1017,15 +1017,12 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": wlErr.Error()})
 		return
 	}
-	// look up hostname
-	hostname := shortID(req.HostID)
-	for _, h := range s.store.ListHosts() {
-		if h.ID == req.HostID {
-			hostname = h.Hostname
-			break
-		}
-	}
+	hostname := s.hostLabelForID(req.HostID)
 	operator, clientIP := s.actorIP(r)
+	user := operator
+	if looksLikeIPAddr(operator) {
+		user = ""
+	}
 	listenHost := s.cfg.ForwardListenAddr()
 	// 端口范围批量转发：target_port..target_port_end（含）。每个端口一条独立规则，
 	// 复用单端口的监听/会话/隧道全套机制（Agent 无需改动）。范围模式下本地端口镜像
@@ -1063,8 +1060,8 @@ func (s *Server) handleForwardCreate(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		go s.serveRule(rule)
-		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, IP: clientIP, Host: hostname,
-			Message: Tz("log.forward_create", rule.id, hostname, p, rule.listenAddr)})
+		s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: operator, Username: user, IP: clientIP, Host: hostname,
+			Message: Tz("log.forward_create", "规则", hostname, p, rule.listenAddr)})
 		created = append(created, infoFromRule(rule, 0, 0))
 	}
 	if len(created) == 0 {
@@ -1304,14 +1301,7 @@ func (s *Server) handleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// look up hostname
-	hostname := shortID(hostID)
-	for _, h := range s.store.ListHosts() {
-		if h.ID == hostID {
-			hostname = h.Hostname
-			break
-		}
-	}
+	hostname := s.hostLabelForID(hostID)
 	operator, clientIP := s.actorIP(r)
 
 	// P2: WebSocket upgrade detection — tunnel as raw TCP instead of HTTP

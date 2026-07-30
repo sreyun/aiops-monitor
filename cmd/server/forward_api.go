@@ -239,13 +239,7 @@ func (s *Server) handleForwardGroupEdit(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		newHost = req.HostID
-		newHostname = shortID(req.HostID)
-		for _, h := range s.store.ListHosts() {
-			if h.ID == req.HostID {
-				newHostname = h.Hostname
-				break
-			}
-		}
+		newHostname = s.hostLabelForID(req.HostID)
 	}
 	newStart := req.TargetPort
 	if newStart < 1 || newStart > 65535 {
@@ -499,13 +493,7 @@ func (s *Server) handleForwardEdit(w http.ResponseWriter, r *http.Request) {
 	// Lookup hostname when host_id is provided
 	var hostname string
 	if req.HostID != "" {
-		hostname = shortID(req.HostID)
-		for _, h := range s.store.ListHosts() {
-			if h.ID == req.HostID {
-				hostname = h.Hostname
-				break
-			}
-		}
+		hostname = s.hostLabelForID(req.HostID)
 	}
 	rule, err := s.forward.updateRule(id, req.HostID, hostname, req.TargetPort, req.LocalPort, req.RemoteTarget)
 	if err != nil {

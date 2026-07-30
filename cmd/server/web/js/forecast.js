@@ -4,8 +4,18 @@
  * Supports AbortSignal + isCurrent() so stale responses never paint a new canvas.
  * ============================================================================ */
 window._FC_ON = window._FC_ON || {};
+window._FC_MODEL = window._FC_MODEL || {}; // scope -> model id
 /** Host detail mounts many charts; keep headroom for CPU/mem/disk/net/conns/IO/… */
 const FC_MAX_SERIES = 32;
+
+/** User-facing forecast models — labels emphasize use-case, not algorithm jargon. */
+const FC_MODEL_OPTIONS = [
+  { id: "auto", label: "智能匹配（推荐）", title: "系统按当前数据形态自动选最合适的预测方式" },
+  { id: "damped-holt", label: "平滑波动", title: "适合 CPU、延时、连接数等上下抖动的指标" },
+  { id: "drift", label: "一路涨/跌", title: "适合磁盘占用、容量等持续上升或下降的指标" },
+  { id: "holt-winters", label: "有规律起伏", title: "适合流量、访问量等带日/周周期的指标" },
+  { id: "flat", label: "基本不变", title: "适合可用率等几乎稳定在某一水平的指标" },
+];
 
 function isChartForecastOn(scope) {
   return !!(window._FC_ON && window._FC_ON[scope]);
@@ -14,9 +24,24 @@ function setChartForecastOn(scope, on) {
   window._FC_ON = window._FC_ON || {};
   window._FC_ON[scope] = !!on;
 }
+function getChartForecastModel(scope) {
+  const m = (window._FC_MODEL && window._FC_MODEL[scope]) || "auto";
+  return FC_MODEL_OPTIONS.some(o => o.id === m) ? m : "auto";
+}
+function setChartForecastModel(scope, model) {
+  window._FC_MODEL = window._FC_MODEL || {};
+  const id = String(model || "auto");
+  window._FC_MODEL[scope] = FC_MODEL_OPTIONS.some(o => o.id === id) ? id : "auto";
+}
 function forecastChipHTML(scope, on) {
   const active = on != null ? !!on : isChartForecastOn(scope);
-  return `<button type="button" class="chip-btn${active ? " active" : ""}" data-chart-forecast="${esc(scope || "default")}" title="多序列趋势预测：左侧实时，右侧未来（虚线）">预测</button>`;
+  const sc = esc(scope || "default");
+  const cur = getChartForecastModel(scope);
+  const opts = FC_MODEL_OPTIONS.map(o =>
+    `<option value="${esc(o.id)}" ${o.id === cur ? "selected" : ""} title="${esc(o.title)}">${esc(o.label)}</option>`
+  ).join("");
+  return `<button type="button" class="chip-btn${active ? " active" : ""}" data-chart-forecast="${sc}" title="多序列趋势预测：左侧实时，右侧未来（虚线）">预测</button>` +
+    `<select class="chip-select fc-model-sel" data-chart-fc-model="${sc}" title="选择预测方式（默认推荐智能匹配）" ${active ? "" : "disabled"}>${opts}</select>`;
 }
 
 function _fcStillCurrent(opts) {
@@ -103,7 +128,10 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
         series: reqSeries,
         horizon_sec: opts.horizonSec || Math.max(0, Math.round(globalSpan)),
         step: opts.step || 0,
-        now_ts: globalLast || 0
+        now_ts: globalLast || 0,
+        method: opts.method != null && opts.method !== ""
+          ? opts.method
+          : (getChartForecastModel(opts.forecastScope || "") || "auto")
       })
     };
     if (opts.signal) fetchOpts.signal = opts.signal;
@@ -178,7 +206,15 @@ async function enrichSharedForecast(samples, allSeriesDefs, opts) {
     seen.add(k);
     uniq.push(s);
   }
-  return enrichSamplesWithForecast(samples, uniq, Object.assign({}, opts, { forecast: true }));
+  const scope = opts.forecastScope || "";
+  const method = (opts.method != null && opts.method !== "")
+    ? opts.method
+    : getChartForecastModel(scope);
+  return enrichSamplesWithForecast(samples, uniq, Object.assign({}, opts, {
+    forecast: true,
+    method,
+    forecastScope: scope
+  }));
 }
 
 /**
@@ -264,6 +300,8 @@ async function createChartWithForecast(canvasId, samples, series, yMin, yMax, op
       forecast: true,
       horizonSec: opts.horizonSec || 0,
       step: opts.step || 0,
+      method: opts.method || getChartForecastModel(opts.forecastScope || ""),
+      forecastScope: opts.forecastScope || "",
       signal: opts.signal,
       isCurrent: opts.isCurrent
     });
@@ -319,7 +357,17 @@ async function mountChartsWithForecast(scope, specs, loadOpts) {
   if (!want) {
     for (const sp of list) {
       if (!isCurrent()) return out;
-      out[sp.id] = createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, Object.assign({}, sp.opts || {}, { forecastScope: scope }));
+      const reload = (sp.opts && sp.opts.reload) || null;
+      out[sp.id] = createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, Object.assign({}, sp.opts || {}, {
+        forecastScope: scope,
+        reload,
+        _fcBase: {
+          samples: sp.samples, series: sp.series, yMin: sp.yMin, yMax: sp.yMax,
+          title: (sp.opts && sp.opts.title) || "",
+          reload,
+          horizonSec: loadOpts.horizonSec || 0
+        }
+      }));
     }
     return out;
   }
@@ -335,14 +383,26 @@ async function mountChartsWithForecast(scope, specs, loadOpts) {
     signal,
     isCurrent,
     horizonSec: loadOpts.horizonSec || 0,
-    step: loadOpts.step || 0
+    step: loadOpts.step || 0,
+    method: getChartForecastModel(scope),
+    forecastScope: scope
   });
   if (!isCurrent() || (en && en.stale)) return out;
 
   for (const sp of list) {
     if (!isCurrent()) return out;
     const sliced = sliceForecastForChart(en, sp.series, sp.samples);
-    const baseOpts = Object.assign({}, sp.opts || {}, { forecastScope: scope });
+    const reload = (sp.opts && sp.opts.reload) || null;
+    const baseOpts = Object.assign({}, sp.opts || {}, {
+      forecastScope: scope,
+      reload,
+      _fcBase: {
+        samples: sp.samples, series: sp.series, yMin: sp.yMin, yMax: sp.yMax,
+        title: (sp.opts && sp.opts.title) || "",
+        reload,
+        horizonSec: loadOpts.horizonSec || 0
+      }
+    });
     if (sliced) {
       out[sp.id] = createChart(sp.id, sliced.samples, sliced.series, sp.yMin, sp.yMax,
         Object.assign(baseOpts, { nowTs: sliced.nowTs || 0 }));
@@ -362,5 +422,24 @@ document.addEventListener("click", (e) => {
   const on = !isChartForecastOn(scope);
   setChartForecastOn(scope, on);
   btn.classList.toggle("active", on);
-  document.dispatchEvent(new CustomEvent("chart-forecast-toggle", { detail: { scope, on } }));
+  document.querySelectorAll(`[data-chart-fc-model="${scope}"]`).forEach(sel => { sel.disabled = !on; });
+  document.dispatchEvent(new CustomEvent("chart-forecast-toggle", { detail: { scope, on, method: getChartForecastModel(scope) } }));
+});
+document.addEventListener("change", (e) => {
+  const sel = e.target && e.target.closest && e.target.closest("[data-chart-fc-model]");
+  if (!sel) return;
+  e.stopPropagation();
+  const scope = sel.getAttribute("data-chart-fc-model") || "default";
+  const prev = getChartForecastModel(scope);
+  setChartForecastModel(scope, sel.value);
+  const next = getChartForecastModel(scope);
+  // Keep sibling selects in sync (detail + zoom).
+  document.querySelectorAll(`[data-chart-fc-model="${scope}"]`).forEach(el => {
+    if (el !== sel) el.value = next;
+  });
+  if (isChartForecastOn(scope)) {
+    document.dispatchEvent(new CustomEvent("chart-forecast-toggle", {
+      detail: { scope, on: true, method: next, modelChanged: next !== prev }
+    }));
+  }
 });

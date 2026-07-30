@@ -919,7 +919,7 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 	if hostID != "" {
 		learnKey = "ai:" + hostID + ":" + metricKey
 	}
-	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, learnKey)
+	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, learnKey, fcModelAuto)
 	if errMsg != "" {
 		return capabilityJSON(capabilityResult{OK: false, Error: errMsg}), nil
 	}

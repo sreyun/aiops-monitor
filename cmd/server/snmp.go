@@ -311,8 +311,9 @@ func (s *Server) handleDeleteSNMP(w http.ResponseWriter, r *http.Request) {
 	if s.pg != nil {
 		s.pg.deleteSNMPSnapshot(hostID, device)
 	}
+	label := s.hostLabelForID(hostID)
 	slog.Info("删除 SNMP 设备记录", "host", hostID, "device", device, "actor", s.clientIP(r))
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_snmp", hostID, device)})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Host: label, Message: Tz("log.delete_snmp", label, device)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

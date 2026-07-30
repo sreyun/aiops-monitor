@@ -332,3 +332,41 @@ func TestRobustForecastMonotonicDiskPrefersDrift(t *testing.T) {
 		t.Fatalf("存储外推应继续上升: hist=%.2f fc=%.2f method=%s", lastHist, lastFC, method)
 	}
 }
+
+func TestForcedForecastMethodsDiffer(t *testing.T) {
+	now := time.Now().Unix()
+	step := int64(60)
+	hist := make([][2]float64, 0, 48)
+	for i := 0; i < 48; i++ {
+		// Clear upward drift so flat vs drift diverge visibly.
+		v := 20 + float64(i)*0.8 + math.Sin(float64(i)/4)*2
+		hist = append(hist, [2]float64{float64(now - int64(48-i)*step), v})
+	}
+	horizon := 24 * step
+	flat, _, _, mFlat, err1 := robustForecastWithKey(hist, now, horizon, step, "", fcModelFlat)
+	drift, _, _, mDrift, err2 := robustForecastWithKey(hist, now, horizon, step, "", fcModelDrift)
+	holt, _, _, mHolt, err3 := robustForecastWithKey(hist, now, horizon, step, "", fcModelDampedHolt)
+	if err1 != "" || err2 != "" || err3 != "" {
+		t.Fatalf("errs flat=%q drift=%q holt=%q", err1, err2, err3)
+	}
+	if !strings.Contains(mFlat, "flat") && mFlat != "flat" {
+		t.Fatalf("want flat method, got %s", mFlat)
+	}
+	if mDrift != "drift" {
+		t.Fatalf("want drift method, got %s", mDrift)
+	}
+	if mHolt != "damped-holt" {
+		t.Fatalf("want damped-holt method, got %s", mHolt)
+	}
+	if len(flat) == 0 || len(drift) == 0 || len(holt) == 0 {
+		t.Fatal("empty band")
+	}
+	flatLast := flat[len(flat)-1].Value
+	driftLast := drift[len(drift)-1].Value
+	if math.Abs(driftLast-flatLast) < 1.0 {
+		t.Fatalf("forced flat vs drift should differ: flat=%.2f drift=%.2f", flatLast, driftLast)
+	}
+	if driftLast <= flatLast {
+		t.Fatalf("drift should end above flat on rising series: flat=%.2f drift=%.2f", flatLast, driftLast)
+	}
+}
