@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,6 +37,29 @@ func TestHandleDashboardLegacyFallback(t *testing.T) {
 	body := rr.Body.String()
 	if !strings.Contains(body, `id="app"`) {
 		t.Fatalf("expected classic index.html shell")
+	}
+}
+
+func TestV2AssetsPublicAndEmbedded(t *testing.T) {
+	if _, err := webFS.ReadFile("web/v2/index.html"); err != nil {
+		t.Fatalf("v2 index missing from embed: %v", err)
+	}
+	entries, err := fs.ReadDir(webFS, "web/v2/assets")
+	if err != nil {
+		t.Fatalf("v2 assets: %v", err)
+	}
+	var hasJS bool
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".js") {
+			hasJS = true
+			break
+		}
+	}
+	if !hasJS {
+		t.Fatal("expected hashed js assets under web/v2/assets")
+	}
+	if !isPublicPath(httptest.NewRequest(http.MethodGet, "/v2/assets/x.js", nil)) {
+		t.Fatal("/v2/ assets must be public for pre-login SPA load")
 	}
 }
 

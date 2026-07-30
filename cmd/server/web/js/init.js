@@ -27,11 +27,41 @@ window.addEventListener("beforeinstallprompt", e => {
   }, 3000);
 });
 window.addEventListener("hashchange", () => {
-  const h = location.hash.slice(1);
-  if (h && ["overview", "hosts", "checks", "alerts", "automation", "log", "hardware", "netflow"].includes(h)) {
-    switchView(h);
-  }
+  applyLegacyHashRoute();
 });
+
+// 支持 /?ui=legacy#view 与 #dashboard/{id} / #settings 深链（含首屏）
+const LEGACY_HASH_VIEWS = new Set([
+  "overview", "hosts", "checks", "alerts", "automation", "log", "logs",
+  "hardware", "hyperv", "containers", "k8s", "netflow", "snmp",
+  "dashboards", "sre", "forward", "datasource", "sql-toolkit",
+  "security-overview", "host-security", "web-security", "content-audit",
+  "ai-tool-audit", "audit-export", "oidc", "apimon", "scrape", "governance", "thresholds"
+]);
+
+function applyLegacyHashRoute() {
+  const raw = (location.hash || "").replace(/^#/, "").trim();
+  if (!raw) return;
+  if (raw === "settings") {
+    if (typeof openSettings === "function") openSettings();
+    return;
+  }
+  if (raw.startsWith("dashboard/")) {
+    const id = decodeURIComponent(raw.slice("dashboard/".length));
+    if (typeof switchView === "function") switchView("dashboards");
+    if (id && typeof openDashboard === "function") {
+      setTimeout(() => { try { openDashboard(id); } catch (e) {} }, 0);
+    }
+    return;
+  }
+  const view = raw.split("?")[0].split("/")[0];
+  if (view && LEGACY_HASH_VIEWS.has(view) && typeof switchView === "function") {
+    switchView(view);
+  }
+}
+
+// 首屏：等 app 启动后再应用 hash（init 在拼接包末尾，switchView 已可用）
+setTimeout(() => { try { applyLegacyHashRoute(); } catch (e) {} }, 0);
 
 // 语言就地切换：i18n-dashboard.js 已完成静态 [data-i18n] 文本替换，这里负责
 // 重建 JS 动态生成的文案（页面标题/副标题、各视图列表、图表等），并保持当前视图/滚动/
