@@ -7,6 +7,53 @@ window._FC_ON = window._FC_ON || {};
 window._FC_MODEL = window._FC_MODEL || {}; // scope -> model id
 /** Host detail mounts many charts; keep headroom for CPU/mem/disk/net/conns/IO/… */
 const FC_MAX_SERIES = 32;
+/** Prefer core gauges when capping shared forecast (load1/5/15 must never be squeezed out). */
+const FC_PRIORITY_KEYS = [
+  "cpu_percent", "mem_percent", "disk_percent",
+  "load1", "load5", "load15",
+  "latency_ms", "dns_ms", "tcp_ms", "tls_ms", "ttfb_ms", "online", "loss_pct",
+  "net_recv_rate", "net_sent_rate", "net_conns",
+  "disk_io_util_percent", "disk_read_rate", "disk_write_rate",
+  "disk_read_iops", "disk_write_iops", "proc_count", "swap_percent",
+  "in_util", "out_util", "in_bps", "out_bps"
+];
+
+function _fcPriorityRank(key) {
+  const k = String(key || "");
+  const i = FC_PRIORITY_KEYS.indexOf(k);
+  if (i >= 0) return i;
+  if (k.indexOf("load") === 0) return FC_PRIORITY_KEYS.length;
+  if (/^(latency|dns|tcp|tls|ttfb|loss|ok|online)/i.test(k)) return FC_PRIORITY_KEYS.length + 1;
+  return FC_PRIORITY_KEYS.length + 50;
+}
+
+/**
+ * LOCF-align joined multi-series sample rows for keys that are null/undefined
+ * (not numeric 0 — that needs server presence maps). Used by SNMP/hardware/host
+ * matrix joins so staggered Prom timestamps never open gaps in createChart.
+ */
+function alignJoinedSeriesSamples(samples, keys) {
+  const keyList = keys && keys.length
+    ? keys
+    : null;
+  const last = Object.create(null);
+  const out = [];
+  for (const sm of samples || []) {
+    if (!sm) continue;
+    const row = Object.assign({}, sm);
+    const useKeys = keyList || Object.keys(row).filter(k => k !== "timestamp" && k !== "ts");
+    for (const k of useKeys) {
+      const v = row[k];
+      if (v == null || (typeof v === "number" && !isFinite(v))) {
+        if (last[k] != null) row[k] = last[k];
+      } else if (typeof v === "number" || (typeof v === "string" && v !== "" && isFinite(+v))) {
+        last[k] = +v;
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
 
 /** User-facing forecast models — labels emphasize use-case, not algorithm jargon. */
 const FC_MODEL_OPTIONS = [
@@ -61,9 +108,14 @@ function _fcSampleTs(sm) {
  * Build request payload from Canvas samples + series defs (supports transform).
  * Hold-forward each series to the global last timestamp so every forecast shares
  * the same "now" boundary (avoids empty purple zones for sparse TCP/UDP/…).
+ * Also LOCF-fills intra-series null gaps so staggered Prom joins never drop a
+ * series below the <4-point forecast floor (load1/5/15 flicker).
  */
 function buildForecastRequestSeries(samples, seriesDefs) {
-  const use = (seriesDefs || []).filter(s => !s.kind || s.kind === "history").slice(0, FC_MAX_SERIES);
+  const ranked = (seriesDefs || []).filter(s => !s.kind || s.kind === "history")
+    .slice()
+    .sort((a, b) => _fcPriorityRank(a.key) - _fcPriorityRank(b.key) || String(a.key).localeCompare(String(b.key)));
+  const use = ranked.slice(0, FC_MAX_SERIES);
   let globalLast = 0;
   for (const sm of samples || []) {
     const ts = _fcSampleTs(sm);
@@ -72,13 +124,20 @@ function buildForecastRequestSeries(samples, seriesDefs) {
   const out = [];
   for (const s of use) {
     const pts = [];
+    let lastV = null;
     for (const sm of samples || []) {
-      let v;
-      try { v = typeof seriesVal === "function" ? seriesVal(s, sm) : sm[s.key]; } catch (_) { v = null; }
-      if (v == null || !isFinite(+v)) continue;
       const ts = _fcSampleTs(sm);
       if (!ts) continue;
-      pts.push([ts, +v]);
+      let v;
+      try { v = typeof seriesVal === "function" ? seriesVal(s, sm) : sm[s.key]; } catch (_) { v = null; }
+      if (v == null || !isFinite(+v)) {
+        if (lastV == null) continue;
+        v = lastV; // LOCF across null/missing join gaps
+      } else {
+        lastV = +v;
+        v = lastV;
+      }
+      pts.push([ts, v]);
     }
     if (pts.length < 4) continue;
     // Dedup timestamps (keep last)
@@ -206,11 +265,14 @@ async function enrichSharedForecast(samples, allSeriesDefs, opts) {
     seen.add(k);
     uniq.push(s);
   }
+  // Cap after priority sort so load1/5/15 / core gauges survive dense host-detail pages.
+  uniq.sort((a, b) => _fcPriorityRank(a.key) - _fcPriorityRank(b.key) || String(a.key || "").localeCompare(String(b.key || "")));
+  const capped = uniq.slice(0, FC_MAX_SERIES);
   const scope = opts.forecastScope || "";
   const method = (opts.method != null && opts.method !== "")
     ? opts.method
     : getChartForecastModel(scope);
-  return enrichSamplesWithForecast(samples, uniq, Object.assign({}, opts, {
+  return enrichSamplesWithForecast(samples, capped, Object.assign({}, opts, {
     forecast: true,
     method,
     forecastScope: scope

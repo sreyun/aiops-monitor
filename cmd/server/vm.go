@@ -299,8 +299,9 @@ func (v *vmWriter) queryCheckHistory(checkID string, from, to int64) []CheckPoin
 }
 
 // parseVMCheckExport 把 VM /export 的 NDJSON（每行一条 series）按时间戳重组为 []CheckPoint。
+// Presence+LOCF：交错的 up/latency/status 不会再被当成「假 0ms / 假离线」。
 func parseVMCheckExport(r io.Reader) []CheckPoint {
-	byTs := map[int64]*CheckPoint{}
+	byTs := map[int64]*checkJoinCell{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	for sc.Scan() {
@@ -318,29 +319,47 @@ func parseVMCheckExport(r io.Reader) []CheckPoint {
 				break
 			}
 			ts := line.Timestamps[i] / 1000
-			p := byTs[ts]
-			if p == nil {
-				p = &CheckPoint{Ts: ts, LossPct: -1}
-				byTs[ts] = p
+			c := byTs[ts]
+			if c == nil {
+				c = &checkJoinCell{ts: ts, p: CheckPoint{Ts: ts, LossPct: -1}}
+				byTs[ts] = c
 			}
+			val := line.Values[i]
 			switch name {
 			case "aiops_check_up":
-				p.OK = line.Values[i] >= 0.5
+				c.p.OK = val >= 0.5
+				c.mark("ok")
 			case "aiops_check_latency_ms":
-				p.LatencyMs = line.Values[i]
+				c.p.LatencyMs = val
+				c.mark("latency_ms")
 			case "aiops_check_status_code":
-				p.StatusCode = int(line.Values[i])
+				c.p.StatusCode = int(val)
+				c.mark("status_code")
 			case "aiops_check_loss_pct":
-				p.LossPct = line.Values[i]
+				c.p.LossPct = val
+				c.mark("loss_pct")
+			case "aiops_check_dns_ms":
+				c.p.DnsMs = val
+				c.mark("dns_ms")
+			case "aiops_check_tcp_ms":
+				c.p.TcpMs = val
+				c.mark("tcp_ms")
+			case "aiops_check_tls_ms":
+				c.p.TlsMs = val
+				c.mark("tls_ms")
+			case "aiops_check_ttfb_ms":
+				c.p.TtfbMs = val
+				c.mark("ttfb_ms")
+			case "aiops_check_cert_days":
+				c.p.CertDays = val
+				c.mark("cert_days")
+			case "aiops_check_resp_bytes":
+				c.p.RespBytes = val
+				c.mark("resp_bytes")
 			}
 		}
 	}
-	out := make([]CheckPoint, 0, len(byTs))
-	for _, p := range byTs {
-		out = append(out, *p)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ts < out[j].Ts })
-	return out
+	return finalizeCheckJoin(byTs)
 }
 
 // pushAPI 把 API 性能监控探测结果批量写入 VM（Prometheus 文本格式）。
@@ -419,9 +438,9 @@ func (v *vmWriter) queryAPIHistory(apiID string, from, to int64) []APIHistPoint 
 }
 
 // parseVMAPIExport 把 VM /export 的 NDJSON 按时间戳重组为 []APIHistPoint（aiops_api_* 指标族）。
-// 除总延时/状态外，同时回读响应时间分解（DNS/TCP/TLS/TTFB）与响应体大小，供前端画组合曲线。
+// Presence+LOCF：DNS/TCP/TLS/TTFB 与总延时交错到达时不再被当成假 0ms，可用性也不再假离线。
 func parseVMAPIExport(r io.Reader) []APIHistPoint {
-	byTs := map[int64]*APIHistPoint{}
+	byTs := map[int64]*apiJoinCell{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	for sc.Scan() {
@@ -439,37 +458,41 @@ func parseVMAPIExport(r io.Reader) []APIHistPoint {
 				break
 			}
 			ts := line.Timestamps[i] / 1000
-			p := byTs[ts]
-			if p == nil {
-				p = &APIHistPoint{Ts: ts}
-				byTs[ts] = p
+			c := byTs[ts]
+			if c == nil {
+				c = &apiJoinCell{ts: ts, p: APIHistPoint{Ts: ts}}
+				byTs[ts] = c
 			}
+			val := line.Values[i]
 			switch name {
 			case "aiops_api_up":
-				p.OK = line.Values[i] >= 0.5
+				c.p.OK = val >= 0.5
+				c.mark("ok")
 			case "aiops_api_latency_ms":
-				p.LatencyMs = line.Values[i]
+				c.p.LatencyMs = val
+				c.mark("latency_ms")
 			case "aiops_api_status_code":
-				p.StatusCode = int(line.Values[i])
+				c.p.StatusCode = int(val)
+				c.mark("status_code")
 			case "aiops_api_dns_ms":
-				p.DnsMs = line.Values[i]
+				c.p.DnsMs = val
+				c.mark("dns_ms")
 			case "aiops_api_tcp_ms":
-				p.TcpMs = line.Values[i]
+				c.p.TcpMs = val
+				c.mark("tcp_ms")
 			case "aiops_api_tls_ms":
-				p.TlsMs = line.Values[i]
+				c.p.TlsMs = val
+				c.mark("tls_ms")
 			case "aiops_api_ttfb_ms":
-				p.TtfbMs = line.Values[i]
+				c.p.TtfbMs = val
+				c.mark("ttfb_ms")
 			case "aiops_api_resp_bytes":
-				p.RespBytes = line.Values[i]
+				c.p.RespBytes = val
+				c.mark("resp_bytes")
 			}
 		}
 	}
-	out := make([]APIHistPoint, 0, len(byTs))
-	for _, p := range byTs {
-		out = append(out, *p)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ts < out[j].Ts })
-	return out
+	return finalizeAPIJoin(byTs)
 }
 
 // apiAggregate 是一个接口由 VM 现算的性能聚合（平均/ P95 响应时间、1h/24h 可用率、1h 采样数）。
@@ -935,9 +958,8 @@ func setSampleMetric(s *shared.Sample, name string, val float64) {
 }
 
 // setSampleGPU 把一条带 gpu 标签的 aiops_gpu_* 系列（按显卡名区分）并回该时间点样本的 GPUs
-// 数组，按名重建每块显卡的 利用率/温度/显存 各字段。VM 里每块显卡是带 gpu 标签的独立系列，
-// parseVMExport 必须按名重建，否则从 VM 读回的历史样本永远缺 gpus，前端趋势画不出 GPU 图。
-func setSampleGPU(s *shared.Sample, gpuName, name string, val float64) {
+// 数组，按名重建每块显卡的 利用率/温度/显存 各字段。返回写入的字段短名（供 presence 合并）。
+func setSampleGPU(s *shared.Sample, gpuName, name string, val float64) string {
 	if gpuName == "" {
 		gpuName = "GPU"
 	}
@@ -955,17 +977,24 @@ func setSampleGPU(s *shared.Sample, gpuName, name string, val float64) {
 	switch name {
 	case "aiops_gpu_util_percent":
 		s.GPUs[idx].UtilPercent = val
+		return "util"
 	case "aiops_gpu_temp_c":
 		s.GPUs[idx].Temp = val
+		return "temp"
 	case "aiops_gpu_mem_percent":
 		s.GPUs[idx].MemPercent = val
+		return "mem_pct"
 	case "aiops_gpu_mem_used_bytes":
 		s.GPUs[idx].MemUsed = uint64(val)
+		return "mem_used"
 	case "aiops_gpu_mem_free_bytes":
 		s.GPUs[idx].MemFree = uint64(val)
+		return "mem_free"
 	case "aiops_gpu_mem_total_bytes":
 		s.GPUs[idx].MemTotal = uint64(val)
+		return "mem_total"
 	}
+	return ""
 }
 
 // setSampleConn 把一条带 proto+state 标签的 aiops_net_conn_count 系列并回样本的 Conns 数组，
@@ -984,11 +1013,10 @@ func setSampleConn(s *shared.Sample, proto, state string, val float64) {
 }
 
 // setSampleDisk 把一条带 path 标签的 aiops_disk_vol_* 系列并回该时间点样本的 Disks 数组，
-// 按分区路径重建（每个分区的 percent/used/total）。VM 里多盘是带 path 标签的独立系列，不
-// 重建则历史样本缺 disks，前端「近期趋势」只剩一条聚合根分区线（本次修复的 bug 点）。
-func setSampleDisk(s *shared.Sample, path, name string, val float64) {
+// 按分区路径重建（每个分区的 percent/used/total）。返回写入的字段短名（供 presence 合并）。
+func setSampleDisk(s *shared.Sample, path, name string, val float64) string {
 	if path == "" {
-		return
+		return ""
 	}
 	idx := -1
 	for i := range s.Disks {
@@ -1004,11 +1032,15 @@ func setSampleDisk(s *shared.Sample, path, name string, val float64) {
 	switch name {
 	case "aiops_disk_vol_percent":
 		s.Disks[idx].Percent = val
+		return "percent"
 	case "aiops_disk_vol_used_bytes":
 		s.Disks[idx].Used = uint64(val)
+		return "used"
 	case "aiops_disk_vol_total_bytes":
 		s.Disks[idx].Total = uint64(val)
+		return "total"
 	}
+	return ""
 }
 
 // adaptiveHistoryStep picks a PromQL step so each host-history window yields a
@@ -1088,7 +1120,7 @@ func (v *vmWriter) queryHistoryRange(hostID string, from, to, step int64) ([]sha
 	if !ok || len(series) == 0 {
 		return nil, false
 	}
-	byTs := map[int64]*shared.Sample{}
+	byTs := map[int64]*histJoinCell{}
 	for _, ser := range series {
 		name := ser.Labels["__name__"]
 		if name == "" {
@@ -1100,37 +1132,22 @@ func (v *vmWriter) queryHistoryRange(hostID string, from, to, step int64) ([]sha
 		connState := ser.Labels["state"]
 		for _, pt := range ser.Points {
 			ts := int64(pt[0])
-			val := pt[1]
-			s := byTs[ts]
-			if s == nil {
-				s = &shared.Sample{Timestamp: ts}
-				byTs[ts] = s
-			}
-			if strings.HasPrefix(name, "aiops_gpu_") {
-				setSampleGPU(s, gpuName, name, val)
-			} else if strings.HasPrefix(name, "aiops_disk_vol_") {
-				setSampleDisk(s, diskPath, name, val)
-			} else if name == "aiops_net_conn_count" {
-				setSampleConn(s, connProto, connState, val)
-			} else {
-				setSampleMetric(s, name, val)
-			}
+			applyHistJoinMetric(byTs, ts, name, gpuName, diskPath, connProto, connState, pt[1])
 		}
 	}
-	out := make([]shared.Sample, 0, len(byTs))
-	for _, s := range byTs {
-		stabilizeSampleArrays(s)
-		out = append(out, *s)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
+	out := finalizeHistJoin(byTs)
+	// Snap onto the requested step grid with LOCF so short windows (1h/3h)
+	// never leave irregular holes when VM omits empty evaluation steps.
+	out = alignSamplesToStep(out, from, to, step)
 	return out, len(out) > 0
 }
 
 // parseVMExport reassembles VM's /api/v1/export NDJSON (one line per series) into
 // []shared.Sample joined by timestamp. Split out so it can be unit-tested without
-// a live VM.
+// a live VM. Scalar gauges and nested inventories are LOCF-aligned so staggered
+// series (load1/5/15 gaps) never paint as missing curves.
 func parseVMExport(r io.Reader) []shared.Sample {
-	byTs := map[int64]*shared.Sample{}
+	byTs := map[int64]*histJoinCell{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	for sc.Scan() {
@@ -1152,29 +1169,10 @@ func parseVMExport(r io.Reader) []shared.Sample {
 				break
 			}
 			ts := line.Timestamps[i] / 1000
-			s := byTs[ts]
-			if s == nil {
-				s = &shared.Sample{Timestamp: ts}
-				byTs[ts] = s
-			}
-			if strings.HasPrefix(name, "aiops_gpu_") {
-				setSampleGPU(s, gpuName, name, line.Values[i])
-			} else if strings.HasPrefix(name, "aiops_disk_vol_") {
-				setSampleDisk(s, diskPath, name, line.Values[i])
-			} else if name == "aiops_net_conn_count" {
-				setSampleConn(s, connProto, connState, line.Values[i])
-			} else {
-				setSampleMetric(s, name, line.Values[i])
-			}
+			applyHistJoinMetric(byTs, ts, name, gpuName, diskPath, connProto, connState, line.Values[i])
 		}
 	}
-	out := make([]shared.Sample, 0, len(byTs))
-	for _, s := range byTs {
-		stabilizeSampleArrays(s)
-		out = append(out, *s)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp < out[j].Timestamp })
-	return out
+	return finalizeHistJoin(byTs)
 }
 
 // stabilizeSampleArrays sorts nested GPU/Disk/Conn slices so cross-request order is stable

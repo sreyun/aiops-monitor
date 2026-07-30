@@ -1043,6 +1043,9 @@ async function loadCheckHistory() {
       return;
     }
     const samples = pts.map(p => ({ timestamp: p.timestamp, latency_ms: p.latency_ms, loss_pct: (typeof p.loss_pct === "number" ? p.loss_pct : null), ok: p.ok }));
+    const aligned = typeof alignJoinedSeriesSamples === "function"
+      ? alignJoinedSeriesSamples(samples, ["latency_ms", "loss_pct"])
+      : samples;
     const isPing = type === "ping";
     const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
@@ -1064,7 +1067,7 @@ async function loadCheckHistory() {
       <div class="chart-container">${wrap("chkLat", latSub)}${isPing ? wrap("chkLoss", I18N.t("form.loss_rate") + "(%)") : ""}</div>
       <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ${I18N.t("unit.ms")} · 悬停查看数值，拖动框选放大，双击还原。</div>`;
     const specs = [
-      { id: "chkLat", samples, series: [
+      { id: "chkLat", samples: aligned, series: [
         { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " " + I18N.t("unit.ms") },
       ], yMin: 0, yMax: null, opts: {
         title: chartTitleBase, legendMode: "dash", cssH: 220, forecastScope: "checks",
@@ -1073,7 +1076,7 @@ async function loadCheckHistory() {
     ];
     if (isPing) {
       const lossTitle = `${name} · ${I18N.t("form.loss_rate")}(%)`;
-      specs.push({ id: "chkLoss", samples, series: [
+      specs.push({ id: "chkLoss", samples: aligned, series: [
         { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
       ], yMin: 0, yMax: 100, opts: {
         title: lossTitle, legendMode: "dash", cssH: 220, forecastScope: "checks",
@@ -1085,7 +1088,7 @@ async function loadCheckHistory() {
       ? await mountChartsWithForecast("checks", specs, load)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
     // 缓存最近一次拨测历史样本，供弹窗内 AI 分析使用
-    CHK_HIST.lastSamples = samples;
+    CHK_HIST.lastSamples = aligned;
     CHK_HIST.lastUptime = uptime;
     CHK_HIST.lastAvgLat = avgLat;
   } catch (e) {

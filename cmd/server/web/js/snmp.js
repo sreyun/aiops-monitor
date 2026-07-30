@@ -324,7 +324,8 @@ function snDevicesToText(devices) {
 
 function snMatrixSamples(series) {
   const byTs = new Map();
-  Object.keys(series || {}).forEach(key => {
+  const keys = Object.keys(series || {});
+  keys.forEach(key => {
     (series[key] || []).forEach(result => {
       (result.values || []).forEach(pair => {
         const ts = Number(pair[0]), value = Number(pair[1]);
@@ -335,7 +336,10 @@ function snMatrixSamples(series) {
       });
     });
   });
-  return [...byTs.values()].sort((a, b) => a.timestamp - b.timestamp);
+  const rows = [...byTs.values()].sort((a, b) => a.timestamp - b.timestamp);
+  return typeof alignJoinedSeriesSamples === "function"
+    ? alignJoinedSeriesSamples(rows, keys)
+    : rows;
 }
 
 function snHistoryControls(from, to) {

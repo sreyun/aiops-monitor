@@ -121,6 +121,17 @@ func (s *Server) handleHostHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Short windows (≤3h): prefer in-memory tiers when they already have enough
+	// complete agent snapshots. Those rows never suffer Prom multi-series join
+	// gaps — the classic "1h/3h 曲线闪烁" case. Longer ranges stay on VM.
+	span := to - from
+	if span > 0 && span <= 3*3600 {
+		if mem, ok := s.store.GetHistory(id, from, to); ok && len(mem) >= 12 {
+			writeJSON(w, http.StatusOK, mem)
+			return
+		}
+	}
+
 	// In VM mode VictoriaMetrics is the authoritative time-series store — read the
 	// trend history from it. Fall back to the in-memory tiers if VM is disabled or
 	// returns nothing (e.g. very recent window not yet queryable).

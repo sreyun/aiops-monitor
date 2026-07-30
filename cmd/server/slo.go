@@ -324,7 +324,12 @@ func (m *sloManager) rangePoints(s SLO, fromTs, toTs int64) []sloPoint {
 				if tp.Val <= 0 {
 					continue // 该桶无事件，跳过（不把空窗画成 0%）
 				}
-				out = append(out, sloPoint{tp.Ts, goodMap[tp.Ts]/tp.Val >= passRatio-1e-9})
+				g, ok := goodMap[tp.Ts]
+				if !ok {
+					// good 序列缺该桶时不要当成 0（假失败）；跳过该点
+					continue
+				}
+				out = append(out, sloPoint{tp.Ts, g/tp.Val >= passRatio-1e-9})
 			}
 		}
 	}

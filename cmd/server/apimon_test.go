@@ -209,6 +209,27 @@ func TestParseVMAPIExport(t *testing.T) {
 	}
 }
 
+// Staggered API timing series must LOCF — missing dns/tcp must not paint as 0ms.
+func TestParseVMAPIExportLOCF(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_api_up","api_id":"ep1"},"values":[1],"timestamps":[1700000000000]}
+{"metric":{"__name__":"aiops_api_latency_ms","api_id":"ep1"},"values":[40,55],"timestamps":[1700000000000,1700000030000]}
+{"metric":{"__name__":"aiops_api_dns_ms","api_id":"ep1"},"values":[5],"timestamps":[1700000000000]}
+{"metric":{"__name__":"aiops_api_tcp_ms","api_id":"ep1"},"values":[8],"timestamps":[1700000000000]}
+{"metric":{"__name__":"aiops_api_tls_ms","api_id":"ep1"},"values":[12],"timestamps":[1700000000000]}
+{"metric":{"__name__":"aiops_api_ttfb_ms","api_id":"ep1"},"values":[20],"timestamps":[1700000000000]}
+`
+	pts := parseVMAPIExport(strings.NewReader(nd))
+	if len(pts) != 2 {
+		t.Fatalf("应重组出 2 个时间点，实际 %d", len(pts))
+	}
+	if !pts[0].OK || pts[0].DnsMs != 5 || pts[0].TcpMs != 8 || pts[0].TlsMs != 12 || pts[0].TtfbMs != 20 {
+		t.Fatalf("首点分解错误: %+v", pts[0])
+	}
+	if !pts[1].OK || pts[1].LatencyMs != 55 || pts[1].DnsMs != 5 || pts[1].TcpMs != 8 || pts[1].TlsMs != 12 || pts[1].TtfbMs != 20 {
+		t.Fatalf("次点 LOCF 失败（假 0ms/假离线）: %+v", pts[1])
+	}
+}
+
 // TestAPIRunnerProbe 端到端跑一次接口探测：命中 httptest 服务 → 记录实时状态（OK+延迟）。
 func TestAPIRunnerProbe(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

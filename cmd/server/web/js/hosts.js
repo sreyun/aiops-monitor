@@ -1064,6 +1064,38 @@ function alignUnixFloor(ts, step) {
   return Math.floor(ts / step) * step;
 }
 
+/**
+ * Client-side LOCF for core gauges when a sample is missing the field entirely
+ * (undefined/null). Does NOT treat numeric 0 as missing — that needs server
+ * presence maps (history_align.go). Prevents load1/5/15 from vanishing on
+ * partial JSON / older API payloads.
+ */
+function alignHistoryGaugeSamples(samples) {
+  const keys = [
+    "cpu_percent", "mem_percent", "disk_percent", "swap_percent",
+    "load1", "load5", "load15", "proc_count", "net_conns",
+    "net_recv_rate", "net_sent_rate",
+    "disk_io_util_percent", "disk_read_rate", "disk_write_rate",
+    "disk_read_iops", "disk_write_iops"
+  ];
+  const last = Object.create(null);
+  const out = [];
+  for (const sm of samples || []) {
+    if (!sm) continue;
+    const row = Object.assign({}, sm);
+    for (const k of keys) {
+      const v = row[k];
+      if (v == null || (typeof v === "number" && !isFinite(v))) {
+        if (last[k] != null) row[k] = last[k];
+      } else {
+        last[k] = +v;
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 /** Resolve [from,to] for host detail; freeze within the same host+preset session. */
 function resolveDetailWindow() {
   if (DETAIL_CUSTOM) {
@@ -1119,9 +1151,10 @@ async function loadAndRenderCharts() {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`,
       load.signal ? { signal: load.signal } : undefined);
     if (!load.isCurrent()) return;
-    const samples = await r.json().catch(() => []);
+    const rawSamples = await r.json().catch(() => []);
     if (!load.isCurrent()) return;
-    if (!Array.isArray(samples) || !samples.length) {
+    const samples = alignHistoryGaugeSamples(Array.isArray(rawSamples) ? rawSamples : []);
+    if (!samples.length) {
       DETAIL_SAMPLES = [];
       body.innerHTML = `<div class="empty-line">${I18N.t("empty.no_history")}</div>`;
       return;
@@ -1910,49 +1943,66 @@ function drawChart(state) {
   }
 
   // Series clipped strictly to the plot rect — peaks cannot paint into legend/title.
+  // Multi-series (load1/5/15, DNS/TCP/…): never area-fill + never Catmull-Rom smooth.
+  // Dense 1h/3h samples make gauges nearly coincide; fills/smoothing stack into
+  // "1～2 条曲线" 闪烁假象。单序列仍保留面积与轻平滑。
   ctx.save();
   ctx.beginPath();
   ctx.rect(pad.left, pad.top, cw, ch);
   ctx.clip();
-  series.forEach((s, sIdx) => {
+  const histSeriesN = series.filter(s => !s.dashed && s.kind !== "forecast"
+    && s.kind !== "compare_pop" && s.kind !== "compare_yoy" && !s.compare).length;
+  const multiHist = histSeriesN > 1;
+  const built = series.map((s, sIdx) => {
     const pts = [];
     vis.forEach((sm, i) => {
       const v = seriesVal(s, sm);
       if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v });
     });
+    return { s, sIdx, pts };
+  });
+  // Pass 1: area fill only for single history series (forecast/compare never fill).
+  if (!multiHist) {
+    built.forEach(({ s, pts }) => {
+      if (pts.length < 2) return;
+      if (s.dashed || s.kind === "forecast" || s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) return;
+      const wantSmooth = pts.length > 12;
+      const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+      grad.addColorStop(0, s.color + "35");
+      grad.addColorStop(0.4, s.color + "15");
+      grad.addColorStop(0.7, s.color + "06");
+      grad.addColorStop(1, s.color + "01");
+      ctx.fillStyle = grad;
+      const baseY = pad.top + ch;
+      ctx.beginPath();
+      seriesPathCommands(ctx, pts, wantSmooth);
+      ctx.lineTo(pts[pts.length - 1].x, baseY);
+      ctx.lineTo(pts[0].x, baseY);
+      ctx.closePath();
+      ctx.fill();
+    });
+  }
+  // Pass 2: strokes on top so every series stays visible when values nearly overlap.
+  built.forEach(({ s, sIdx, pts }) => {
     if (pts.length < 2) return;
     ctx.save();
     ctx.strokeStyle = s.color;
-    ctx.lineWidth = sIdx === 0 ? 2.2 : 1.8;
+    // Stagger widths so nearly-identical gauges (load1≈load5≈load15) remain separable.
+    ctx.lineWidth = multiHist ? Math.max(1.4, 2.4 - sIdx * 0.35) : (sIdx === 0 ? 2.2 : 1.8);
     ctx.lineJoin = "round"; ctx.lineCap = "round";
     if (s.dashed || s.kind === "forecast") ctx.setLineDash([6, 4]);
     else if (s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) ctx.setLineDash([2, 3]);
+    else if (multiHist && sIdx > 0 && sIdx % 2 === 1) ctx.setLineDash([10, 3]); // alternate slight dash
     else ctx.setLineDash([]);
-    const wantSmooth = pts.length > 12 && !s.dashed && s.kind !== "forecast"
+    // Dense short windows: polyline only — smooth pulls coincident gauges into one ribbon.
+    const wantSmooth = !multiHist && pts.length > 12 && pts.length <= 240
+      && !s.dashed && s.kind !== "forecast"
       && s.kind !== "compare_pop" && s.kind !== "compare_yoy" && !s.compare;
     ctx.beginPath();
     seriesPathCommands(ctx, pts, wantSmooth);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
-
-    if (s.dashed || s.kind === "forecast" || s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) {
-      // Forecast / compare: dashed stroke only — keep solid fill for realtime history (left).
-      return;
-    }
-    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-    grad.addColorStop(0, s.color + "35");
-    grad.addColorStop(0.4, s.color + "15");
-    grad.addColorStop(0.7, s.color + "06");
-    grad.addColorStop(1, s.color + "01");
-    ctx.fillStyle = grad;
-    const baseY = pad.top + ch;
-    ctx.beginPath();
-    seriesPathCommands(ctx, pts, wantSmooth);
-    ctx.lineTo(pts[pts.length - 1].x, baseY);
-    ctx.lineTo(pts[0].x, baseY);
-    ctx.closePath();
-    ctx.fill();
   });
 
   // Realtime | forecast boundary (left=历史, right=预测)，中轴居中
@@ -2200,7 +2250,8 @@ async function fetchZoomHostSamples(hostId, from, to) {
   const r = await fetch(`${API}/hosts/${encodeURIComponent(hostId)}/history?from=${from}&to=${to}`, { credentials: "same-origin" });
   if (!r.ok) throw new Error("历史拉取失败 HTTP " + r.status);
   const j = await r.json();
-  return Array.isArray(j) ? j : (Array.isArray(j.samples) ? j.samples : []);
+  const raw = Array.isArray(j) ? j : (Array.isArray(j.samples) ? j.samples : []);
+  return typeof alignHistoryGaugeSamples === "function" ? alignHistoryGaugeSamples(raw) : raw;
 }
 
 async function fetchZoomCheckSamples(checkId, from, to, apiBase) {
