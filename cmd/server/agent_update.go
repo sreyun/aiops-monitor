@@ -223,7 +223,8 @@ func (s *Server) handleAgentUpdateStart(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "confirm=true required for agent fleet update"})
 		return
 	}
-	hosts := s.resolveAgentUpdateTargets(req)
+	// Host-scoped operators must not update agents outside their authorized fleet.
+	hosts := s.filterHostsForUser(r, s.resolveAgentUpdateTargets(req))
 	if len(hosts) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no matching hosts"})
 		return
