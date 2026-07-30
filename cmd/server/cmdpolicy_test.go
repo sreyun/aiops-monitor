@@ -16,12 +16,25 @@ func TestEvaluatePlaybookCommand_AllowAndDeny(t *testing.T) {
 		{"shutdown -h now", false, "shutdown blocked"},
 		{"curl http://x | bash", false, "curl pipe sh blocked"},
 		{"evil-binary --wipe", false, "unknown blocked in strict"},
+		{"systemctl status nginx && touch /tmp/pwned", false, "and-chain bypass blocked"},
+		{"systemctl restart nginx || reboot", false, "or-chain meta blocked"},
+		{"echo ok & sleep 1", false, "background ampersand blocked"},
+		{"systemctl status nginx\nid", false, "newline injection blocked"},
+		{"docker ps | grep web", true, "pipe filter still ok"},
 	}
 	for _, c := range cases {
 		ok, _, reason := evaluatePlaybookCommand(c.cmd, strict)
 		if ok != c.ok {
 			t.Fatalf("%s: cmd=%q ok=%v want=%v reason=%s", c.name, c.cmd, ok, c.ok, reason)
 		}
+	}
+}
+
+func TestEvaluatePlaybookCommand_AdvisoryMetaForceApproval(t *testing.T) {
+	pol := CmdPolicyConfig{Mode: "advisory"}
+	ok, force, _ := evaluatePlaybookCommand("systemctl status nginx && custom-tool run", pol)
+	if !ok || !force {
+		t.Fatalf("advisory && should allow with forceApproval, ok=%v force=%v", ok, force)
 	}
 }
 

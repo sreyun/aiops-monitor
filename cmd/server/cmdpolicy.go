@@ -161,8 +161,13 @@ func evaluatePlaybookCommand(command string, pol CmdPolicyConfig) (ok bool, forc
 		}
 	}
 	// Always scan full command for classic injection meta (even when pipes are used).
-	if pol.Mode == "strict" && strings.ContainsAny(cmd, ";$<>`") {
-		return false, true, "命令含注入风险元字符"
+	// Include & so "allowed && evil" / "cmd & background" cannot bypass the allowlist
+	// (pipe splitting alone does not catch AND/OR chains). Newlines likewise.
+	if strings.ContainsAny(cmd, ";&$<>\n\r`") {
+		if pol.Mode == "strict" {
+			return false, true, "命令含注入风险元字符"
+		}
+		return true, true, "命令含注入风险元字符，建议人工审批后执行"
 	}
 	return true, false, ""
 }
