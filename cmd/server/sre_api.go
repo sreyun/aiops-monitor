@@ -774,6 +774,14 @@ func (s *Server) handleApproveRemediation(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
 		return
 	}
+	run, found := s.findRemediationRun(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tz("remediation.run_not_found")})
+		return
+	}
+	if run.HostID != "" && !s.requireHostAccess(w, r, run.HostID) {
+		return
+	}
 	if err := s.remediation.Approve(id, s.actorName(r)); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -785,6 +793,14 @@ func (s *Server) handleRejectRemediation(w http.ResponseWriter, r *http.Request)
 	id, ok := sreParseID(r)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_id")})
+		return
+	}
+	run, found := s.findRemediationRun(id)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tz("remediation.run_not_found")})
+		return
+	}
+	if run.HostID != "" && !s.requireHostAccess(w, r, run.HostID) {
 		return
 	}
 	if err := s.remediation.Reject(id, s.actorName(r)); err != nil {
@@ -812,6 +828,9 @@ func (s *Server) handleProposeRemediation(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "事件未关联主机，无法挂修复提案"})
 		return
 	}
+	if !s.requireHostAccess(w, r, inc.HostID) {
+		return
+	}
 	var req struct {
 		Title              string   `json:"title"`
 		ExistingPlaybookID string   `json:"existing_playbook_id"`
@@ -820,6 +839,9 @@ func (s *Server) handleProposeRemediation(w http.ResponseWriter, r *http.Request
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
+		return
+	}
+	if req.Force && !s.requireLoopForceAdmin(w, r, req.Force) {
 		return
 	}
 	if gate, gerr := s.diagnosisGateAllowsPropose(inc, req.Force); gerr != nil {

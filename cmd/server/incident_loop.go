@@ -97,6 +97,9 @@ func (s *Server) handleIncidentLoopAction(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "incident.not_found")})
 		return
 	}
+	if inc.HostID != "" && !s.requireHostAccess(w, r, inc.HostID) {
+		return
+	}
 	actor := s.actorName(r)
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
