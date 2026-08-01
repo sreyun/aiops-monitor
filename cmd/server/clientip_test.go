@@ -29,6 +29,15 @@ func TestClientIPTrustProxyHeaders(t *testing.T) {
 	if got := srv.clientIP(req3); got != "198.51.100.7" {
 		t.Fatalf("CF-Connecting-IP: got %q", got)
 	}
+
+	// Forged CF-Connecting-IP must not beat proxy-injected X-Real-IP (hostproxy / nginx).
+	req4 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req4.RemoteAddr = "192.168.97.1:12345"
+	req4.Header.Set("X-Real-IP", "10.20.30.40")
+	req4.Header.Set("CF-Connecting-IP", "198.51.100.7")
+	if got := srv.clientIP(req4); got != "10.20.30.40" {
+		t.Fatalf("X-Real-IP must win over forged CF-Connecting-IP, got %q", got)
+	}
 }
 
 func TestClientIPIgnoresHeadersWithoutTrustProxy(t *testing.T) {

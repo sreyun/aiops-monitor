@@ -7,6 +7,11 @@
 // Critical: preserve the browser Host (e.g. 127.0.0.1:8529). Rewriting Host to
 // the upstream port (18529) breaks CSRF Origin checks (Origin :8529 ≠ Host :18529)
 // and breaks logout / forecast / any cookie-authenticated POST.
+//
+// Critical: strip client-supplied CF-Connecting-IP / True-Client-IP / forged
+// X-Real-IP / X-Forwarded-* before injecting the TCP peer. aiops-server's
+// clientIP() prefers CF-Connecting-IP over X-Real-IP when TrustProxy is on —
+// leaving a forged CF header would bypass login lockout and API rate limits.
 package main
 
 import (
@@ -44,23 +49,7 @@ func main() {
 	proxy.Director = func(req *http.Request) {
 		clientHost := req.Host
 		origDirector(req)
-		// Dial uses req.URL (upstream); keep browser Host for CSRF / cookies / absolute URLs.
-		if clientHost != "" {
-			req.Host = clientHost
-			req.Header.Set("X-Forwarded-Host", clientHost)
-		}
-		client := peerIP(req)
-		if client == "" {
-			return
-		}
-		req.Header.Set("X-Real-IP", client)
-		req.Header.Set("X-Forwarded-Proto", forwardedProto(req))
-		prior := strings.TrimSpace(req.Header.Get("X-Forwarded-For"))
-		if prior == "" {
-			req.Header.Set("X-Forwarded-For", client)
-		} else if !hasIPToken(prior, client) {
-			req.Header.Set("X-Forwarded-For", client+", "+prior)
-		}
+		rewriteProxyHeaders(req, clientHost)
 	}
 
 	srv := &http.Server{
@@ -91,6 +80,36 @@ func envOr(k, def string) string {
 	return def
 }
 
+// rewriteProxyHeaders preserves browser Host and replaces client-IP / forwarded
+// headers with values derived from the real TCP peer only.
+func rewriteProxyHeaders(req *http.Request, clientHost string) {
+	// Dial uses req.URL (upstream); keep browser Host for CSRF / cookies / absolute URLs.
+	if clientHost != "" {
+		req.Host = clientHost
+		req.Header.Set("X-Forwarded-Host", clientHost)
+	}
+
+	// Drop hop-by-hop / forgeable identity headers before injecting trusted ones.
+	// Especially CF-Connecting-IP: server clientIP() checks it before X-Real-IP.
+	for _, h := range []string{
+		"CF-Connecting-IP",
+		"True-Client-IP",
+		"X-Real-IP",
+		"X-Forwarded-For",
+		"X-Forwarded-Proto",
+	} {
+		req.Header.Del(h)
+	}
+
+	client := peerIP(req)
+	if client == "" {
+		return
+	}
+	req.Header.Set("X-Real-IP", client)
+	req.Header.Set("X-Forwarded-For", client)
+	req.Header.Set("X-Forwarded-Proto", forwardedProto(req))
+}
+
 func peerIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -105,21 +124,12 @@ func peerIP(r *http.Request) string {
 	return ""
 }
 
+// forwardedProto reflects the scheme of the connection hostproxy itself
+// terminated. Never trust a client-supplied X-Forwarded-Proto — attackers
+// would otherwise force Secure session cookies on plain HTTP.
 func forwardedProto(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
 	}
-	if p := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); p != "" {
-		return p
-	}
 	return "http"
-}
-
-func hasIPToken(list, ip string) bool {
-	for _, p := range strings.Split(list, ",") {
-		if strings.TrimSpace(p) == ip {
-			return true
-		}
-	}
-	return false
 }

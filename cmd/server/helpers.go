@@ -46,20 +46,25 @@ func sanitizeClientIP(raw string) string {
 // origins) by spoofing a header, so we use the raw connection address instead.
 //
 // Extraction priority (when TrustProxy is on):
-//  1. CF-Connecting-IP   — Cloudflare always sets this to the visitor's IP
-//  2. X-Real-IP          — commonly set by nginx (proxy_set_header X-Real-IP $remote_addr)
+//  1. X-Real-IP          — set by the immediate trusted hop (nginx / hostproxy).
+//    Prefer this over CF-Connecting-IP so a client-forged CF header cannot
+//    override the proxy-injected peer address (login lockout / API rate-limit).
+//  2. CF-Connecting-IP   — Cloudflare visitor IP when the edge did not also set X-Real-IP
 //  3. X-Forwarded-For[0] — the LEFTMOST entry is the original client; each proxy
 //    appends the sender's address to the right, so in CDN→Nginx→Server the
 //    header reads "clientIP, cdnEdgeIP" and [0] = clientIP (the real public IP)
 //  4. RemoteAddr          — direct TCP connection (fallback)
+//
+// The edge proxy MUST overwrite/strip these headers; hostproxy does so. A
+// directly-reachable TrustProxy server without a stripping hop is still spoofable.
 func (s *Server) clientIP(r *http.Request) string {
 	if s.cfg.TrustProxy() {
-		// 1. CF-Connecting-IP (Cloudflare — always the end-user's IP)
-		if ip := sanitizeClientIP(r.Header.Get("CF-Connecting-IP")); ip != "" {
+		// 1. X-Real-IP (nginx / hostproxy single-value header from the trusted hop)
+		if ip := sanitizeClientIP(r.Header.Get("X-Real-IP")); ip != "" {
 			return ip
 		}
-		// 2. X-Real-IP (nginx / hostproxy single-value header)
-		if ip := sanitizeClientIP(r.Header.Get("X-Real-IP")); ip != "" {
+		// 2. CF-Connecting-IP (Cloudflare — only when no X-Real-IP was injected)
+		if ip := sanitizeClientIP(r.Header.Get("CF-Connecting-IP")); ip != "" {
 			return ip
 		}
 		// 3. X-Forwarded-For — first (leftmost) entry is the original client.
