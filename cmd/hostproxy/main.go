@@ -9,9 +9,9 @@
 // and breaks logout / forecast / any cookie-authenticated POST.
 //
 // Critical: strip client-supplied CF-Connecting-IP / True-Client-IP / forged
-// X-Real-IP / X-Forwarded-* before injecting the TCP peer. aiops-server's
-// clientIP() prefers CF-Connecting-IP over X-Real-IP when TrustProxy is on —
-// leaving a forged CF header would bypass login lockout and API rate limits.
+// X-Real-IP / X-Forwarded-* before injecting the TCP peer. Otherwise a client
+// can forge identity headers and (with TrustProxy) bypass login lockout / API
+// rate limits or poison audit IPs.
 package main
 
 import (
@@ -89,8 +89,7 @@ func rewriteProxyHeaders(req *http.Request, clientHost string) {
 		req.Header.Set("X-Forwarded-Host", clientHost)
 	}
 
-	// Drop hop-by-hop / forgeable identity headers before injecting trusted ones.
-	// Especially CF-Connecting-IP: server clientIP() checks it before X-Real-IP.
+	// Drop forgeable identity headers before injecting trusted ones from the peer.
 	for _, h := range []string{
 		"CF-Connecting-IP",
 		"True-Client-IP",
