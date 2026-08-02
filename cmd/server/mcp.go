@@ -170,11 +170,11 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	case "tools/call":
 		s.mcpToolCall(w, r, req, scopes, tokName)
 	case "resources/list":
-		s.writeMCPResult(w, r, req.ID, map[string]any{"resources": s.mcpResourceList()})
+		s.writeMCPResult(w, r, req.ID, map[string]any{"resources": s.mcpResourceList(scopes)})
 	case "resources/templates/list":
 		s.writeMCPResult(w, r, req.ID, map[string]any{"resourceTemplates": []any{}})
 	case "resources/read":
-		s.mcpResourceRead(w, r, req)
+		s.mcpResourceRead(w, r, req, scopes)
 	case "prompts/list":
 		s.writeMCPResult(w, r, req.ID, map[string]any{"prompts": mcpPromptList()})
 	case "prompts/get":
@@ -307,14 +307,33 @@ func (s *Server) mcpToolCall(w http.ResponseWriter, r *http.Request, req jsonRPC
 	s.writeMCPResult(w, r, req.ID, out)
 }
 
-func (s *Server) mcpResourceList() []map[string]any {
-	return []map[string]any{
+// mcpResourceTool maps a resource URI to the underlying readonly tool whose
+// scope gate must be enforced. resources/read used to execute these tools
+// without checking mcpToolAllowedByScopes, so a knowledge-only token could
+// still pull host inventory / duty context.
+var mcpResourceTool = map[string]string{
+	"aiops://overview": "list_hosts",
+	"aiops://duty":     "get_duty_context",
+}
+
+func (s *Server) mcpResourceList(scopes []string) []map[string]any {
+	all := []map[string]any{
 		{"uri": "aiops://overview", "name": "平台总览", "description": "在线主机/告警/事件摘要", "mimeType": "application/json"},
 		{"uri": "aiops://duty", "name": "值班态势", "description": "值班晨报上下文", "mimeType": "application/json"},
 	}
+	out := make([]map[string]any, 0, len(all))
+	for _, res := range all {
+		uri, _ := res["uri"].(string)
+		tool := mcpResourceTool[uri]
+		if tool == "" || !mcpToolAllowedByScopes(tool, scopes) {
+			continue
+		}
+		out = append(out, res)
+	}
+	return out
 }
 
-func (s *Server) mcpResourceRead(w http.ResponseWriter, r *http.Request, req jsonRPCReq) {
+func (s *Server) mcpResourceRead(w http.ResponseWriter, r *http.Request, req jsonRPCReq, scopes []string) {
 	var p struct {
 		URI string `json:"uri"`
 	}
@@ -322,8 +341,18 @@ func (s *Server) mcpResourceRead(w http.ResponseWriter, r *http.Request, req jso
 		s.writeMCPError(w, r, req.ID, -32602, "invalid params: uri required")
 		return
 	}
+	uri := strings.TrimSpace(p.URI)
+	toolName := mcpResourceTool[uri]
+	if toolName == "" {
+		s.writeMCPError(w, r, req.ID, -32002, "resource not found: "+uri)
+		return
+	}
+	if !mcpToolAllowedByScopes(toolName, scopes) {
+		s.writeMCPError(w, r, req.ID, -32602, "resource out of scope: "+uri)
+		return
+	}
 	text := ""
-	switch strings.TrimSpace(p.URI) {
+	switch uri {
 	case "aiops://overview":
 		if s.sreyun != nil {
 			if t, ok := s.sreyun.tools["list_hosts"]; ok {
@@ -342,13 +371,10 @@ func (s *Server) mcpResourceRead(w http.ResponseWriter, r *http.Request, req jso
 		if text == "" {
 			text = `{"hint":"get_duty_context unavailable"}`
 		}
-	default:
-		s.writeMCPError(w, r, req.ID, -32002, "resource not found: "+p.URI)
-		return
 	}
 	s.writeMCPResult(w, r, req.ID, map[string]any{
 		"contents": []map[string]any{{
-			"uri": p.URI, "mimeType": "application/json", "text": text,
+			"uri": uri, "mimeType": "application/json", "text": text,
 		}},
 	})
 }

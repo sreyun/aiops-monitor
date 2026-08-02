@@ -193,3 +193,60 @@ func TestHandleMCPPromptsAndResources(t *testing.T) {
 		t.Fatalf("resources/list: %v body=%s", err, rr.Body.String())
 	}
 }
+
+func TestHandleMCPScopedResourceReadDenied(t *testing.T) {
+	s := newMCPTestServer(t, AIConfig{
+		MCPEnabled:          true,
+		MCPToken:            "primary-token",
+		MCPScopedTokensJSON: `[{"name":"knowledge","token":"knowledge-only-token","scopes":["knowledge"]}]`,
+	})
+
+	rr := mcpPOST(t, s, "knowledge-only-token",
+		`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`, "")
+	var listed struct {
+		Result struct {
+			Resources []map[string]any `json:"resources"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("resources/list decode: %v body=%s", err, rr.Body.String())
+	}
+	if len(listed.Result.Resources) != 0 {
+		t.Fatalf("knowledge scope must not list overview/duty resources, got %#v", listed.Result.Resources)
+	}
+
+	for _, uri := range []string{"aiops://overview", "aiops://duty"} {
+		body := `{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"` + uri + `"}}`
+		rr = mcpPOST(t, s, "knowledge-only-token", body, "")
+		var env map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+			t.Fatalf("resources/read decode: %v body=%s", err, rr.Body.String())
+		}
+		if env["error"] == nil {
+			t.Fatalf("expected RPC error for out-of-scope resources/read %s, body=%s", uri, rr.Body.String())
+		}
+		if _, hasResult := env["result"]; hasResult {
+			t.Fatalf("resources/read %s must not return host/duty payload for knowledge token: %s", uri, rr.Body.String())
+		}
+	}
+
+	// Metrics-scoped token may read overview (list_hosts) but not duty.
+	s = newMCPTestServer(t, AIConfig{
+		MCPEnabled:          true,
+		MCPToken:            "primary-token",
+		MCPScopedTokensJSON: `[{"name":"metrics","token":"metrics-only-token","scopes":["metrics"]}]`,
+	})
+	rr = mcpPOST(t, s, "metrics-only-token",
+		`{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"aiops://overview"}}`, "")
+	var okEnv map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &okEnv); err != nil || okEnv["error"] != nil || okEnv["result"] == nil {
+		t.Fatalf("metrics scope should read overview: %v body=%s", err, rr.Body.String())
+	}
+	rr = mcpPOST(t, s, "metrics-only-token",
+		`{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"aiops://duty"}}`, "")
+	var denyEnv map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &denyEnv)
+	if denyEnv["error"] == nil {
+		t.Fatalf("metrics scope must not read duty: %s", rr.Body.String())
+	}
+}
