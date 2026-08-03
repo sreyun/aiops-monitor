@@ -616,6 +616,48 @@ UNIT
   # reinstall, and guarantees the newly written binary is the one that runs.
   systemctl restart aiops-agent
   echo "[AIOps] systemd service restarted: aiops-agent (user=$AIOPS_USER, boot autostart + auto-restart)"
+  # Verify effective sandbox props — drop-ins / vendor fragments can re-lock /etc.
+  _eff_user=$(systemctl show aiops-agent -p User --value 2>/dev/null || true)
+  _eff_ps=$(systemctl show aiops-agent -p ProtectSystem --value 2>/dev/null || true)
+  _eff_ph=$(systemctl show aiops-agent -p ProtectHome --value 2>/dev/null || true)
+  echo "[AIOps] effective unit: User=${_eff_user:-?} ProtectSystem=${_eff_ps:-?} ProtectHome=${_eff_ph:-?}"
+  if [ "$AIOPS_USER" = "root" ]; then
+    _need_unlock=0
+    case "${_eff_ps}" in yes|true|strict|full) _need_unlock=1 ;; esac
+    case "${_eff_ph}" in yes|true|read-only) _need_unlock=1 ;; esac
+    if [ "$_need_unlock" = "1" ]; then
+      echo "[AIOps] WARNING: sandbox still active after install (ProtectSystem=${_eff_ps} ProtectHome=${_eff_ph}); purging drop-ins and rewriting unit."
+      aiops_purge_systemd_unit aiops-agent
+      cat > /etc/systemd/system/aiops-agent.service <<UNIT
+[Unit]
+Description=AIOps Agent
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=$DIR
+Environment=SHELL=$TERM_SHELL
+Environment=HOME=$TERM_HOME
+Environment=USER=root
+Environment=LOGNAME=root
+ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
+Restart=always
+RestartSec=5
+$UNIT_CAPS
+ProtectHome=false
+ProtectSystem=false
+PrivateTmp=false
+NoNewPrivileges=false
+[Install]
+WantedBy=multi-user.target
+UNIT
+      systemctl daemon-reload
+      systemctl enable aiops-agent >/dev/null 2>&1 || true
+      systemctl restart aiops-agent
+    fi
+  fi
   # 麒麟/UOS 系统自动检测并配置 kysec 白名单
   # POSIX redirects only — Debian/dash rejects bashism &>/dev/null.
   if command -v kysec_adm >/dev/null 2>&1; then

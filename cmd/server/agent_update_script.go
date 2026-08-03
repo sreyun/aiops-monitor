@@ -151,46 +151,62 @@ func legacyWindowsAgentUpdateScript(server, bin string) string {
 	ps := fmt.Sprintf(`$ErrorActionPreference='Stop'
 try{[Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor 3072}catch{}
 $Server='%s'; $Bin='%s'
-$cands=@((Join-Path $env:ProgramFiles 'AIOps Agent'),(Join-Path $env:LOCALAPPDATA 'aiops-agent'),(Join-Path $env:ProgramData 'aiops-agent'),(Join-Path $env:ProgramData 'AIOps Agent'))
-$Dir=$null
-foreach($d in $cands){ if(Test-Path (Join-Path $d 'aiops-agent.exe')){ $Dir=$d; break } }
-if(-not $Dir){ throw 'agent exe not found' }
-$Exe=Join-Path $Dir 'aiops-agent.exe'
+$exeNames=@('aiops-agent.exe','aiops-agent-windows-amd64.exe','aiops-agent-windows-arm64.exe','aiops-agent-windows-amd64-win2012.exe')
+$cands=@((Join-Path $env:ProgramFiles 'AIOps Agent'),(Join-Path ${env:ProgramFiles(x86)} 'AIOps Agent'),(Join-Path $env:LOCALAPPDATA 'aiops-agent'),(Join-Path $env:ProgramData 'aiops-agent'),(Join-Path $env:ProgramData 'AIOps Agent'))
+$Dir=$null; $Exe=$null
+foreach($d in $cands){
+  foreach($n in $exeNames){ $p=Join-Path $d $n; if(Test-Path -LiteralPath $p){ $Dir=$d; $Exe=$p; break } }
+  if($Exe){ break }
+}
+if(-not $Exe){ throw 'agent exe not found' }
 $New=Join-Path $Dir '.aiops-agent.new.exe'
 $Cfg=$null
-foreach($n in @('config.yaml','config.yml','config.json')){ $c=Join-Path $Dir $n; if(Test-Path $c){ $Cfg=$c; break } }
+foreach($n in @('config.yaml','config.yml','config.json')){ $c=Join-Path $Dir $n; if(Test-Path -LiteralPath $c){ $Cfg=$c; break } }
 Invoke-WebRequest "$Server/dl/$Bin" -OutFile $New -UseBasicParsing
 $Expected=((Invoke-WebRequest "$Server/dl/$Bin.sha256" -UseBasicParsing).Content -split '\s+')[0].Trim().ToLowerInvariant()
 $Sha=[Security.Cryptography.SHA256]::Create(); $Stream=[IO.File]::OpenRead($New)
 try{ $Actual=([BitConverter]::ToString($Sha.ComputeHash($Stream))).Replace('-','').ToLowerInvariant() } finally { $Stream.Dispose(); $Sha.Dispose() }
 if(-not $Expected -or $Expected -ne $Actual){ Remove-Item $New -Force; throw 'SHA-256 mismatch' }
+try{ $probe=& $New --version 2>&1 | Out-String; if(-not $probe){ throw 'empty --version' } }catch{ Remove-Item $New -Force -ErrorAction SilentlyContinue; throw ("staging not runnable: "+$_.Exception.Message) }
 $procNames=@('aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64','aiops-agent-windows-amd64-win2012')
 $svcNames=@('AiopsMonitorAgent','AIOps-Agent','AIOpsAgent')
-foreach($name in $svcNames){ Get-Service $name -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue }
+foreach($name in $svcNames){
+  try{ & "$env:SystemRoot\System32\sc.exe" stop $name 2>$null | Out-Null }catch{}
+  Get-Service $name -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+}
 Get-Process -Name $procNames -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 800
-if(Test-Path $Exe){ Copy-Item $Exe ($Exe+'.bak') -Force -ErrorAction SilentlyContinue }
-Move-Item $New $Exe -Force
-try{ Unblock-File $Exe -ErrorAction SilentlyContinue }catch{}
+Start-Sleep -Seconds 1
+Get-Process -Name $procNames -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+if(Test-Path -LiteralPath $Exe){ Copy-Item -LiteralPath $Exe -Destination ($Exe+'.bak') -Force -ErrorAction SilentlyContinue }
+$moved=$false
+for($i=0;$i -lt 12;$i++){
+  try{ Move-Item -Force -LiteralPath $New -Destination $Exe; $moved=$true; break }catch{
+    try{ Copy-Item -Force -LiteralPath $New -Destination $Exe; Remove-Item -Force -LiteralPath $New -ErrorAction SilentlyContinue; $moved=$true; break }catch{}
+    Start-Sleep -Seconds 1
+    Get-Process -Name $procNames -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  }
+}
+if(-not $moved){ throw 'replace binary failed (file lock)' }
+try{ Unblock-File -Path $Exe -ErrorAction SilentlyContinue }catch{}
 function Test-Running { if(Get-Process -Name $procNames -ErrorAction SilentlyContinue){ return $true }; foreach($n in $svcNames){ $s=Get-Service $n -ErrorAction SilentlyContinue; if($s -and $s.Status -eq 'Running'){ return $true } }; return $false }
 $ok=$false
 $hasSvc=$false
 foreach($n in $svcNames){ if(Get-Service $n -ErrorAction SilentlyContinue){ $hasSvc=$true; break } }
 if($hasSvc -and $Cfg){
   $p=Start-Process -FilePath $Exe -ArgumentList @('--install-service','--config',$Cfg) -WorkingDirectory $Dir -Wait -PassThru -WindowStyle Hidden
-  if($p.ExitCode -eq 0){ $ok=$true }
-  if(-not $ok){ foreach($n in $svcNames){ $svc=Get-Service $n -ErrorAction SilentlyContinue; if($svc){ try{ Start-Service $n; $ok=$true; break }catch{} } } }
+  if($p -and $p.ExitCode -eq 0){ $ok=$true }
+  if(-not $ok){ foreach($n in $svcNames){ $svc=Get-Service $n -ErrorAction SilentlyContinue; if($svc){ try{ Start-Service $n; Start-Sleep 2; if(Test-Running){ $ok=$true; break } }catch{} } } }
 }
 if(-not $ok){
   $vbs=Join-Path $Dir 'start-agent.vbs'
-  if(Test-Path $vbs){ Start-Process wscript.exe -ArgumentList ('"'+$vbs+'"') -WorkingDirectory $Dir -WindowStyle Hidden }
+  if(Test-Path -LiteralPath $vbs){ Start-Process wscript.exe -ArgumentList ('"'+$vbs+'"') -WorkingDirectory $Dir -WindowStyle Hidden }
   else {
-    foreach($tn in @('AIOpsAgent','AIOpsAgentKeepalive')){ try{ schtasks /Run /TN $tn 2>$null | Out-Null }catch{} }
+    foreach($tn in @('AIOpsAgent','AIOpsAgentKeepalive','AIOps Agent')){ try{ & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $tn 2>$null | Out-Null }catch{} }
     if($Cfg){ Start-Process -FilePath $Exe -ArgumentList @('--config',$Cfg) -WorkingDirectory $Dir -WindowStyle Hidden }
     else { throw 'restart failed: no service and no config.yaml beside agent' }
   }
 }
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 4
 if(-not (Test-Running)){ throw 'agent not running after update' }
 Write-Output ('legacy agent update ok sha='+$Actual)
 `,

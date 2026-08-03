@@ -63,19 +63,25 @@ func newPTY(cols, rows int) termShell {
 	dir := interactiveShellDir()
 	// Prefer login+interactive; fall back to interactive-only when -l is rejected
 	// (some busybox ash builds) so the remote terminal still comes up.
+	// On Linux root: wrap with nsenter into PID 1 mount ns so systemd
+	// ProtectSystem cannot leave /etc read-only for the interactive shell.
 	var cmd *exec.Cmd
-	for _, args := range [][]string{{"-l", "-i"}, {"-i"}, {}} {
-		c := exec.Command(sh, args...)
+	for _, shArgs := range [][]string{{"-l", "-i"}, {"-i"}, {}} {
+		name, args, viaNs := linuxInteractiveShellInvocation(sh, shArgs, dir)
+		c := exec.Command(name, args...)
 		c.Stdin, c.Stdout, c.Stderr = slave, slave, slave
 		c.Env = env
-		c.Dir = dir
+		// When nsenter --wd= is set, Dir is unused by the child cwd; keep for non-nsenter.
+		if !viaNs {
+			c.Dir = dir
+		}
 		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 		if err := c.Start(); err != nil {
-			slog.Warn("PTY shell 启动失败，尝试降级参数", "err", err, "shell", sh, "args", args, "dir", dir)
+			slog.Warn("PTY shell 启动失败，尝试降级参数", "err", err, "bin", name, "args", args, "dir", dir, "nsenter", viaNs)
 			continue
 		}
 		cmd = c
-		slog.Info("PTY shell 已启动", "shell", sh, "args", args, "pid", c.Process.Pid, "dir", dir)
+		slog.Info("PTY shell 已启动", "bin", name, "shell", sh, "args", shArgs, "pid", c.Process.Pid, "dir", dir, "nsenter", viaNs)
 		break
 	}
 	if cmd == nil {

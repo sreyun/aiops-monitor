@@ -431,7 +431,7 @@ func main() {
 	}
 	// Linux: rewrite legacy sandboxed / non-root units so remote terminal can
 	// write /etc and $HOME (vim E45 / ProtectHome). No-op on other platforms.
-	ensureLinuxAgentUnitPrivileges()
+	ensureLinuxAgentUnitPrivileges(cfgPath)
 	agent := NewAgent(
 		servers,
 		time.Duration(cfg.ReportInterval)*time.Second,

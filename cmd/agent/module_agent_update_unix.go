@@ -42,6 +42,10 @@ func scheduleAgentRestart(exe, cfgPath string) error {
 	switch runtime.GOOS {
 	case "linux":
 		unit := detectLinuxAgentUnit()
+		// Critical: the agent (and this helper, if spawned without nsenter) may run
+		// inside a systemd ProtectSystem mount namespace where /etc is read-only.
+		// Fresh curl|bash install works because it runs outside that ns; auto-upgrade
+		// must nsenter into PID 1 before --install-service / unit rewrite.
 		script := fmt.Sprintf(`
 sleep 2
 EXE=%s
@@ -49,19 +53,74 @@ DIR=%s
 CFG=%s
 UNIT=%s
 RESTARTED=0
-# Rewrite unit to User=root + unlocked Protect* whenever we can (root or passwordless sudo).
+
+# Run a command in the host mount namespace when possible (escape ProtectSystem).
+host_run() {
+  if [ "$(id -u)" -eq 0 ] && command -v nsenter >/dev/null 2>&1 && [ -e /proc/1/ns/mnt ]; then
+    nsenter -t 1 -m -u -i -n -- "$@"
+  else
+    "$@"
+  fi
+}
+
+# Shared body: unlock units (must execute inside host mount ns).
+UNLOCK_SH='for u in aiops-agent aiops-monitor-agent; do
+  for base in /etc/systemd/system /run/systemd/system /lib/systemd/system /usr/lib/systemd/system; do
+    rm -rf "$base/${u}.service.d" 2>/dev/null || true
+  done
+  f="/etc/systemd/system/${u}.service"
+  [ -f "$f" ] || continue
+  sed -i \
+    -e "s/^User=.*/User=root/" \
+    -e "s/^Group=.*/Group=root/" \
+    -e "s/^ProtectHome=.*/ProtectHome=false/" \
+    -e "s/^ProtectSystem=.*/ProtectSystem=false/" \
+    -e "s/^PrivateTmp=.*/PrivateTmp=false/" \
+    -e "s/^NoNewPrivileges=.*/NoNewPrivileges=false/" \
+    -e "s|^Environment=HOME=.*|Environment=HOME=/root|" \
+    -e "s|^Environment=USER=.*|Environment=USER=root|" \
+    -e "s|^Environment=LOGNAME=.*|Environment=LOGNAME=root|" \
+    -e "/^CapabilityBoundingSet=/d" \
+    -e "/^ReadWritePaths=/d" \
+    -e "/^ReadOnlyPaths=/d" \
+    -e "/^InaccessiblePaths=/d" \
+    -e "/^TemporaryFileSystem=/d" \
+    "$f" 2>/dev/null || true
+  grep -q "^User=root" "$f" 2>/dev/null || echo "User=root" >> "$f"
+  grep -q "^ProtectHome=false" "$f" 2>/dev/null || echo "ProtectHome=false" >> "$f"
+  grep -q "^ProtectSystem=false" "$f" 2>/dev/null || echo "ProtectSystem=false" >> "$f"
+  grep -q "^PrivateTmp=false" "$f" 2>/dev/null || echo "PrivateTmp=false" >> "$f"
+  grep -q "^NoNewPrivileges=false" "$f" 2>/dev/null || echo "NoNewPrivileges=false" >> "$f"
+done
+systemctl daemon-reload 2>/dev/null || true'
+
+# 1) Prefer full --install-service from host ns (same as fresh reinstall).
 if [ -n "$CFG" ] && [ -f "$CFG" ]; then
   if [ "$(id -u)" -eq 0 ]; then
-    if "$EXE" --install-service --config "$CFG" >/dev/null 2>&1; then RESTARTED=1; fi
+    if host_run "$EXE" --install-service --config "$CFG" >/tmp/aiops-agent-update-install.log 2>&1; then
+      RESTARTED=1
+    fi
   elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    if sudo -n "$EXE" --install-service --config "$CFG" >/dev/null 2>&1; then RESTARTED=1; fi
+    if sudo -n nsenter -t 1 -m -u -i -n -- "$EXE" --install-service --config "$CFG" >/tmp/aiops-agent-update-install.log 2>&1 \
+       || sudo -n "$EXE" --install-service --config "$CFG" >/tmp/aiops-agent-update-install.log 2>&1; then
+      RESTARTED=1
+    fi
   fi
 fi
+
+# 2) Fallback: unlock unit in host ns, then systemctl restart (keeps unit name).
 if [ "$RESTARTED" -eq 0 ]; then
+  if [ "$(id -u)" -eq 0 ]; then
+    host_run sh -c "$UNLOCK_SH"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n nsenter -t 1 -m -- sh -c "$UNLOCK_SH" 2>/dev/null \
+      || sudo -n sh -c "$UNLOCK_SH" 2>/dev/null || true
+  fi
   if systemctl restart "$UNIT" 2>/dev/null || systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null; then
     RESTARTED=1
   fi
 fi
+
 if [ "$RESTARTED" -eq 0 ]; then
   if [ -z "$CFG" ]; then
     for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; do
@@ -71,7 +130,6 @@ if [ "$RESTARTED" -eq 0 ]; then
   pkill -x aiops-agent 2>/dev/null || pkill -f '[/]aiops-agent( |$)' 2>/dev/null || true
   sleep 1
   if [ -n "$CFG" ]; then
-    # Non-service fallback keeps config; desktop worker may be unavailable.
     nohup "$EXE" --config "$CFG" >/dev/null 2>&1 &
   else
     nohup "$EXE" >/dev/null 2>&1 &

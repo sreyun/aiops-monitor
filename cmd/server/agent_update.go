@@ -16,7 +16,7 @@ const (
 	agentUpdateMaxRetries  = 2
 	// Cooldown after enqueue so success-before-version-ack cannot storm.
 	agentUpdateInFlightSec  = 1800 // hard cooldown after enqueue
-	agentUpdateSoftRetrySec = 180 // wait for Windows helper / version ack before soft re-queue
+	agentUpdateSoftRetrySec = 90  // Windows helper often needs a second push if Job killed the first
 )
 
 type agentUpdateHostResult struct {
@@ -689,9 +689,19 @@ func shouldLegacyAgentUpdateFallback(out string, err error) bool {
 		return true
 	}
 	low := strings.ToLower(combined)
-	// Windows: helper failed to spawn (PATH / powershell missing) — try install-style script.
-	if strings.Contains(low, "start helper") || strings.Contains(low, "executable file not found") {
-		return true
+	// Windows: helper/task failed to spawn — try install-style encoded script.
+	for _, needle := range []string{
+		"start helper",
+		"start update helper",
+		"executable file not found",
+		"schtasks/breakaway/cmd all failed",
+		"write helper",
+		"access is denied",
+		"拒绝访问",
+	} {
+		if strings.Contains(low, needle) {
+			return true
+		}
 	}
 	if strings.Contains(out, "agent_update:") {
 		return false
@@ -813,8 +823,8 @@ func (s *Server) maybeAutoUpdateHost(hostID string) {
 	if ok, _ := s.remoteGateCheck(h.ID, "auto-update", false, false); !ok {
 		return
 	}
-	// Soft-retry: if still behind after ~60s, re-queue (Windows helper often
-	// reported "restart scheduled" while powershell/PATH/wrong-PE left the host on the old build).
+	// Soft-retry: if still behind after softRetrySec, re-queue (Windows helper
+	// historically died with the service Job before swap completed).
 	if !s.agentUpdates.tryMarkInFlightOrSoftRetry(h.ID, true) {
 		return
 	}

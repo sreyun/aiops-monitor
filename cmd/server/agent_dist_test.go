@@ -136,6 +136,9 @@ func TestShouldLegacyAgentUpdateFallback(t *testing.T) {
 	if !shouldLegacyAgentUpdateFallback("agent_update: start helper (C:\\Windows\\...\\powershell.exe): executable file not found in %PATH%", nil) {
 		t.Fatal("helper spawn failure should fallback to legacy script")
 	}
+	if !shouldLegacyAgentUpdateFallback("agent_update: start update helper: schtasks/breakaway/cmd all failed: x / y", nil) {
+		t.Fatal("breakaway failure should fallback")
+	}
 }
 
 func minInt(a, b int) int {

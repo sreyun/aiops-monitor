@@ -12,7 +12,9 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 		`C:\Program Files\AIOps Agent\aiops-agent.exe`,
 		`C:\Program Files\AIOps Agent\.aiops-agent.new.exe`,
 		`C:\Program Files\AIOps Agent\config.yaml`,
-		`C:\Program Files\AIOps Agent\aiops-agent-update.log`,
+		`C:\Users\Public\aiops-agent-update.log`,
+		`C:\Program Files\AIOps Agent\aiops-agent-update.result`,
+		`C:\Users\Public\aiops-agent-update.result`,
 	)
 	for _, want := range []string{
 		"--install-service",
@@ -24,6 +26,9 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 		"start-agent.vbs",
 		"schtasks.exe",
 		"hasService=",
+		"AIOpsAgentSelfUpdate",
+		"helper start pid=",
+		"sc.exe",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("helper script missing %q", want)
@@ -57,5 +62,18 @@ func TestBuildWindowsUpdateHelperScriptPrefersServiceConfig(t *testing.T) {
 	}
 	if !strings.Contains(script, "aiops-agent-windows-amd64-win2012") {
 		t.Fatal("helper must stop/check Win2012 process name")
+	}
+	// Must not kill the update helper itself when stopping agent processes.
+	if !strings.Contains(script, "aiops-agent-update-helper") {
+		t.Fatal("helper must exclude update-helper from process kill list")
+	}
+}
+
+func TestQuoteWinArg(t *testing.T) {
+	if quoteWinArg(`C:\a b\c.exe`) != `"C:\a b\c.exe"` {
+		t.Fatal(quoteWinArg(`C:\a b\c.exe`))
+	}
+	if quoteWinArg(`simple`) != `simple` {
+		t.Fatal(quoteWinArg(`simple`))
 	}
 }

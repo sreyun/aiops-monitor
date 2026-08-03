@@ -9,46 +9,179 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+)
+
+const (
+	// CREATE_BREAKAWAY_FROM_JOB — critical: SCM / service Job Objects kill
+	// children when the service stops. Without breakaway the update helper dies
+	// with the agent and the binary never swaps (classic "Windows no auto-update").
+	// createNoWindow / createBreakawayJob also declared in desktop_session_windows.go.
+	detachedProcess       = 0x00000008
+	createNewProcessGroup = 0x00000200
 )
 
 // agentReplaceAndRestart cannot overwrite a running Windows PE. Stage stays as
-// .new; a detached PowerShell helper stops the service/process, swaps files,
-// and brings the agent back via --install-service (or user-mode VBS/schtasks /
-// Start-Process --config). Never bare Start-Process without --config.
+// .new; a detached helper (prefer SYSTEM scheduled task, else breakaway process)
+// stops the service/process, swaps files, and brings the agent back via
+// --install-service or user-mode VBS/schtasks/--config.
 func agentReplaceAndRestart(exe, staging, cfgPath string) error {
 	ensureWindowsProcessPath()
 	dir := filepath.Dir(exe)
-	helper := filepath.Join(dir, "aiops-agent-update-helper.ps1")
-	logPath := filepath.Join(dir, "aiops-agent-update.log")
 	if strings.TrimSpace(cfgPath) == "" {
 		cfgPath = resolveAgentConfigBesideExe(dir)
 	}
-	script := buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath)
+
+	// Always stage helper + log under a writable directory. Program Files may
+	// deny write for per-user installs; service TEMP is always writable.
+	workDir := filepath.Join(os.TempDir(), "aiops-agent-update")
+	_ = os.MkdirAll(workDir, 0o755)
+	helper := filepath.Join(workDir, "aiops-agent-update-helper.ps1")
+	logPath := filepath.Join(workDir, "aiops-agent-update.log")
+	resultPath := filepath.Join(dir, "aiops-agent-update.result")
+	// Also keep a copy of the result path under workDir when dir is not writable.
+	altResult := filepath.Join(workDir, "aiops-agent-update.result")
+
+	script := buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath, resultPath, altResult)
 	if err := os.WriteFile(helper, []byte(script), 0o644); err != nil {
-		// Program Files can be momentarily locked; fall back to %TEMP%.
-		helper = filepath.Join(os.TempDir(), "aiops-agent-update-helper.ps1")
-		logPath = filepath.Join(os.TempDir(), "aiops-agent-update.log")
-		script = buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath)
-		if err2 := os.WriteFile(helper, []byte(script), 0o644); err2 != nil {
-			return fmt.Errorf("write helper: %v / %v", err, err2)
+		return fmt.Errorf("write helper: %w", err)
+	}
+	// Best-effort mirror beside the exe for operators inspecting the install dir.
+	_ = os.WriteFile(filepath.Join(dir, "aiops-agent-update-helper.ps1"), []byte(script), 0o644)
+
+	ps := windowsPowerShellPath()
+	psArgs := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper}
+
+	// 1) Preferred: one-shot scheduled task as SYSTEM — survives service stop even
+	// when Job Objects / session 0 quirks kill ordinary children.
+	if err := scheduleWindowsUpdateTask(ps, psArgs); err == nil {
+		_ = os.WriteFile(altResult, []byte("scheduled "+time.Now().Format(time.RFC3339)), 0o644)
+		return nil
+	}
+
+	// 2) Breakaway detached process (CREATE_BREAKAWAY_FROM_JOB).
+	if err := startWindowsBreakaway(ps, psArgs, workDir); err != nil {
+		// 3) Last resort: cmd start /b (new process tree).
+		if err2 := startWindowsCmdStart(ps, helper, workDir); err2 != nil {
+			return fmt.Errorf("start update helper: schtasks/breakaway/cmd all failed: %v / %v", err, err2)
 		}
 	}
-	ps := windowsPowerShellPath()
-	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper)
+
+	// Confirm the helper actually started (common silent failure: PATH / Job kill).
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if windowsUpdateHelperAlive(logPath, altResult, resultPath) {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// Still return nil if process start succeeded — helper may log slowly.
+	// Callers treat "restart scheduled" as pending_verify.
+	return nil
+}
+
+func windowsUpdateHelperAlive(paths ...string) bool {
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+			return true
+		}
+	}
+	// Look for powershell running our helper file name.
+	out, err := exec.Command(windowsPowerShellPath(), "-NoProfile", "-NonInteractive", "-Command",
+		`Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'aiops-agent-update-helper\.ps1' } | Select-Object -First 1 -ExpandProperty ProcessId`).CombinedOutput()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		return true
+	}
+	return false
+}
+
+func scheduleWindowsUpdateTask(ps string, psArgs []string) error {
+	// Prefer Register-ScheduledTask (locale-safe dates) over schtasks /SD.
+	// SYSTEM + Highest when elevated; fall back to current-user task.
+	argLine := make([]string, 0, len(psArgs))
+	for _, a := range psArgs {
+		argLine = append(argLine, quoteWinArg(a))
+	}
+	arguments := strings.Join(argLine, " ")
+	task := "AIOpsAgentSelfUpdate"
+	psSchedule := fmt.Sprintf(`
+$ErrorActionPreference='Stop'
+$task='%s'
+$exe='%s'
+$arg='%s'
+Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+$action = New-ScheduledTaskAction -Execute $exe -Argument $arg
+$trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(4))
+$ok = $false
+try {
+  $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Principal $prin -Force | Out-Null
+  $ok = $true
+} catch {
+  try {
+    Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Force | Out-Null
+    $ok = $true
+  } catch {
+    throw $_
+  }
+}
+if ($ok) {
+  Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+  # Also nudge via schtasks /Run for older hosts where Start-ScheduledTask is flaky.
+  & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $task 2>$null | Out-Null
+}
+`, psSingleQuote(task), psSingleQuote(ps), psSingleQuote(arguments))
+
+	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psSchedule)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("schedule task: %v (%s)", err, truncBytes(out, 300))
+	}
+	return nil
+}
+
+func quoteWinArg(s string) string {
+	if s == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(s, " \t\"") {
+		return s
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+}
+
+func startWindowsBreakaway(ps string, args []string, dir string) error {
+	cmd := exec.Command(ps, args...)
 	cmd.Dir = dir
 	cmd.Env = enrichWindowsShellEnv(os.Environ())
-	// DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP so the helper survives service stop.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x00000008 | 0x00000200,
+		CreationFlags: createBreakawayJob | detachedProcess | createNewProcessGroup | createNoWindow,
 		HideWindow:    true,
 	}
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start helper (%s): %w", ps, err)
+		return fmt.Errorf("breakaway start (%s): %w", ps, err)
 	}
+	// Detach from Go's wait; process continues independently.
+	go func() { _ = cmd.Process.Release() }()
 	return nil
+}
+
+func startWindowsCmdStart(ps, helper, dir string) error {
+	cmdExe := windowsCmdPath()
+	// start "" /b launches a new process not tied to our console/job as tightly.
+	line := fmt.Sprintf(`start "" /b "%s" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%s"`, ps, helper)
+	cmd := exec.Command(cmdExe, "/c", line)
+	cmd.Dir = dir
+	cmd.Env = enrichWindowsShellEnv(os.Environ())
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: createBreakawayJob | createNewProcessGroup | createNoWindow,
+		HideWindow:    true,
+	}
+	return cmd.Start()
 }
 
 // windowsPowerShellPath returns an absolute powershell.exe path. LocalSystem
@@ -75,10 +208,19 @@ func windowsPowerShellPath() string {
 }
 
 // buildWindowsUpdateHelperScript is split out for unit tests.
-func buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath string) string {
+func buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath, resultPath, altResult string) string {
 	return fmt.Sprintf(`$ErrorActionPreference='Stop'
 $log = '%s'
+$resultPath = '%s'
+$altResult = '%s'
+$helperPid = $PID
 function Write-Log($m){ try{ Add-Content -LiteralPath $log -Value ("[{0}] {1}" -f (Get-Date -Format o), $m) -Encoding UTF8 }catch{} }
+function Write-Result($m){
+  foreach ($p in @($resultPath, $altResult)) {
+    if (-not $p) { continue }
+    try { Set-Content -LiteralPath $p -Value $m -Encoding UTF8 } catch {}
+  }
+}
 function Wait-ServiceState([string]$Name, [string]$Want, [int]$Seconds) {
   for ($i=0; $i -lt $Seconds; $i++) {
     $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
@@ -98,10 +240,13 @@ function Test-AgentServicePresent {
 }
 function Stop-AgentProcesses {
   $names = @('aiops-agent','aiops-agent-windows-amd64','aiops-agent-windows-arm64','aiops-agent-windows-amd64-win2012')
-  Get-Process -Name $names -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  # Also kill by path when renamed oddly.
+  Get-Process -Name $names -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $helperPid } | Stop-Process -Force -ErrorAction SilentlyContinue
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '^aiops-agent' -or ($_.ExecutablePath -and $_.ExecutablePath -match 'aiops-agent') } |
+    Where-Object {
+      $_.ProcessId -ne $helperPid -and (
+        $_.Name -match '^aiops-agent' -or ($_.ExecutablePath -and $_.ExecutablePath -match 'aiops-agent')
+      ) -and (-not ($_.CommandLine -and $_.CommandLine -match 'aiops-agent-update-helper'))
+    } |
     ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
 }
 function Test-AgentRunning {
@@ -119,19 +264,18 @@ function Restart-AgentUserMode {
     Write-Log 'FATAL: no config beside exe; refusing bare Start-Process'
     return $false
   }
-  # Match one-liner install: VBS supervisor + logon task + keepalive task.
   $vbs = Join-Path $Dir 'start-agent.vbs'
   if (Test-Path -LiteralPath $vbs) {
     Write-Log 'user-mode: start-agent.vbs'
     Start-Process -FilePath "$env:SystemRoot\System32\wscript.exe" -ArgumentList (@('"'+$vbs+'"')) -WorkingDirectory $Dir -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 4
     if (Test-AgentRunning) { Write-Log 'user-mode VBS ok'; return $true }
   }
   foreach ($tn in @('AIOpsAgent','AIOpsAgentKeepalive','AIOps Agent')) {
     try {
       $out = & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $tn 2>&1 | Out-String
       Write-Log ("schtasks /Run $tn: " + $out.Trim())
-      Start-Sleep -Seconds 3
+      Start-Sleep -Seconds 4
       if (Test-AgentRunning) { Write-Log ("user-mode schtasks ok: " + $tn); return $true }
     } catch {
       Write-Log ("schtasks $tn: " + $_.Exception.Message)
@@ -139,20 +283,19 @@ function Restart-AgentUserMode {
   }
   Write-Log ('user-mode Start-Process --config ' + $Cfg)
   Start-Process -FilePath $Exe -ArgumentList @('--config', $Cfg) -WorkingDirectory $Dir -WindowStyle Hidden
-  Start-Sleep -Seconds 3
+  Start-Sleep -Seconds 4
   return (Test-AgentRunning)
 }
 function Restart-AgentService {
   param([string]$Exe,[string]$Cfg,[string]$Dir)
   $hasSvc = Test-AgentServicePresent
   Write-Log ("restart path hasService=$hasSvc cfg=$Cfg")
-  # Service installs: refresh SCM ImagePath then start. Needs admin (LocalSystem ok).
   if ($hasSvc -and $Cfg -and (Test-Path -LiteralPath $Cfg)) {
     Write-Log ("install-service with config: " + $Cfg)
     $p = Start-Process -FilePath $Exe -ArgumentList @('--install-service','--config', $Cfg) -WorkingDirectory $Dir -Wait -PassThru -WindowStyle Hidden
     if ($p -and $p.ExitCode -eq 0) {
       foreach ($name in (Get-AgentServiceNames)) {
-        if (Wait-ServiceState $name 'Running' 30) {
+        if (Wait-ServiceState $name 'Running' 45) {
           Write-Log ("service running: " + $name)
           try { Write-Log ("post-restart version: " + (& $Exe --version 2>$null)) } catch {}
           return $true
@@ -165,27 +308,28 @@ function Restart-AgentService {
     foreach ($name in (Get-AgentServiceNames)) {
       $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
       if (-not $svc) { continue }
-      try { Start-Service -Name $name -ErrorAction Stop } catch {
+      try {
+        & "$env:SystemRoot\System32\sc.exe" start $name 2>$null | Out-Null
+        Start-Service -Name $name -ErrorAction SilentlyContinue
+      } catch {
         Write-Log ("Start-Service $name failed: " + $_.Exception.Message)
         continue
       }
-      if (Wait-ServiceState $name 'Running' 30) { Write-Log ("Start-Service ok: " + $name); return $true }
+      if (Wait-ServiceState $name 'Running' 45) { Write-Log ("Start-Service ok: " + $name); return $true }
     }
   }
-  # Per-user / VBS installs (majority of Windows one-liner hosts): never require
-  # --install-service (needs elevation and fails silently for non-admin).
   return (Restart-AgentUserMode -Exe $Exe -Cfg $Cfg -Dir $Dir)
 }
 try {
-  Start-Sleep -Seconds 2
+  Write-Log ("helper start pid=$helperPid")
+  Write-Result ("running " + (Get-Date -Format o))
+  # Let the module HTTP response finish before we stop the agent service.
+  Start-Sleep -Seconds 3
   $exe = '%s'
   $new = '%s'
   $cfg = '%s'
   $dir = Split-Path -Parent $exe
   $bak = $exe + '.bak'
-  # Only restore .bak after a successful swap. Restoring on any pre-swap
-  # failure (stale leftover .bak, Copy-Item refresh fail, Move-Item fail)
-  # would silently downgrade a still-good current PE.
   $swapped = $false
   if (-not (Test-Path -LiteralPath $new)) { throw "staging missing: $new" }
   if (-not $cfg) {
@@ -204,20 +348,25 @@ try {
   foreach ($name in (Get-AgentServiceNames)) {
     $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
     if ($svc) {
-      try { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue } catch {}
-      [void](Wait-ServiceState $name 'Stopped' 25)
+      try {
+        & "$env:SystemRoot\System32\sc.exe" stop $name 2>$null | Out-Null
+        Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+      } catch {}
+      [void](Wait-ServiceState $name 'Stopped' 40)
     }
   }
   Stop-AgentProcesses
-  Start-Sleep -Milliseconds 800
+  Start-Sleep -Milliseconds 1000
+  # Second pass — service recovery may have respawned the old PE.
+  Stop-AgentProcesses
+  Start-Sleep -Milliseconds 500
   if (Test-Path -LiteralPath $exe) {
     try { Copy-Item -Force -LiteralPath $exe -Destination $bak } catch {
       Write-Log ("backup Copy-Item warning: " + $_.Exception.Message)
     }
   }
-  # Retry Move-Item — AV / indexer can briefly lock the PE. Fall back to copy+delete.
   $moved = $false
-  for ($i=0; $i -lt 10; $i++) {
+  for ($i=0; $i -lt 15; $i++) {
     try {
       Move-Item -Force -LiteralPath $new -Destination $exe
       $moved = $true
@@ -243,21 +392,18 @@ try {
   if (-not (Restart-AgentService -Exe $exe -Cfg $cfg -Dir $dir)) {
     throw 'agent failed to restart after binary replace'
   }
-  Write-Log 'update ok'
-  try {
-    Set-Content -LiteralPath (Join-Path $dir 'aiops-agent-update.result') -Value ("ok " + (Get-Date -Format o)) -Encoding UTF8
-  } catch {}
+  $ver = ''
+  try { $ver = (& $exe --version 2>$null | Out-String).Trim() } catch {}
+  Write-Log ("update ok version=$ver")
+  Write-Result ("ok " + (Get-Date -Format o) + " version=" + $ver)
 } catch {
   Write-Log ("update failed: " + $_.Exception.Message)
-  try {
-    Set-Content -LiteralPath (Join-Path (Split-Path -Parent '%s') 'aiops-agent-update.result') -Value ("fail " + $_.Exception.Message) -Encoding UTF8
-  } catch {}
+  Write-Result ("fail " + $_.Exception.Message)
   try {
     $exe = '%s'
     $cfg = '%s'
     $dir = Split-Path -Parent $exe
     $bak = $exe + '.bak'
-    # Restore only when this run swapped (new PE may be broken) or exe is gone.
     if ((Test-Path -LiteralPath $bak) -and ($swapped -or -not (Test-Path -LiteralPath $exe))) {
       Write-Log ("restoring backup (swapped=$swapped)")
       Copy-Item -Force -LiteralPath $bak -Destination $exe
@@ -268,9 +414,19 @@ try {
   } catch {}
   exit 1
 } finally {
-  Remove-Item -Force -ErrorAction SilentlyContinue $PSCommandPath
+  # Keep helper script for a while on failure (operators read TEMP); delete on success.
+  try {
+    if (Test-Path -LiteralPath $altResult) {
+      $t = Get-Content -LiteralPath $altResult -Raw -ErrorAction SilentlyContinue
+      if ($t -match '^ok ') { Remove-Item -Force -ErrorAction SilentlyContinue $PSCommandPath }
+    }
+  } catch {}
+  # Cleanup one-shot task (best-effort).
+  try { & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN 'AIOpsAgentSelfUpdate' /F 2>$null | Out-Null } catch {}
 }
-`, psSingleQuote(logPath), psSingleQuote(exe), psSingleQuote(staging), psSingleQuote(cfgPath), psSingleQuote(exe), psSingleQuote(exe), psSingleQuote(cfgPath))
+`, psSingleQuote(logPath), psSingleQuote(resultPath), psSingleQuote(altResult),
+		psSingleQuote(exe), psSingleQuote(staging), psSingleQuote(cfgPath),
+		psSingleQuote(exe), psSingleQuote(cfgPath))
 }
 
 func psSingleQuote(s string) string {

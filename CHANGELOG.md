@@ -13,6 +13,11 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **远程终端 root 仍只读深度修复（Linux）**：交互 Shell 经 `nsenter -t 1 -m…` 进入宿主机挂载命名空间；启动自愈 / **自动升级重启助手**均在 PID 1 挂载命名空间内执行 `--install-service` 或原地解锁 unit（修复「热更新后仍只读、重装才正常」：沙箱内 `/etc` RO 导致旧逻辑写不了 unit）；安装脚本校验有效 `Protect*` 并二次解锁。
+- **Windows Agent 自动升级彻底加固**：更新 helper 优先以 SYSTEM 计划任务拉起，并带 `CREATE_BREAKAWAY_FROM_JOB`（修复服务停止时 Job 连带杀死 helper、换包永不发生）；脚本写入 `%%TEMP%%`、换包重试/`sc.exe` 启停、结果文件回写；遗留脚本扩大安装目录/进程名扫描；服务端 soft-retry 90s、更多 Windows 失败回退到 encoded 脚本。
+
 ---
 
 ## [v0.19.61] — 2026-08-03

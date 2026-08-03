@@ -3,4 +3,4 @@
 package main
 
 // ensureLinuxAgentUnitPrivileges is a no-op outside Linux.
-func ensureLinuxAgentUnitPrivileges() {}
+func ensureLinuxAgentUnitPrivileges(cfgPath string) {}

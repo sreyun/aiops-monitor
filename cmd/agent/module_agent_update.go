@@ -141,6 +141,9 @@ func moduleAgentUpdate(args map[string]string, allowedBases []string) ([]byte, i
 		msg += fmt.Sprintf(", target %s", wantVer)
 	}
 	msg += ")"
+	if runtime.GOOS == "windows" {
+		msg += " [windows: scheduled-task/breakaway helper]"
+	}
 	return []byte(msg), 0
 }
 

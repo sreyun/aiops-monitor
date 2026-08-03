@@ -479,12 +479,20 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 		a.termSendPlain(server, sid, "\r\n\x1b[31m无法启动交互 Shell（"+shell+"）。请确认主机已安装 bash/sh。\x1b[0m\r\n")
 		return
 	}
-	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
-		a.termSendPlain(server, sid,
-			"\r\n\x1b[33m[AIOps] Agent 当前以非 root 运行（uid="+strconv.Itoa(os.Geteuid())+
-				"）。直接编辑 /etc 会只读（vim E45）；请 sudo，或重装 Agent（默认以 root 运行）。\x1b[0m\r\n")
+	if runtime.GOOS == "linux" {
+		diag := termPrivilegeDiag()
+		if os.Geteuid() != 0 {
+			a.termSendPlain(server, sid,
+				"\r\n\x1b[33m[AIOps] Agent 非 root（"+diag+"）。编辑 /etc 会只读；请用 root 重装：curl … | sudo bash\x1b[0m\r\n")
+		} else if !etcWritable() {
+			// Shell already nsenter'd into PID 1 mount ns; agent process itself may still be sandboxed.
+			a.termSendPlain(server, sid,
+				"\r\n\x1b[33m[AIOps] Agent 进程命名空间内 /etc 只读（"+diag+"）。交互 Shell 已 nsenter 到宿主机挂载命名空间。若 vim 仍报 E45：检查 /etc/resolv.conf 是否为 systemd-resolved 只读 symlink，请改编辑 /etc/systemd/resolved.conf。\x1b[0m\r\n")
+		}
+		slog.Info("远程终端会话开始", "session", sid, "shell", shell, "diag", diag)
+	} else {
+		slog.Info("远程终端会话开始", "session", sid, "shell", shell, "uid", os.Geteuid())
 	}
-	slog.Info("远程终端会话开始", "session", sid, "shell", shell, "uid", os.Geteuid())
 	a.streamInteractiveShell(server, sid, sh, lang)
 }
 
@@ -1384,9 +1392,16 @@ type pipeShell struct {
 
 func newPipeShell() termShell {
 	name, args := shellCommand()
+	dir := interactiveShellDir()
+	if runtime.GOOS != "windows" {
+		if n, a, via := linuxInteractiveShellInvocation(name, args, dir); via {
+			name, args = n, a
+			dir = "" // nsenter --wd handles cwd
+		}
+	}
 	cmd := exec.Command(name, args...)
 	cmd.Env = buildShellEnv()
-	if dir := interactiveShellDir(); dir != "" {
+	if dir != "" {
 		cmd.Dir = dir
 	}
 	stdin, err := cmd.StdinPipe()

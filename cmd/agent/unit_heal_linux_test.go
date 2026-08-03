@@ -81,3 +81,28 @@ WantedBy=multi-user.target
 		t.Fatal("old sandbox/user lines must be gone")
 	}
 }
+
+func TestForceCleanUnitBody(t *testing.T) {
+	in := `[Service]
+User=ubuntu
+ExecStart=/opt/aiops-agent/aiops-agent --config /opt/aiops-agent/config.yaml
+ProtectSystem=strict
+`
+	out := forceCleanUnitBody(in, false)
+	for _, want := range []string{
+		"User=root",
+		"ProtectSystem=false",
+		"ProtectHome=false",
+		"ExecStart=/opt/aiops-agent/aiops-agent --config /opt/aiops-agent/config.yaml",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	svc := forceCleanUnitBody(`[Service]
+ExecStart=/usr/local/bin/aiops-agent --service --config /etc/aiops/config.yaml
+`, false)
+	if !strings.Contains(svc, "--service --config /etc/aiops/config.yaml") {
+		t.Fatalf("service flag lost:\n%s", svc)
+	}
+}
