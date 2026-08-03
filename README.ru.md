@@ -1,0 +1,148 @@
+<div align="center">
+
+# AIOps
+
+**Открытая self-hosted платформа мониторинга хостов и SRE**  
+Наблюдение · Алерты · Автовосстановление · Удалённые ops · ИИ-диагностика — один бинарник под вашим контролем.
+
+[![Version](https://img.shields.io/badge/Version-v0.19.58-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
+[![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
+
+**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+
+[Быстрый старт](#-быстрый-старт) · [Ключевые возможности](#-ключевые-возможности) · [Документация](docs/README.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
+
+</div>
+
+---
+
+## Зачем AIOps
+
+Стеки ops разрастаются: метрики, алерты, bastion и runbook по отдельности. Коммерческие продукты тарифицируют по хостам, а данные остаются в их облаке.
+
+AIOps сводит обычный путь в **одну self-hosted платформу**:
+
+| | AIOps | Типичный «склеенный» стек |
+|---|---|---|
+| **Состав** | 1 Go-сервер + 1 агент без зависимостей | Zabbix / Prometheus / Grafana / Alertmanager / bastion / runbooks… |
+| **Время до результата** | `docker compose up -d` (~3 мин) | Дни интеграции |
+| **Данные** | PostgreSQL + VictoriaMetrics, **ваши** | SaaS или разрозненные БД |
+| **Удалённо** | Web-терминал / рабочий стол / port-forward; агент **только исходящий** | Отдельный VPN / bastion |
+| **Контур** | Алерт → playbook → инцидент/SLO/тикет → ИИ RCA | Люди закрывают разрывы |
+| **Лицензия** | **MIT**, без лимита хостов | За узел / модуль |
+
+> Для частных ЦОД, гибридного облака и команд, которым нужны видимость, контроль, безопасность изменений и объяснимые ops.
+
+---
+
+## ✨ Ключевые возможности
+
+Шесть столбов — не бесконечный список функций:
+
+```
+  Observe ──────► Govern ──────► Remediate ──────► Diagnose
+  Hosts/GPU/logs   Silence/route   Playbooks/gates   AI · RAG · MCP
+  Probes/OOB       Multi-channel   Incident/SLO      Evidence gate
+
+  Remote · terminal/desktop/forward (reverse tunnel)   Security · RBAC/MFA/FIM
+```
+
+1. **Наблюдение** — кроссплатформенный агент (Linux / Windows / macOS / Kylin), GPU, логи, HTTP/TCP-пробы, API SLI, Redfish / SNMP / NetFlow / контейнеры / K8s / Hyper-V.
+2. **Управление** — пороги, silence / inhibit / route; Feishu / DingTalk / e-mail / SMS / голос.
+3. **Восстановление и SRE** — playbook с approval-гарантиями; инциденты, SLO, тикеты, окна заморозки, аудируемый break-glass.
+4. **ИИ-диагностика** — инспекция + RCA (модели совместимые с OpenAI; иначе эвристика); RAG на pgvector, Skills, MCP (Cursor / Claude); самотест речи.
+5. **Удалённые ops** — web-терминал (replay, наблюдение, аудит, второй пароль), удалённый рабочий стол (JPEG/H.264), port-forward / HTTP-прокси с защитой SSRF.
+6. **Безопасная поставка** — RBAC, MFA, fingerprint агента, AES-256-GCM; консоль Vue по умолчанию (`/?ui=legacy` для classic UI); Android / HarmonyOS отдельно.
+
+Текущий релиз **[v0.19.58](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)** · Зеркала: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+
+---
+
+## 🚀 Быстрый старт
+
+> Серверу **нужны** и PostgreSQL, и VictoriaMetrics.
+
+```bash
+docker compose up -d
+# open http://localhost:8529 → finish first-time security setup
+# copy the Agent install command from the UI onto each host
+```
+
+```bash
+export AIOPS_POSTGRES_DSN="postgres://aiops:secret@127.0.0.1:5432/aiops?sslmode=disable"
+export AIOPS_VM_URL="http://127.0.0.1:8428"
+./aiops-server
+
+go build ./cmd/server ./cmd/agent   # Go 1.26+
+```
+
+Установка → **[docs/install.en.md](docs/install.en.md)** · Прод → **[docs/deploy.en.md](docs/deploy.en.md)**
+
+---
+
+## 🏗 Архитектура
+
+```mermaid
+flowchart LR
+  subgraph Clients
+    Web[Web / Vue]
+    Mob[Android / HarmonyOS]
+  end
+  subgraph Server
+    API[HTTP · WS · MCP]
+    Core[Alerts · Playbooks · SRE · AI]
+    PG[(PostgreSQL)]
+    VM[(VictoriaMetrics)]
+  end
+  subgraph Fleet
+    Ag[Agents]
+    Ext[BMC · switches · storage]
+  end
+  Web --> API
+  Mob --> API
+  API --> Core
+  Core --> PG
+  Core --> VM
+  Ag -->|outbound report / terminal| API
+  Ag --> Ext
+```
+
+---
+
+## 📚 Документация
+
+Длинные тексты в [`docs/`](docs/README.md). Старые имена в корне сохранены как **редиректы**.
+
+| Need | Doc |
+|------|-----|
+| Install | [docs/install.md](docs/install.md) · [EN](docs/install.en.md) |
+| Production deploy | [docs/deploy.md](docs/deploy.md) · [EN](docs/deploy.en.md) |
+| End-user guide | [docs/user-guide.md](docs/user-guide.md) |
+| Port forward | [docs/forward.md](docs/forward.md) |
+| Content audit / playbooks | [docs/content-audit.md](docs/content-audit.md) |
+| Vue v2 migration | [docs/v2-migration.md](docs/v2-migration.md) |
+| CI / SQL gates | [docs/ci-gate.md](docs/ci-gate.md) |
+
+---
+
+## 🤝 Участие
+
+Issues, PR и переводы приветствуются. Рекомендуем: `make build` · `make audit`.
+
+Если AIOps заменил «склеенный» стек — **поставьте Star**: это поддерживает видимость и развитие проекта.
+
+---
+
+## Лицензия
+
+[MIT](LICENSE). Без лимита хостов. Мобильные клиенты — отдельные пакеты (исходников нет в этом репозитории).
+
+---
+
+<p align="center">
+  <b>AIOps · Сверните сложность ops в платформу, которой владеете вы.</b><br/>
+  <sub>Star ⭐ · Fork · Issue · Строим self-hosted ops вместе</sub>
+</p>
