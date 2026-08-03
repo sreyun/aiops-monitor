@@ -296,6 +296,52 @@ async function loadHostFolders() {
   } catch (e) {}
 }
 
+/** Auto-refresh host/type trees (and open pickers) after a host joins/leaves. */
+let _hostTreeAutoTimer = null;
+let _hostTreeAutoBusy = false;
+let _hostTreeAutoQueued = null; // latest opts while busy (coalesce, never drop)
+window._hostTreeAutoInside = false;
+async function refreshHostTreesAuto(opts) {
+  const o = opts || {};
+  if (_hostTreeAutoTimer) { clearTimeout(_hostTreeAutoTimer); _hostTreeAutoTimer = null; }
+  const delay = o.immediate ? 0 : 180;
+  return new Promise(resolve => {
+    _hostTreeAutoTimer = setTimeout(async () => {
+      _hostTreeAutoTimer = null;
+      if (_hostTreeAutoBusy) {
+        _hostTreeAutoQueued = o;
+        resolve();
+        return;
+      }
+      _hostTreeAutoBusy = true;
+      window._hostTreeAutoInside = true;
+      try {
+        if (o.forceHosts !== false && typeof fetchHostsList === "function") {
+          await fetchHostsList({ force: true });
+        }
+        if (typeof loadHostFolders === "function") await loadHostFolders();
+        const activeView = document.querySelector(".view.active")?.id.replace("view-", "") || "";
+        if (activeView === "hosts" && typeof renderHosts === "function") {
+          renderHosts(LAST_HOSTS || []);
+        } else if (typeof renderHostTree === "function" && $("hostTree")) {
+          renderHostTree();
+        }
+        try {
+          document.dispatchEvent(new CustomEvent("aiops:host-trees-refresh", {
+            detail: { hosts: LAST_HOSTS || [] }
+          }));
+        } catch (_) {}
+      } catch (_) {}
+      window._hostTreeAutoInside = false;
+      _hostTreeAutoBusy = false;
+      const queued = _hostTreeAutoQueued;
+      _hostTreeAutoQueued = null;
+      resolve();
+      if (queued) refreshHostTreesAuto(Object.assign({}, queued, { immediate: false }));
+    }, delay);
+  });
+}
+
 function folderMatchesTreeQ(n, q) {
   if (!q) return true;
   if ((n.name || "").toLowerCase().includes(q)) return true;

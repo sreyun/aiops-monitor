@@ -22,7 +22,7 @@ import (
 // When a VM URL is configured, every host report is also pushed to VM in the
 // Prometheus text exposition format via /api/v1/import/prometheus — stdlib HTTP
 // only, no protobuf/snappy. This offloads long-term / large-scale time-series to
-// a purpose-built TSDB (the same store Nightingale uses) while the embedded
+// a purpose-built TSDB while the embedded
 // tiered store keeps serving the built-in dashboards. Pushes are batched and
 // fire-and-forget so agent ingest never blocks on VM.
 // ============================================================================

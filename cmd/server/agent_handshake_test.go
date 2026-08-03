@@ -188,11 +188,13 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		`elif [ "$OS" = "Darwin" ]`, "com.aiops.agent.plist",
 		"<key>RunAtLoad</key><true/>", "<key>KeepAlive</key><true/>",
 		"launchctl load", "Restart=always", "@reboot",
-		"User=$AIOPS_USER", "NoNewPrivileges=true", "SUDO_USER",
+		"User=$AIOPS_USER", "NoNewPrivileges=false", "SUDO_USER",
 		"AIOPS_USER=\"$SUDO_USER\"", "Never create a dedicated",
 		"gui/$AIOPS_UID", "aiops_has_systemd", "aiops_fetch", "unsupported architecture",
 		"AmbientCapabilities=CAP_NET_RAW",
-		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "ProtectHome=read-only",
+		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "Environment=HOME=", "ProtectHome=false",
+		"PrivateTmp=false",
+		"<key>EnvironmentVariables</key>", "<key>SHELL</key>", "<key>HOME</key>",
 		"aiops_is_installed", "aiops_stop_and_uninstall_existing", "aiops_purge_systemd_unit",
 		".service.d",
 		"existing agent detected", "systemctl restart aiops-agent",
@@ -200,8 +202,14 @@ func TestInstallScriptsRobustness(t *testing.T) {
 	if strings.Contains(shIn, "CapabilityBoundingSet=") {
 		t.Error("install.sh must not set CapabilityBoundingSet= (drops other root caps; breaks terminal)")
 	}
-	if strings.Contains(shIn, "ProtectHome=true") {
-		t.Error("install.sh must not enable ProtectHome=true (blocks /root|/home cwd for remote shell)")
+	// Match real unit directives (line-start), not prose comments.
+	for _, bad := range []string{
+		"\nProtectHome=true", "\nProtectHome=read-only", "\nProtectSystem=strict",
+		"\nReadWritePaths=", "\nPrivateTmp=true", "\nNoNewPrivileges=true",
+	} {
+		if strings.Contains(shIn, bad) {
+			t.Errorf("install.sh must not set %q (blocks full remote shell access)", strings.TrimSpace(bad))
+		}
 	}
 	if strings.Contains(shIn, "aiops_stop_and_uninstall_existing") {
 		// Agent reinstall must not tear down the separate gateway relay service.

@@ -38,9 +38,12 @@ func (s *Server) computeRemotePreflight(r *http.Request, hostID string) RemotePr
 		RemoteGateMode: s.cfg.remoteGateMode(),
 	}
 	actor := ""
+	breakGlass := false
 	if r != nil {
 		out.BreakGlassOK = s.actorIsAdmin(r)
 		actor = s.actorName(r)
+		// Honor ?break_glass=1 for admin preview (WS/POST still enforce via enforceRemoteGate).
+		breakGlass = out.BreakGlassOK && (r.URL.Query().Get("break_glass") == "1" || r.Header.Get("X-Break-Glass") == "1")
 	}
 	now := time.Now().Unix()
 	cat := ""
@@ -58,7 +61,7 @@ func (s *Server) computeRemotePreflight(r *http.Request, hostID string) RemotePr
 	}
 	out.HighRisk = s.hostRemoteHighRisk(hostID)
 	out.ChangeID, out.IncidentID = s.remoteSessionLinks(hostID)
-	allowed, reason := s.remoteGateCheck(hostID, actor, out.HighRisk, false)
+	allowed, reason := s.remoteGateCheck(hostID, actor, out.HighRisk, breakGlass)
 	out.GateAllowed = allowed
 	out.GateReason = reason
 	out.GateRequired = !allowed

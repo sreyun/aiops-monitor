@@ -586,6 +586,35 @@ function paintPbTargetPicker(step) {
   syncHidden();
 }
 
+// Host join/leave → keep open playbook / change-window host trees in sync.
+if (!window._pbHostTreesRefreshBound) {
+  window._pbHostTreesRefreshBound = true;
+  document.addEventListener("aiops:host-trees-refresh", () => {
+    try {
+      if (typeof PB_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS)) PB_HOSTS = LAST_HOSTS;
+      if (typeof SRE_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS)) SRE_HOSTS = LAST_HOSTS;
+    } catch (_) {}
+    document.querySelectorAll(".pb-step-target-picker").forEach(wrap => {
+      const step = wrap.closest(".pb-step");
+      if (step && typeof paintPbTargetPicker === "function") paintPbTargetPicker(step);
+    });
+    ["cwHostPick", "crHostPick"].forEach(id => {
+      const box = typeof $ === "function" ? $(id) : document.getElementById(id);
+      if (!box || !box.offsetParent) return;
+      const hiddenId = id === "cwHostPick" ? "cwHosts" : "crHosts";
+      const hidden = typeof $ === "function" ? $(hiddenId) : document.getElementById(hiddenId);
+      const selected = (hidden && hidden.value ? hidden.value.split(",") : []).map(s => s.trim()).filter(Boolean);
+      if (typeof sreMountHostMultiPick === "function") sreMountHostMultiPick(id, hiddenId, selected);
+    });
+  });
+  document.addEventListener("aiops:hosts-updated", () => {
+    try {
+      if (typeof PB_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS)) PB_HOSTS = LAST_HOSTS;
+      if (typeof SRE_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS)) SRE_HOSTS = LAST_HOSTS;
+    } catch (_) {}
+  });
+}
+
 // Legacy flat <option> builder kept for any leftover callers / AI helpers.
 function buildTargetOptions(selectedTarget) {
   const opts = [`<option value="" ${!selectedTarget?"selected":""}>${I18N.t("playbook.target_none","未选择目标")}</option>`];

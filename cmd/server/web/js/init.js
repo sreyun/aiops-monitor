@@ -119,10 +119,27 @@ function initPushWS() {
           if (activeView === "overview") renderCards(msg.data);
           updateFavicon(msg.data.critical_alerts || 0);
           notifyCriticalAlerts(msg.data.critical_alerts || 0);
+          // Keep nav badge in sync even when REST poll is on a non-core view.
+          if (typeof msg.data.total_hosts === "number") {
+            const nh = $("navHosts"); if (nh) nh.textContent = msg.data.total_hosts;
+            // Fallback only if hosts_changed was not seen recently (avoid double fetch).
+            if (window._pushHostTotal != null && window._pushHostTotal !== msg.data.total_hosts
+              && (Date.now() - (window._hostsChangedAt || 0) > 1500)) {
+              if (typeof refreshHostTreesAuto === "function") refreshHostTreesAuto({ forceHosts: true });
+            }
+            window._pushHostTotal = msg.data.total_hosts;
+          }
         } else if (msg.type === "alerts" && msg.data) {
           if (activeView === "overview" || activeView === "alerts") renderAlerts(msg.data);
         } else if (msg.type === "hosts" && msg.data) {
-          if (activeView === "hosts") renderHosts(msg.data);
+          const list = typeof syncHostCache === "function" ? syncHostCache(msg.data) : msg.data;
+          if (activeView === "hosts" && typeof renderHosts === "function") renderHosts(list);
+          else if (typeof renderHostTree === "function" && $("hostTree")) renderHostTree();
+        } else if (msg.type === "hosts_changed") {
+          window._hostsChangedAt = Date.now();
+          if (typeof msg.data?.total_hosts === "number") window._pushHostTotal = msg.data.total_hosts;
+          if (typeof refreshHostTreesAuto === "function") refreshHostTreesAuto({ forceHosts: true, immediate: true });
+          else if (typeof refresh === "function") refresh(true);
         }
       } catch(err) {}
     };

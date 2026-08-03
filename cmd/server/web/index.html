@@ -11,8 +11,8 @@
 <link rel="icon" href="/icon.svg">
 <link rel="apple-touch-icon" href="/icon.svg">
 <link rel="manifest" href="/manifest.json">
-<link rel="stylesheet" href="/style.css?v=0.19.52">
-<script src="/theme-init.js"></script>
+<link rel="stylesheet" href="/style.css?v=0.19.53">
+<script src="/theme-init.js?v=0.19.53"></script>
 <script src="/js/vendor/echarts.min.js"></script>
 <link rel="alternate" hreflang="zh-CN" href="/?lang=zh-CN">
 <link rel="alternate" hreflang="zh-TW" href="/?lang=zh-TW">
@@ -2742,19 +2742,19 @@
     <div class="modal-head"><h3>导入看板模板</h3><button class="btn ghost close" data-close-btn aria-label="关闭">✕</button></div>
     <div class="modal-body">
       <div class="field"><label>grafana.com 看板 ID <span class="tag">仅 Grafana 官方库</span></label><input type="text" id="dashImportId" class="mono" placeholder="如 1860（Node Exporter Full）"></div>
-      <div class="hint">支持 AIOps 原生模板、Grafana、夜莺 JSON；也可填 grafana.com 数字 ID 在线拉取。大型社区模板（如 1860，100+ 面板）可直接导入。</div>
-      <div class="field" style="margin-top:12px"><label>或 粘贴 / 上传看板 JSON <span class="tag">AIOps / Grafana / 夜莺 · 自动识别</span></label>
-        <textarea id="dashImportJson" rows="5" placeholder="粘贴本平台「导出 → JSON 模板」、Grafana JSON Model 或夜莺导出 JSON。填了则忽略上面的 ID。" style="font-family:monospace; font-size:12px"></textarea>
+      <div class="hint">支持 AIOps 原生模板、Grafana 及兼容看板 JSON；也可填 grafana.com 数字 ID 在线拉取。大型社区模板（如 1860，100+ 面板）可直接导入。</div>
+      <div class="field" style="margin-top:12px"><label>或 粘贴 / 上传看板 JSON <span class="tag">AIOps / Grafana / 兼容格式 · 自动识别</span></label>
+        <textarea id="dashImportJson" rows="5" placeholder="粘贴本平台「导出 → JSON 模板」、Grafana JSON Model 或兼容看板导出 JSON。填了则忽略上面的 ID。" style="font-family:monospace; font-size:12px"></textarea>
         <div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap">
           <button class="btn sm" id="dashImportFileBtn" type="button">📁 选择文件…</button>
           <span class="hint" id="dashImportFileName" style="margin:0"></span>
           <input type="file" id="dashImportFile" accept=".json,application/json" hidden>
           <span style="flex:1"></span>
-          <div class="select-wrap sm"><select id="dashImportFormat"><option value="auto">自动识别格式</option><option value="aiops">AIOps 模板</option><option value="grafana">Grafana</option><option value="nightingale">夜莺 Nightingale</option></select></div>
+          <div class="select-wrap sm"><select id="dashImportFormat"><option value="auto">自动识别格式</option><option value="aiops">AIOps 模板</option><option value="grafana">Grafana</option><option value="nightingale">兼容看板 JSON</option></select></div>
         </div>
       </div>
       <div class="field"><label>名称（可选，覆盖看板标题）</label><input type="text" id="dashImportName"></div>
-      <div class="hint">AIOps 模板可完整回灌；Grafana/夜莺导入务实子集（timeseries/stat/gauge/table/text 等），无法映射的类型保留占位。</div>
+      <div class="hint">AIOps 模板可完整回灌；Grafana/兼容格式导入务实子集（timeseries/stat/gauge/table/text 等），无法映射的类型保留占位。</div>
     </div>
     <div class="modal-foot"><button class="btn" data-close-btn>取消</button><button class="btn primary" id="dashImportSave">导入</button></div>
   </div>

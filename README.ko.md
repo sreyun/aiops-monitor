@@ -60,7 +60,7 @@ AIOps는 **엔터프라이즈급 호스트 모니터링 및 SRE 운영 플랫폼
 | **MCP** | Streamable HTTP로 당직/진단 도구를 Cursor / Claude에 연결 |
 | **AI 음성** | 설정 화면에서 TTS/STT 원클릭 자가 테스트 |
 | **Agent 업데이트** | Windows는 `pending_verify` 후 버전 ACK로 성공 확정 |
-| **Linux 설치** | `ProtectHome=read-only`; 재설치 시 `aiops-relay` 오삭제 방지 |
+| **Linux 설치** | `ProtectHome=false`; 재설치 시 `aiops-relay` 오삭제 방지 |
 | **모바일** | Android / HarmonyOS는 **별도 배포**(소스는 이 저장소에 없음) |
 
 자세한 내용은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.

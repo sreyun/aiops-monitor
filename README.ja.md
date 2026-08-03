@@ -60,7 +60,7 @@ AIOps は**エンタープライズ級ホスト監視・SRE 運用プラット�
 | **MCP** | Streamable HTTP で当番/診断ツールを Cursor / Claude に接続 |
 | **AI 音声** | 設定画面のワンクリック音声テスト（TTS + 任意で STT） |
 | **Agent 更新** | Windows は `pending_verify` → バージョン ACK 後に成功 |
-| **Linux 導入** | `ProtectHome=read-only`；再導入で `aiops-relay` を誤削除しない |
+| **Linux 導入** | `ProtectHome=false`；再導入で `aiops-relay` を誤削除しない |
 | **モバイル** | Android / HarmonyOS は**別配布**（ソースは本リポジトリ外） |
 
 詳細は [CHANGELOG.md](CHANGELOG.md) を参照。

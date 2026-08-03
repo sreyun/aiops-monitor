@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,8 +32,27 @@ const launchDaemonPlist = "/Library/LaunchDaemons/com.aiops.monitor.agent.plist"
 
 func installAgentService(exePath, cfgPath string) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("?? root ?????? sudo ?? --install-service")
+		return fmt.Errorf("需要 root 权限，请用 sudo 运行 --install-service")
 	}
+	workDir := filepath.Dir(exePath)
+	if workDir == "" || workDir == "." {
+		if wd, err := os.Getwd(); err == nil {
+			workDir = wd
+		}
+	}
+	termShell := "/bin/zsh"
+	if _, err := os.Stat(termShell); err != nil {
+		termShell = "/bin/bash"
+	}
+	if _, err := os.Stat(termShell); err != nil {
+		termShell = "/bin/sh"
+	}
+	home := "/var/root"
+	if st, err := os.Stat(home); err != nil || !st.IsDir() {
+		home = "/Users/root"
+	}
+	// Full FS access for remote interactive shell: do not add sandbox / ProcessType
+	// restrictions. Set SHELL/HOME so PTY sessions are not stuck with nologin.
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -46,6 +66,19 @@ func installAgentService(exePath, cfgPath string) error {
 		<string>--config</string>
 		<string>%s</string>
 	</array>
+	<key>WorkingDirectory</key>
+	<string>%s</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>SHELL</key>
+		<string>%s</string>
+		<key>HOME</key>
+		<string>%s</string>
+		<key>USER</key>
+		<string>root</string>
+		<key>LOGNAME</key>
+		<string>root</string>
+	</dict>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
@@ -56,7 +89,7 @@ func installAgentService(exePath, cfgPath string) error {
 	<string>/dev/null</string>
 </dict>
 </plist>
-`, agentServiceName, exePath, cfgPath)
+`, agentServiceName, exePath, cfgPath, workDir, termShell, home)
 
 	if err := os.WriteFile(launchDaemonPlist, []byte(plist), 0o644); err != nil {
 		return fmt.Errorf("?? LaunchDaemon plist ??: %w", err)

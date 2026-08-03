@@ -64,7 +64,7 @@ AIOps 是一款**企业级主机监控与 SRE 运维平台**，采用「Go 原�
 | **AI 语音** | 语音输入/播报配置支持「测试语音」闭环（TTS 样例播放 + 可选 STT 回环） |
 | **文件完整性 / 威胁情报** | FIM 与威胁情报通道纳入主机安全能力面（见面板安全中心） |
 | **Agent 远程更新** | 批量远程更新；Windows 更新进入 `pending_verify`，待 `agent_version` ACK 后再标成功 |
-| **Linux 远程终端** | systemd `ProtectHome=read-only`，重装不误清网关 `aiops-relay` |
+| **Linux 远程终端** | systemd `ProtectHome=false`，重装不误清网关 `aiops-relay` |
 | **移动端** | Android / HarmonyOS 原生控制台**独立分发**（源码不在本仓库） |
 
 完整记录见 [CHANGELOG.md](CHANGELOG.md) 与 [Releases](https://github.com/sreyun/aiops-monitor/releases)。
@@ -210,6 +210,7 @@ make build          # Linux/macOS
 ## 使用说明
 
 1. **首次登录**：访问 `http://<服务器>:8529`，首次登录强制修改用户名 + 密码；建议为管理员账户启用 **MFA**。
+   - **Web 控制台**：默认进入 **Vue v2** 壳；需要经典版时打开 `/?ui=legacy`（或顶栏「经典版」深链）。迁移说明与并跑验收清单见 [docs/v2-migration.md](docs/v2-migration.md)。
 2. **纳管主机**：在「安装命令」页生成命令 → 目标主机执行 → Agent 反向连接并自动注册；可按 `category`（生产 / 测试 / DB / 办公）分组。
 3. **配置监控**：
    - 在「告警」页设置阈值与治理规则（静默 / 抑制 / 路由）。

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -249,6 +250,56 @@ func TestHoldForwardTo(t *testing.T) {
 	same := holdForwardTo(pts, 220)
 	if len(same) != 3 {
 		t.Fatalf("no-op holdForwardTo changed length: %v", same)
+	}
+}
+
+func TestHandleMetricsForecastObjectPoints(t *testing.T) {
+	srv, _ := newTestServer(t)
+	now := time.Now().Unix()
+	step := int64(60)
+	pts := make([]map[string]any, 0, 24)
+	for i := 0; i < 24; i++ {
+		pts = append(pts, map[string]any{
+			"t": float64(now - int64(24-i)*step),
+			"v": 30 + float64(i)*0.5,
+		})
+	}
+	body := map[string]any{
+		"series":      []map[string]any{{"name": "cpu_percent", "points": pts}},
+		"horizon_sec": 12 * step,
+		"step":        step,
+	}
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/metrics/forecast", bytes.NewReader(raw))
+	rr := httptest.NewRecorder()
+	srv.handleMetricsForecast(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var res struct {
+		OK     bool `json:"ok"`
+		Series []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"series"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected ok for object-form points, body=%s", rr.Body.String())
+	}
+	var fcN int
+	for _, s := range res.Series {
+		if s.Kind == "forecast" {
+			fcN++
+			if !strings.Contains(s.Name, "预测") && !strings.HasPrefix(s.Name, "cpu_percent") {
+				t.Fatalf("unexpected forecast name %q", s.Name)
+			}
+		}
+	}
+	if fcN < 1 {
+		t.Fatalf("want forecast series, got %+v", res.Series)
 	}
 }
 

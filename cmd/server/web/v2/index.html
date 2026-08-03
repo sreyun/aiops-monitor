@@ -2,26 +2,39 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0a0d13" />
-    <title>AIOps · 主机监控运维平台</title>
-    <link rel="icon" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/v2/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>AIOps Console</title>
     <script>
       (function () {
         try {
-          var t = localStorage.getItem("aiops_theme");
-          if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-          else document.documentElement.setAttribute("data-theme", "dark");
+          var m = localStorage.getItem("aiops-theme") || "light";
+          var light = m === "light" || (m === "system" && window.matchMedia("(prefers-color-scheme: light)").matches);
+          document.documentElement.classList.toggle("light", light);
+          document.documentElement.classList.toggle("dark", !light);
         } catch (e) {
-          document.documentElement.setAttribute("data-theme", "dark");
+          document.documentElement.classList.add("light");
         }
       })();
     </script>
-    <script type="module" crossorigin src="/v2/assets/index-ClKMxbw2.js"></script>
-    <link rel="modulepreload" crossorigin href="/v2/assets/jsx-runtime-C9vXBh5q.js">
-    <link rel="stylesheet" crossorigin href="/v2/assets/index-CdUBDR0L.css">
+    <script type="module" crossorigin src="/v2/assets/index-DuiIR2BG.js"></script>
+    <link rel="modulepreload" crossorigin href="/v2/assets/rolldown-runtime-DK3Fl9T5.js">
+    <link rel="modulepreload" crossorigin href="/v2/assets/echarts-DRAh3Cfv.js">
+    <link rel="modulepreload" crossorigin href="/v2/assets/vue-vendor-DViwKWo-.js">
+    <link rel="modulepreload" crossorigin href="/v2/assets/_plugin-vue_export-helper-D6G-21ID.js">
+    <link rel="modulepreload" crossorigin href="/v2/assets/message-DKvKg6vR.js">
+    <link rel="modulepreload" crossorigin href="/v2/assets/client-BTGWxicL.js">
+    <link rel="modulepreload" crossorigin href="/v2/assets/terminal-auth-Bqaqrd-t.js">
+    <link rel="stylesheet" crossorigin href="/v2/assets/_plugin-vue_export-helper-CNpL_Sag.css">
+    <link rel="stylesheet" crossorigin href="/v2/assets/index-DLGpdde3.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="app"></div>
   </body>
 </html>

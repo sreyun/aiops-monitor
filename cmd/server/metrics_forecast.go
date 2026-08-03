@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -20,8 +22,73 @@ type metricsForecastReq struct {
 }
 
 type metricsForecastIn struct {
-	Name   string       `json:"name"`
-	Points [][2]float64 `json:"points"` // [[tsSec, val], ...]
+	Name   string              `json:"name"`
+	Points []metricsFCPointIn  `json:"points"` // [[tsSec, val], ...] or {t|ts|timestamp, v|value}
+}
+
+// metricsFCPointIn accepts both classic [[ts,val]] arrays and object forms
+// ({t,v} / {ts,value} / {timestamp,value}) used by some Vue clients.
+type metricsFCPointIn [2]float64
+
+func (p *metricsFCPointIn) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
+		*p = metricsFCPointIn{}
+		return nil
+	}
+	if b[0] == '[' {
+		var arr []float64
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return err
+		}
+		if len(arr) < 2 {
+			return fmt.Errorf("point array needs [ts, value]")
+		}
+		*p = metricsFCPointIn{arr[0], arr[1]}
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	ts := forecastJSONFloat(obj, "t", "ts", "timestamp", "time")
+	val := forecastJSONFloat(obj, "v", "val", "value")
+	*p = metricsFCPointIn{ts, val}
+	return nil
+}
+
+func forecastJSONFloat(obj map[string]any, keys ...string) float64 {
+	for _, k := range keys {
+		v, ok := obj[k]
+		if !ok || v == nil {
+			continue
+		}
+		switch n := v.(type) {
+		case float64:
+			return n
+		case json.Number:
+			f, _ := n.Float64()
+			return f
+		case string:
+			f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+			if err == nil {
+				return f
+			}
+		case int:
+			return float64(n)
+		case int64:
+			return float64(n)
+		}
+	}
+	return 0
+}
+
+func metricsFCPointsToPairs(in []metricsFCPointIn) [][2]float64 {
+	out := make([][2]float64, 0, len(in))
+	for _, p := range in {
+		out = append(out, [2]float64{p[0], p[1]})
+	}
+	return out
 }
 
 // handleMetricsForecast POST /api/v1/metrics/forecast
@@ -59,7 +126,7 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = fmt.Sprintf("系列%d", i+1)
 		}
-		pts := cleanForecastPoints(in.Points)
+		pts := cleanForecastPoints(metricsFCPointsToPairs(in.Points))
 		if len(pts) < 4 {
 			continue
 		}

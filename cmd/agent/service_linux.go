@@ -47,6 +47,12 @@ func installAgentService(exePath, cfgPath string) error {
 	if _, err := os.Stat(termShell); err != nil {
 		termShell = "/bin/sh"
 	}
+	home := "/root"
+	if st, err := os.Stat(home); err != nil || !st.IsDir() {
+		home = "/var/tmp"
+	}
+	// Do not set ProtectHome/ProtectSystem/PrivateTmp/NoNewPrivileges: remote
+	// interactive shell must have full write access and sudo/setuid helpers.
 	unit := fmt.Sprintf(`[Unit]
 Description=AIOps Agent (metrics + remote desktop)
 After=network-online.target
@@ -59,13 +65,18 @@ Restart=always
 RestartSec=5
 User=root
 Environment=SHELL=%s
+Environment=HOME=%s
+Environment=USER=root
+Environment=LOGNAME=root
 KillMode=mixed
 LimitNOFILE=65536
-ProtectHome=read-only
+ProtectHome=false
+PrivateTmp=false
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
-`, exePath, cfgPath, termShell)
+`, exePath, cfgPath, termShell, home)
 
 	if err := os.WriteFile(systemdUnitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("写入 systemd 单元失败: %w", err)

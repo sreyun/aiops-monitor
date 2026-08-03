@@ -7,9 +7,9 @@ import (
 )
 
 // ============================================================================
-// 导入夜莺（Nightingale / n9e）看板（务实子集）。
+// 导入兼容看板 JSON（务实子集）。
 //
-// 夜莺导出格式：{name, tags, configs}，configs 为 JSON（字符串或对象），内含
+// 导出形态：{name, tags, configs}，configs 为 JSON（字符串或对象），内含
 // {version, var[], panels[]}。面板用 react-grid-layout 的 layout{x,y,w,h}（同 24 栏），
 // 变量用 var[]（definition=label_values(...) 或 custom 逗号候选），单位在
 // options.standardOptions.util。映射策略与 Grafana 导入一致：已知类型直接映射，
@@ -57,11 +57,11 @@ type n9ePanel struct {
 	} `json:"options"`
 }
 
-// mapNightingaleDashboard 把夜莺看板 JSON 映射为内部 Dashboard。
+// mapNightingaleDashboard 把兼容看板 JSON 映射为内部 Dashboard。
 func mapNightingaleDashboard(raw []byte, nameOverride, source string) (Dashboard, error) {
 	var exp n9eExport
 	if err := json.Unmarshal(raw, &exp); err != nil {
-		return Dashboard{}, fmt.Errorf("解析夜莺 JSON 失败：%v", err)
+		return Dashboard{}, fmt.Errorf("解析兼容看板 JSON 失败：%v", err)
 	}
 
 	// configs 可能是字符串或对象；也可能整份就是 configs（无 name/tags 包裹）。
@@ -69,14 +69,14 @@ func mapNightingaleDashboard(raw []byte, nameOverride, source string) (Dashboard
 	switch {
 	case len(exp.Configs) > 0:
 		if !unmarshalMaybeString(exp.Configs, &cfg) {
-			return Dashboard{}, fmt.Errorf("解析夜莺 configs 失败")
+			return Dashboard{}, fmt.Errorf("解析兼容看板 configs 失败")
 		}
 	default:
 		// 顶层直接是 configs（含 panels/var）
 		_ = json.Unmarshal(raw, &cfg)
 	}
 	if len(cfg.Panels) == 0 {
-		return Dashboard{}, fmt.Errorf("未从该夜莺看板解析到任何面板")
+		return Dashboard{}, fmt.Errorf("未从该兼容看板解析到任何面板")
 	}
 
 	d := Dashboard{Source: source}
@@ -85,7 +85,7 @@ func mapNightingaleDashboard(raw []byte, nameOverride, source string) (Dashboard
 		d.Name = strings.TrimSpace(exp.Name)
 	}
 	if d.Name == "" {
-		d.Name = "导入的夜莺看板"
+		d.Name = "导入的兼容看板"
 	}
 	for _, t := range splitN9eTags(exp.Tags) {
 		d.Tags = append(d.Tags, t)
@@ -100,7 +100,7 @@ func mapNightingaleDashboard(raw []byte, nameOverride, source string) (Dashboard
 	nextID := 1
 	for _, gp := range cfg.Panels {
 		if gp.Type == "row" {
-			continue // 夜莺 row 仅作分组标题，不渲染为面板
+			continue // row 仅作分组标题，不渲染为面板
 		}
 		p := mapN9ePanel(gp)
 		p.ID = nextID
@@ -108,7 +108,7 @@ func mapNightingaleDashboard(raw []byte, nameOverride, source string) (Dashboard
 		d.Panels = append(d.Panels, p)
 	}
 	if len(d.Panels) == 0 {
-		return Dashboard{}, fmt.Errorf("未从该夜莺看板解析到可渲染面板")
+		return Dashboard{}, fmt.Errorf("未从该兼容看板解析到可渲染面板")
 	}
 	sortPanels(d.Panels)
 	healImportedDashboard(&d)
@@ -194,7 +194,7 @@ func mapN9ePanelType(t string) string {
 	}
 }
 
-// mapN9eUnit 把夜莺单位（standardOptions.util）映射到内部单位串。
+// mapN9eUnit 把 standardOptions.util 单位映射到内部单位串。
 func mapN9eUnit(u string) string {
 	switch u {
 	case "percent":
@@ -240,7 +240,7 @@ func splitN9eTags(s string) []string {
 	return out
 }
 
-// detectTemplateFormat 自动识别粘贴/上传的模板：AIOps 原生 / Grafana / 夜莺。
+// detectTemplateFormat 自动识别粘贴/上传的模板：AIOps 原生 / Grafana / 兼容看板。
 func detectTemplateFormat(raw []byte) string {
 	var probe struct {
 		Format     string                       `json:"format"`
@@ -257,7 +257,7 @@ func detectTemplateFormat(raw []byte) string {
 	if strings.EqualFold(strings.TrimSpace(probe.Format), "aiops") {
 		return "aiops"
 	}
-	// 原生导出：顶层有 panels[].grid + targets[].expr，且无 Grafana gridPos / 夜莺 layout
+	// 原生导出：顶层有 panels[].grid + targets[].expr，且无 Grafana gridPos / 兼容格式 layout
 	if len(probe.Panels) > 0 && (probe.Name != "" || probe.ID != "") {
 		hasGrid, hasGridPos, hasLayout := false, false, false
 		for _, p := range probe.Panels {

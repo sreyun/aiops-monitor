@@ -3,15 +3,18 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
 // pushClient represents a connected browser WebSocket client receiving push updates.
 type pushClient struct {
-	ws     *wsConn
-	done   chan struct{}
-	closed bool
+	ws           *wsConn
+	done         chan struct{}
+	closed       bool
+	lastRosterSig string // last pushed host-id roster; empty until first hosts_changed
 }
 
 // pushHub manages connected WebSocket clients and broadcasts data to them.
@@ -109,6 +112,37 @@ func (s *Server) pushPush(c *pushClient) {
 	if data, err := json.Marshal(alertsMsg); err == nil {
 		_ = c.ws.WriteText(data)
 	}
+	// Notify browsers when the host roster changes so host/type trees refresh
+	// without waiting for the manual tree refresh button or the next REST poll.
+	sig := hostRosterSig(hosts)
+	if c.lastRosterSig == "" {
+		c.lastRosterSig = sig // seed; avoid a redundant fetch right after connect
+	} else if sig != c.lastRosterSig {
+		c.lastRosterSig = sig
+		chg := map[string]any{
+			"type": "hosts_changed",
+			"data": map[string]any{
+				"total_hosts":  len(hosts),
+				"online_hosts": online,
+				"sig":          sig,
+			},
+		}
+		if data, err := json.Marshal(chg); err == nil {
+			_ = c.ws.WriteText(data)
+		}
+	}
+}
+
+// hostRosterSig is a stable fingerprint of enrolled host IDs (join/leave only).
+func hostRosterSig(hosts []*Host) string {
+	ids := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if h != nil && h.ID != "" {
+			ids = append(ids, h.ID)
+		}
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
 }
 
 // Register adds a client to the hub.

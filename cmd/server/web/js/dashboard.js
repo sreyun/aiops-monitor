@@ -2977,7 +2977,7 @@ safeAddEventListener("dashImportSave", "click", async () => {
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) {
         closeMask($("dashImportMask"));
-        const kind = j.format === "nightingale" ? "夜莺" : (j.format === "aiops" ? "AIOps 模板" : "Grafana");
+        const kind = j.format === "nightingale" ? "兼容看板" : (j.format === "aiops" ? "AIOps 模板" : "Grafana");
         toast(`已从 ${kind} 导入「${j.name}」：${j.panels} 面板${j.unsupported ? "（" + j.unsupported + " 个类型不支持，已占位）" : ""}`, "ok");
         openDashboard(j.id);
       } else toast("导入失败：" + (j.error || r.status), "err");

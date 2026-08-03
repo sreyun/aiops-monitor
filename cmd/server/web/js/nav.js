@@ -746,7 +746,7 @@ navItems.forEach(n => n.addEventListener("click", () => {
   if (appEl) appEl.classList.remove("nav-open");
 }));
 
-// Collapsible nav groups (Nightingale-style); collapsed state persists per group.
+// Collapsible nav groups; collapsed state persists per group.
 (function initNavGroups(){
   let collapsed = {};
   try { collapsed = JSON.parse(localStorage.getItem("aiops_nav_collapsed")||"{}"); } catch(e){}

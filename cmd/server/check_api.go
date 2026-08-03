@@ -32,6 +32,7 @@ func (s *Server) handleGetChecks(w http.ResponseWriter, r *http.Request) {
 		m := map[string]any{
 			"id": c.ID, "name": c.Name, "type": c.Type, "target": c.Target,
 			"interval_sec": c.IntervalSec, "level": c.Level, "enabled": c.Enabled,
+			"timeout_sec": c.TimeoutSec,
 			"ok": true, "message": "", "checked_at": int64(0), "latency_ms": 0.0,
 			"status_code": 0, "cert_days": -1, "loss_pct": -1.0,
 		}

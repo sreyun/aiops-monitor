@@ -548,11 +548,12 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
   # the rest of root's capabilities and breaks interactive shell / file ops
   # (Go reports fork/exec /bin/bash: permission denied).
   UNIT_CAPS=""
-  UNIT_NNP="NoNewPrivileges=true"
+  # Remote terminal needs sudo/setuid helpers and a shared /tmp — do not lock
+  # NoNewPrivileges or PrivateTmp (those made the shell look half-read-only).
+  UNIT_NNP="NoNewPrivileges=false"
   if [ "__SNI_ENABLED__" = "true" ] || [ "__CONTENT_AUDIT__" = "true" ]; then
     UNIT_CAPS="AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 "
-    UNIT_NNP="NoNewPrivileges=false"
   fi
   # Prefer the account's login shell when interactive; never leave SHELL=nologin
   # (breaks web terminal). Fall back to bash/sh on Alpine/busybox.
@@ -566,7 +567,12 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
   [ -n "$TERM_SHELL" ] && [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/usr/bin/bash"
   [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/sh"
-  # Prefer read-only home: shell can chdir/read $HOME; writes under /home|/root stay blocked.
+  TERM_HOME=$(getent passwd "$AIOPS_USER" 2>/dev/null | cut -d: -f6)
+  [ -n "$TERM_HOME" ] && [ -d "$TERM_HOME" ] || TERM_HOME=$(eval echo "~$AIOPS_USER" 2>/dev/null || true)
+  [ -n "$TERM_HOME" ] && [ -d "$TERM_HOME" ] || TERM_HOME="$DIR"
+  # Remote terminal needs a real interactive shell with full FS access (write
+  # under $HOME, /etc, package managers, etc.). Do not sandbox the home dir or
+  # the system tree — that made the session look read-only and broke many ops.
   # Wipe leftover drop-ins so older home-protection overrides cannot stick.
   aiops_purge_systemd_unit aiops-agent
   aiops_purge_systemd_unit aiops-monitor-agent
@@ -581,15 +587,16 @@ User=$AIOPS_USER
 Group=$AIOPS_GROUP
 WorkingDirectory=$DIR
 Environment=SHELL=$TERM_SHELL
+Environment=HOME=$TERM_HOME
+Environment=USER=$AIOPS_USER
+Environment=LOGNAME=$AIOPS_USER
 ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
 Restart=always
 RestartSec=5
 $UNIT_NNP
 $UNIT_CAPS
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-ReadWritePaths=$DIR
+ProtectHome=false
+PrivateTmp=false
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -628,6 +635,8 @@ elif [ "$OS" = "Darwin" ]; then
   # macOS → launchd. Prefer the installing operator (SUDO_USER / AIOPS_USER);
   # never create a dedicated service account. Root-only (no SUDO_USER) keeps a
   # system LaunchDaemon for headless boot collection.
+  # Remote terminal needs a real interactive SHELL (not nologin) and a usable
+  # home cwd — mirror the Linux unit: no home/system sandbox in the job plist.
   if [ -z "${AIOPS_USER:-}" ]; then
     if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
       AIOPS_USER="$SUDO_USER"
@@ -650,9 +659,22 @@ elif [ "$OS" = "Darwin" ]; then
     mkdir -p "$PLIST_DIR"
     chown "$AIOPS_USER" "$PLIST_DIR" 2>/dev/null || true
   else
+    AIOPS_HOME="/var/root"
+    [ -d "$AIOPS_HOME" ] || AIOPS_HOME="/Users/root"
     PLIST_DIR="/Library/LaunchDaemons"
     mkdir -p "$PLIST_DIR"
   fi
+  TERM_SHELL=""
+  if command -v dscl >/dev/null 2>&1; then
+    TERM_SHELL=$(dscl . -read "/Users/$AIOPS_USER" UserShell 2>/dev/null | awk '{print $2}')
+  fi
+  [ -z "$TERM_SHELL" ] && TERM_SHELL=$(/usr/bin/dscl . -read "/Users/$AIOPS_USER" UserShell 2>/dev/null | awk '{print $2}')
+  case "$TERM_SHELL" in
+    ""|*nologin*|*false*|*true*|*sync*) TERM_SHELL="" ;;
+  esac
+  [ -n "$TERM_SHELL" ] && [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/zsh"
+  [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/bash"
+  [ -x "$TERM_SHELL" ] || TERM_SHELL="/bin/sh"
   PLIST="$PLIST_DIR/com.aiops.agent.plist"
   cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -667,6 +689,13 @@ elif [ "$OS" = "Darwin" ]; then
     <string>$DIR/config.yaml</string>
   </array>
   <key>WorkingDirectory</key><string>$DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SHELL</key><string>$TERM_SHELL</string>
+    <key>HOME</key><string>$AIOPS_HOME</string>
+    <key>USER</key><string>$AIOPS_USER</string>
+    <key>LOGNAME</key><string>$AIOPS_USER</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <!-- Agent writes rotating agent.log under $DIR; do not also redirect here (FD would block rotation). -->

@@ -27,6 +27,21 @@ function apiFmtPct(v) { return v < 0 ? "—" : v.toFixed(2) + "%"; }
 function apiFmtMs(v) { return (!v || v <= 0) ? "—" : v.toFixed(0) + " ms"; }
 function envLabel(env) { return { prod: "生产 prod", staging: "预发 staging", dev: "测试 dev" }[env] || env || "无"; }
 
+if (!window._apimonHostTreesRefreshBound) {
+  window._apimonHostTreesRefreshBound = true;
+  let _apiTreeRefreshT = null;
+  document.addEventListener("aiops:host-trees-refresh", () => {
+    if (!$("apiSysHosts") || !$("apimonMask") || !$("apimonMask").classList.contains("show")) return;
+    if (_apiTreeRefreshT) clearTimeout(_apiTreeRefreshT);
+    _apiTreeRefreshT = setTimeout(() => {
+      _apiTreeRefreshT = null;
+      if (typeof apiCaptureHostPick === "function") apiCaptureHostPick();
+      window._apimonHosts = (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS)) ? LAST_HOSTS : (window._apimonHosts || []);
+      paintApiSysHostPicker(APIMON_PICK_SELECTED);
+    }, 250);
+  });
+}
+
 function paintApiSysHostPicker(selected) {
   const hc = $("apiSysHosts");
   if (!hc) return;

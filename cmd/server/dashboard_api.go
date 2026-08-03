@@ -360,13 +360,13 @@ func (s *Server) handleDashboardVarValues(w http.ResponseWriter, r *http.Request
 var grafanaIDRe = regexp.MustCompile(`^\d+$`)
 
 // handleImportGrafana 导入看板模板：从 grafana.com 按 ID 拉取，或解析粘贴/上传的 JSON
-// （自动识别 Grafana / 夜莺 Nightingale 两种导出格式），映射后保存。
+// （自动识别 Grafana / 兼容看板等导出格式），映射后保存。
 func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GrafanaID string `json:"grafana_id"`
 		JSON      string `json:"json"`
 		Name      string `json:"name"`
-		Format    string `json:"format"` // ""/auto | grafana | nightingale | aiops（留空则自动识别）
+		Format    string `json:"format"` // ""/auto | grafana | nightingale | aiops（留空则自动识别；nightingale 为内部兼容格式键）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
@@ -383,7 +383,7 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 	} else {
 		id := strings.TrimSpace(req.GrafanaID)
 		if !grafanaIDRe.MatchString(id) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请填写 grafana.com 看板 ID（纯数字），或粘贴/上传 Grafana / 夜莺看板 JSON"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请填写 grafana.com 看板 ID（纯数字），或粘贴/上传 Grafana / 兼容看板 JSON"})
 			return
 		}
 		// grafana.com 官方看板下载端点（公网，SSRF 守卫放行公网 IP）。
@@ -442,7 +442,7 @@ func (s *Server) handleImportGrafana(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := "Grafana"
 	if format == "nightingale" {
-		kind = "夜莺"
+		kind = "兼容看板"
 	} else if format == "aiops" {
 		kind = "AIOps 模板"
 	}

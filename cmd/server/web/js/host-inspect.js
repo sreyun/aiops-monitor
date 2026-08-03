@@ -209,6 +209,12 @@ document.addEventListener("aiops:hosts-updated", () => {
   INSP_HOSTS_ERR = "";
   renderInspHostPicker();
 });
+document.addEventListener("aiops:host-trees-refresh", () => {
+  if (!inspPanelActive()) return;
+  INSP_HOSTS_LOADING = false;
+  INSP_HOSTS_ERR = "";
+  renderInspHostPicker();
+});
 
 safeAddEventListener("inspRefreshBtn", "click", () => loadHostInspect({ forceHosts: true }));
 

@@ -5,6 +5,10 @@
 (function () {
   var LIGHT = "#f5f7fa", DARK = "#0a0d13";
   try {
+    // 新版壳 iframe 内嵌：提前加 class，避免侧栏/顶栏闪一下
+    if (/(?:^|[?&])embed=1(?:&|$)/.test(location.search)) {
+      document.documentElement.classList.add("embed-mode");
+    }
     var t = localStorage.getItem("aiops_theme") || "light";
     if (t !== "light" && t !== "dark") t = "light";
     document.documentElement.setAttribute("data-theme", t);

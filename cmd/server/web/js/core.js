@@ -278,6 +278,8 @@ function normalizeHostsPayload(j) {
  */
 function syncHostCache(hosts) {
   const list = normalizeHostsPayload(hosts);
+  const prevSig = window._hostRosterSig || "";
+  const nextSig = list.map(h => h && h.id).filter(Boolean).sort().join(",");
   LAST_HOSTS = list;
   window._cachedHosts = list;
   HOST_META = list.map(h => ({ id: h.id, hostname: h.hostname }));
@@ -288,6 +290,19 @@ function syncHostCache(hosts) {
   try {
     document.dispatchEvent(new CustomEvent("aiops:hosts-updated", { detail: { hosts: list } }));
   } catch (_) {}
+  // Host joined/left: keep left trees + open pickers live. Skip nested auto
+  // refresh when already inside refreshHostTreesAuto (avoids double fetch).
+  if (prevSig && nextSig !== prevSig && !window._hostTreeAutoInside) {
+    try {
+      const onHosts = !!document.querySelector("#view-hosts.active");
+      if (!onHosts && typeof refreshHostTreesAuto === "function") {
+        refreshHostTreesAuto({ forceHosts: false });
+      } else {
+        document.dispatchEvent(new CustomEvent("aiops:host-trees-refresh", { detail: { hosts: list } }));
+      }
+    } catch (_) {}
+  }
+  window._hostRosterSig = nextSig;
   return list;
 }
 
@@ -359,14 +374,34 @@ const fmtUptime = s => {
   return d > 0 ? `${d}${I18N.t("time.day")}${h}${I18N.t("time.hour")}` : h > 0 ? `${h}${I18N.t("time.hour")}${m}${I18N.t("time.min")}` : `${m}${I18N.t("time.minute")}`;
 };
 const fmtDateTime = ts => {
-  const d = new Date(ts * 1000);
-  const Y = d.getFullYear();
-  const M = String(d.getMonth() + 1).padStart(2, '0');
-  const D = String(d.getDate()).padStart(2, '0');
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  const s = String(d.getSeconds()).padStart(2, '0');
-  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+  // Product clock: Asia/Shanghai (北京时间), independent of browser TZ.
+  const ms = (Number(ts) < 1e12 ? Number(ts) * 1000 : Number(ts));
+  if (!Number.isFinite(ms) || ms <= 0) return "-";
+  try {
+    const dtf = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+    });
+    const bag = {};
+    for (const p of dtf.formatToParts(new Date(ms))) {
+      if (p.type !== "literal") bag[p.type] = p.value;
+    }
+    let hour = Number(bag.hour);
+    if (hour === 24) hour = 0;
+    const pad = n => String(n).padStart(2, "0");
+    return `${bag.year}-${pad(bag.month)}-${pad(bag.day)} ${pad(hour)}:${pad(bag.minute)}:${pad(bag.second)}`;
+  } catch {
+    const d = new Date(ms);
+    const Y = d.getFullYear();
+    const M = String(d.getMonth() + 1).padStart(2, "0");
+    const D = String(d.getDate()).padStart(2, "0");
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    const s = String(d.getSeconds()).padStart(2, "0");
+    return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+  }
 };
 const usageColor = p => p >= 90 ? "var(--crit)" : p >= 80 ? "var(--warn)" : p >= 60 ? "var(--info)" : "var(--ok)";
 const ago = ts => {

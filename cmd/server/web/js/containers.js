@@ -539,5 +539,18 @@ function ctWireCompose() {
 }
 
 window._pageRenderers = window._pageRenderers || {};
+if (!window._ctHostTreesRefreshBound) {
+  window._ctHostTreesRefreshBound = true;
+  let _ctTreeRefreshT = null;
+  document.addEventListener("aiops:host-trees-refresh", () => {
+    if (!document.querySelector("#view-containers.active")) return;
+    if (_ctTreeRefreshT) clearTimeout(_ctTreeRefreshT);
+    _ctTreeRefreshT = setTimeout(() => {
+      _ctTreeRefreshT = null;
+      if (typeof loadContainersPanel === "function") loadContainersPanel();
+    }, 600);
+  });
+}
+
 window._pageRenderers.containers = loadContainersPanel;
 })();

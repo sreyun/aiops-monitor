@@ -16,7 +16,8 @@ import (
 	"time"
 )
 
-//go:embed web
+// all: includes Vite chunks that start with "_" / "." (go:embed skips them by default).
+//go:embed all:web
 var webFS embed.FS
 
 // Server wires the store, the operator-editable config and the notifier to
@@ -796,7 +797,7 @@ func (s *Server) Routes() http.Handler {
 		// 注意：不能 StripPrefix——文件在 web/js、web/css 子目录下，需保留前缀映射到子目录。
 		mux.Handle("GET /css/", fsrv)
 		mux.Handle("GET /js/", fsrv)
-		mux.Handle("GET /v2/", fsrv) // React SPA assets (base=/v2/)
+		mux.Handle("GET /v2/", fsrv) // Vue SPA assets (base=/v2/)
 		mux.HandleFunc("GET /v2", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/v2/", http.StatusFound)
 		})

@@ -114,7 +114,7 @@
   --elevation-4:var(--shadow-xl);
 
   /* ============================================================
-     v6.35 设计系统增强 Token（夜莺式专业运维视觉 · 纯增量，不覆盖上方既有值）
+     v6.35 设计系统增强 Token（专业运维视觉 · 纯增量，不覆盖上方既有值）
      ============================================================ */
   /* —— 字体 —— 展示/正文/等宽三分离，数字统一等宽对齐 —— */
   --font-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
@@ -143,7 +143,7 @@
   --hairline:1px solid var(--line);
   --hairline-strong:1px solid var(--line2);
 
-  /* —— 状态色·调和（夜莺/antd 暗色哲学：色相稳定、饱和度收敛、明度对齐）
+  /* —— 状态色·调和（antd 暗色哲学：色相稳定、饱和度收敛、明度对齐）
         仅在既有四元组基础上微调，保证 ok/warn/crit/info 视觉权重一致 —— */
   --ok:#33c46f; --ok-soft:rgba(51,196,111,.12);
   --warn:#e8a13c; --warn-soft:rgba(232,161,60,.12);
@@ -177,7 +177,7 @@
      且仍浅于 --muted 以保留层级。 */
   --txt:#1a2332; --txt2:#4a5568; --muted:#6b7588; --muted2:#767f8e;
 
-  /* 主色对齐 Ant Design / 夜莺蓝 #1677ff（较原 #2563eb 更清亮、少靛蓝），hover 用 antd active 深蓝 */
+  /* 主色对齐 Ant Design 蓝 #1677ff（较原 #2563eb 更清亮、少靛蓝），hover 用 antd active 深蓝 */
   --accent:#1677ff; --accent-hover:#0958d9; --accent-soft:rgba(22,119,255,.10);
   --accent2:#7c3aed; --accent2-soft:rgba(124,58,237,.10);
   --ok:#16a34a; --ok-soft:rgba(22,163,74,.10);
@@ -347,7 +347,7 @@ body{
 }
 .nav-item.active .nav-count{ background:var(--accent); color:#fff; }
 
-/* Nightingale-style grouped navigation: category headers + collapsible sections */
+/* Grouped navigation: category headers + collapsible sections */
 .nav-group{margin-top:11px; display:flex; flex-direction:column; gap:2px}
 .nav-group-label{
   display:flex; align-items:center; gap:6px; width:100%; text-align:left;
@@ -3672,7 +3672,7 @@ code{font-family:var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace
    v5.5.0 增量美化 — 表格与列表（Task 14）
    ============================================================ */
 
-/* 表头 sticky 效果 + antd/夜莺式浅底表头（与卡片底色拉开细微对比） */
+/* 表头 sticky 效果 + antd 浅底表头（与卡片底色拉开细微对比） */
 table thead th{
   position:sticky;
   top:0;
@@ -5942,7 +5942,7 @@ button.sec-metric.sec-kpi-btn:hover{ border-color: color-mix(in srgb, var(--acce
 #webSecurityPanel .data-table td.muted{ color:var(--muted2); font-size:12px }
 
 /* ============================================================
-   v6.35 设计系统增强层 · 夜莺式专业运维视觉（Nightingale-inspired）
+   v6.35 设计系统增强层 · 专业运维视觉
    ------------------------------------------------------------
    本层位于文件末尾，依赖 CSS 级联以同/更高特异性收敛前文默认值，
    达成全局一致的配色/间距/动效/组件观感。仅纯 CSS，不触 HTML 结构与 JS 逻辑。
@@ -6075,7 +6075,7 @@ input[type="checkbox"]:hover, input[type="radio"]:hover{ filter:brightness(1.1);
 .ai-preset-row{ border-radius:var(--r-sm); }
 
 /* ---------- 09 · 表格：行高/斑马纹/表头/排序 统一 ---------- */
-/* 表头：夜莺式浅底 + 小号字 + 字距，与数据行拉开层次 */
+/* 表头：浅底 + 小号字 + 字距，与数据行拉开层次 */
 table thead th{
   font-size:var(--fs-sm); font-weight:600; color:var(--muted); letter-spacing:.03em;
   padding:9px 12px; border-bottom:var(--hairline-strong); white-space:nowrap;
@@ -6133,3 +6133,34 @@ th[data-sort]:hover, th.sortable:hover{ color:var(--txt); }
 @keyframes viewIn{ from{ opacity:0; transform:translateY(4px) } to{ opacity:1; transform:none } }
 @media (prefers-reduced-motion: reduce){ .view.active{ animation:none } }
 
+
+/* ========== 新版壳 iframe 内嵌模式：隐藏侧栏/顶栏，内容铺满 ========== */
+html.embed-mode .sidebar,
+html.embed-mode .topbar,
+html.embed-mode .conn-status,
+html.embed-mode .sidebar-collapse-btn {
+  display: none !important;
+}
+html.embed-mode .app {
+  display: block !important;
+  grid-template-columns: none !important;
+  min-height: 100vh;
+  height: 100%;
+}
+html.embed-mode .main {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-height: 100vh;
+  height: 100%;
+  overflow: auto;
+}
+html.embed-mode .content {
+  padding: 12px 14px 20px !important;
+  max-width: none !important;
+}
+html.embed-mode body {
+  overflow: auto;
+  background: var(--bg);
+}

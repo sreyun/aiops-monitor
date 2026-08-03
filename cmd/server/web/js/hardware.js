@@ -1020,6 +1020,20 @@ function hwParseSeries(points) {
 
 /* ---------- 事件（全部委托，符合 CSP script-src 'self'） ---------- */
 
+if (!window._hwHostTreesRefreshBound) {
+  window._hwHostTreesRefreshBound = true;
+  let _hwTreeRefreshT = null;
+  document.addEventListener("aiops:host-trees-refresh", () => {
+    if (!document.querySelector("#view-hardware.active")) return;
+    if (_hwTreeRefreshT) clearTimeout(_hwTreeRefreshT);
+    // Debounce BMC fan-out — join storms must not stampede /hardware/health.
+    _hwTreeRefreshT = setTimeout(() => {
+      _hwTreeRefreshT = null;
+      if (typeof loadHardwarePanel === "function") loadHardwarePanel();
+    }, 800);
+  });
+}
+
 safeAddEventListener("hwRefreshBtn", "click", loadHardwarePanel);
 safeAddEventListener("hardwarePanel", "click", e => {
   // 删除（树节点/详情头共用）

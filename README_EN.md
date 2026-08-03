@@ -63,7 +63,7 @@ Building on the v0.19.0 closed-loop foundation (dry-run → propose → approve 
 | **AI speech** | One-click “Test speech” in AI settings (TTS sample + optional STT round-trip) |
 | **Security surface** | FIM + threat-intel channel in the security center; host/web scans remain trackable |
 | **Agent updates** | Batch remote update; Windows stays `pending_verify` until `agent_version` ACK |
-| **Linux install** | `ProtectHome=read-only`; agent reinstall no longer purges gateway `aiops-relay` |
+| **Linux install** | `ProtectHome=false`; agent reinstall no longer purges gateway `aiops-relay` |
 | **Mobile** | Android / HarmonyOS consoles are **externally distributed** (source not in this repo) |
 
 Earlier v0.19.0 pillars remain: remote gate / freeze windows, scoped RAG & Skills, ops-effect KPIs, lightweight ITSM. Full notes: [CHANGELOG.md](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases).

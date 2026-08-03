@@ -1086,6 +1086,22 @@ function hsPatchRunningUI() {
   }
 }
 
+if (!window._hsHostTreesRefreshBound) {
+  window._hsHostTreesRefreshBound = true;
+  let _hsTreeRefreshT = null;
+  document.addEventListener("aiops:host-trees-refresh", () => {
+    if (!document.querySelector("#view-host-security.active")) return;
+    if (_hsTreeRefreshT) clearTimeout(_hsTreeRefreshT);
+    _hsTreeRefreshT = setTimeout(() => {
+      _hsTreeRefreshT = null;
+      if (typeof LAST_HOSTS !== "undefined" && Array.isArray(LAST_HOSTS) && LAST_HOSTS.length) {
+        hsHosts = LAST_HOSTS;
+      }
+      if (typeof paintHostSecurity === "function") paintHostSecurity();
+    }, 400);
+  });
+}
+
 function hsMaybePoll() {
   if (hsPollTimer) { clearInterval(hsPollTimer); hsPollTimer = null; }
   const running = (hsScans || []).some(s => s.status === "running") || (hsSelected && hsSelected.status === "running");
