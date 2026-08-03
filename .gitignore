@@ -64,13 +64,9 @@ generated/test-output/*
 # Node.js 依赖（未来前端框架迁移）
 node_modules/
 
-# Web 控制台 v2 源码（独立开发；构建产物嵌入 cmd/server/web/v2，不纳入主仓）
-frontend/
-
 # 评估报告和临时文档
 *.html
 !cmd/server/web/index.html
-!cmd/server/web/v2/index.html
 
 evaluation-report.html
 evaluation-report-v2.html
@@ -84,7 +80,7 @@ fix-summary.html
 # 产品官网（独立部署，不纳入项目源码）
 website/
 
-# 独立前端工程（不纳入主仓；服务端内嵌 UI 仍在 cmd/server/web）
+# 已废弃的独立前端工程（勿再纳入主仓；控制台仅经典版 cmd/server/web）
 frontend/
 
 # CI/CD 配置（仅保留 release.yml 自动构建，其他 .github/ 内容不提交）

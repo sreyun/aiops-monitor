@@ -526,19 +526,17 @@ rm -f config.json 2>/dev/null || true
 echo "[AIOps] config written: $DIR/config.yaml (server: $SERVER)"
 
 if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
-  # Linux + root + real systemd → unit file. Run as the installing operator:
-  #   AIOPS_USER (explicit) > SUDO_USER (curl|sudo bash) > root.
+  # Linux + root + real systemd → unit file.
+  # Default User=root so the remote terminal can edit /etc, install packages, etc.
+  # (Older builds defaulted to SUDO_USER; vim then hit E45 readonly on /etc/*.)
+  # Least privilege opt-in: AIOPS_USER=alice curl … | sudo bash
   # Never create a dedicated "aiops" system account.
   if [ -z "${AIOPS_USER:-}" ]; then
-    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && id "$SUDO_USER" >/dev/null 2>&1; then
-      AIOPS_USER="$SUDO_USER"
-    else
-      AIOPS_USER="root"
-    fi
+    AIOPS_USER="root"
   fi
   if ! id "$AIOPS_USER" >/dev/null 2>&1; then
     echo "[AIOps] ERROR: run-as user '$AIOPS_USER' does not exist."
-    echo "[AIOps] Set AIOPS_USER to an existing account, or re-run via sudo as that user."
+    echo "[AIOps] Set AIOPS_USER to an existing account, or omit it for root."
     exit 1
   fi
   AIOPS_GROUP="$(id -gn "$AIOPS_USER" 2>/dev/null || echo "$AIOPS_USER")"
@@ -548,9 +546,6 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
   # the rest of root's capabilities and breaks interactive shell / file ops
   # (Go reports fork/exec /bin/bash: permission denied).
   UNIT_CAPS=""
-  # Remote terminal needs sudo/setuid helpers and a shared /tmp — do not lock
-  # NoNewPrivileges or PrivateTmp (those made the shell look half-read-only).
-  UNIT_NNP="NoNewPrivileges=false"
   if [ "__SNI_ENABLED__" = "true" ] || [ "__CONTENT_AUDIT__" = "true" ]; then
     UNIT_CAPS="AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 "
@@ -571,9 +566,8 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
   [ -n "$TERM_HOME" ] && [ -d "$TERM_HOME" ] || TERM_HOME=$(eval echo "~$AIOPS_USER" 2>/dev/null || true)
   [ -n "$TERM_HOME" ] && [ -d "$TERM_HOME" ] || TERM_HOME="$DIR"
   # Remote terminal needs a real interactive shell with full FS access (write
-  # under $HOME, /etc, package managers, etc.). Do not sandbox the home dir or
-  # the system tree — that made the session look read-only and broke many ops.
-  # Wipe leftover drop-ins so older home-protection overrides cannot stick.
+  # under $HOME, /etc, package managers, etc.). Explicitly disable sandbox
+  # directives; wipe leftover drop-ins so older Protect* overrides cannot stick.
   aiops_purge_systemd_unit aiops-agent
   aiops_purge_systemd_unit aiops-monitor-agent
   cat > /etc/systemd/system/aiops-agent.service <<UNIT
@@ -593,10 +587,11 @@ Environment=LOGNAME=$AIOPS_USER
 ExecStart=$DIR/aiops-agent --config $DIR/config.yaml
 Restart=always
 RestartSec=5
-$UNIT_NNP
 $UNIT_CAPS
 ProtectHome=false
+ProtectSystem=false
 PrivateTmp=false
+NoNewPrivileges=false
 [Install]
 WantedBy=multi-user.target
 UNIT

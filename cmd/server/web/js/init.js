@@ -30,7 +30,7 @@ window.addEventListener("hashchange", () => {
   applyLegacyHashRoute();
 });
 
-// 支持 /?ui=legacy#view 与 #dashboard/{id} / #settings 深链（含首屏）
+// 支持 #view 与 #dashboard/{id} / #settings 深链（含首屏；兼容旧 ?ui=legacy 查询）
 const LEGACY_HASH_VIEWS = new Set([
   "overview", "hosts", "checks", "alerts", "automation", "log", "logs",
   "hardware", "hyperv", "containers", "k8s", "netflow", "snmp",

@@ -1460,7 +1460,7 @@ function startApp() {
   });
   // P3-1: 初始化 WebSocket 推送（带降级到轮询）
   initPushWS();
-  // 应用 /?ui=legacy#... 深链（含首屏进入）
+  // 应用 #... 深链（含首屏进入；兼容旧 ?ui=legacy）
   try { if (typeof applyLegacyHashRoute === "function") applyLegacyHashRoute(); } catch (e) {}
 }
 // 首次登录 · 安全初始化：强制修改用户名 + 密码的专用弹窗（替代直接打开个人信息页）。

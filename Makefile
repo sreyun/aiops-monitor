@@ -5,17 +5,14 @@
 # ============================================================
 GO ?= go
 
-.PHONY: audit vet test vuln sec staticcheck sbom tools build fmt help web
+.PHONY: audit vet test vuln sec staticcheck sbom tools build fmt help
 
 help: ## 显示可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}'
 
 audit: vet test vuln sec ## 跑全套安全门（vet+race测试+漏洞+SAST）
 
-web: ## 构建 React 控制台到 cmd/server/web/v2（Go embed）
-	cd frontend && npm ci && npm run build
-
-build: web ## 先构建前端，再编译 server 与 agent
+build: ## 编译 server 与 agent（经典 Web UI 已嵌入，无需前端构建）
 	$(GO) build ./cmd/server ./cmd/agent
 
 vet: ## go vet 静态检查

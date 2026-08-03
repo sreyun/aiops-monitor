@@ -51,8 +51,8 @@ func installAgentService(exePath, cfgPath string) error {
 	if st, err := os.Stat(home); err != nil || !st.IsDir() {
 		home = "/var/tmp"
 	}
-	// Do not set ProtectHome/ProtectSystem/PrivateTmp/NoNewPrivileges: remote
-	// interactive shell must have full write access and sudo/setuid helpers.
+	// Remote interactive shell must have full write access (incl. /etc) and
+	// sudo/setuid helpers — explicitly disable systemd sandboxing.
 	unit := fmt.Sprintf(`[Unit]
 Description=AIOps Agent (metrics + remote desktop)
 After=network-online.target
@@ -71,6 +71,7 @@ Environment=LOGNAME=root
 KillMode=mixed
 LimitNOFILE=65536
 ProtectHome=false
+ProtectSystem=false
 PrivateTmp=false
 NoNewPrivileges=false
 

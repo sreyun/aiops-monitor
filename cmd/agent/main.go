@@ -429,6 +429,9 @@ func main() {
 	if selfTest {
 		os.Exit(runSelfTest(os.Stdout, servers, hostID, cfgPath, cfg.StateFile))
 	}
+	// Linux: rewrite legacy sandboxed / non-root units so remote terminal can
+	// write /etc and $HOME (vim E45 / ProtectHome). No-op on other platforms.
+	ensureLinuxAgentUnitPrivileges()
 	agent := NewAgent(
 		servers,
 		time.Duration(cfg.ReportInterval)*time.Second,

@@ -1,1 +1,0 @@
-function e(e){return String(e.level||e.severity||``).toLowerCase()}export{e as t};

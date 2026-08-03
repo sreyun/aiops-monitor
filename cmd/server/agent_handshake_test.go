@@ -188,12 +188,12 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		`elif [ "$OS" = "Darwin" ]`, "com.aiops.agent.plist",
 		"<key>RunAtLoad</key><true/>", "<key>KeepAlive</key><true/>",
 		"launchctl load", "Restart=always", "@reboot",
-		"User=$AIOPS_USER", "NoNewPrivileges=false", "SUDO_USER",
-		"AIOPS_USER=\"$SUDO_USER\"", "Never create a dedicated",
+		"User=$AIOPS_USER", "NoNewPrivileges=false",
+		"AIOPS_USER=\"root\"", "Never create a dedicated",
 		"gui/$AIOPS_UID", "aiops_has_systemd", "aiops_fetch", "unsupported architecture",
 		"AmbientCapabilities=CAP_NET_RAW",
 		"TERM_SHELL=", "Environment=SHELL=$TERM_SHELL", "Environment=HOME=", "ProtectHome=false",
-		"PrivateTmp=false",
+		"ProtectSystem=false", "PrivateTmp=false",
 		"<key>EnvironmentVariables</key>", "<key>SHELL</key>", "<key>HOME</key>",
 		"aiops_is_installed", "aiops_stop_and_uninstall_existing", "aiops_purge_systemd_unit",
 		".service.d",
@@ -201,6 +201,20 @@ func TestInstallScriptsRobustness(t *testing.T) {
 		"kickstart -k")
 	if strings.Contains(shIn, "CapabilityBoundingSet=") {
 		t.Error("install.sh must not set CapabilityBoundingSet= (drops other root caps; breaks terminal)")
+	}
+	// Linux systemd path must default AIOPS_USER=root (macOS may still use SUDO_USER for LaunchAgent).
+	linuxIdx := strings.Index(shIn, `aiops_has_systemd`)
+	unitIdx := strings.Index(shIn, `/etc/systemd/system/aiops-agent.service`)
+	if linuxIdx < 0 || unitIdx < 0 || unitIdx < linuxIdx {
+		t.Error("install.sh missing Linux systemd unit path")
+	} else {
+		linuxBlock := shIn[linuxIdx:unitIdx]
+		if !strings.Contains(linuxBlock, `AIOPS_USER="root"`) {
+			t.Error("Linux install must default AIOPS_USER=root so remote terminal can write /etc")
+		}
+		if strings.Contains(linuxBlock, `AIOPS_USER="$SUDO_USER"`) {
+			t.Error("Linux install must not default AIOPS_USER to SUDO_USER (vim E45 on /etc)")
+		}
 	}
 	// Match real unit directives (line-start), not prose comments.
 	for _, bad := range []string{

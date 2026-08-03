@@ -479,7 +479,12 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 		a.termSendPlain(server, sid, "\r\n\x1b[31m无法启动交互 Shell（"+shell+"）。请确认主机已安装 bash/sh。\x1b[0m\r\n")
 		return
 	}
-	slog.Info("远程终端会话开始", "session", sid, "shell", shell)
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		a.termSendPlain(server, sid,
+			"\r\n\x1b[33m[AIOps] Agent 当前以非 root 运行（uid="+strconv.Itoa(os.Geteuid())+
+				"）。直接编辑 /etc 会只读（vim E45）；请 sudo，或重装 Agent（默认以 root 运行）。\x1b[0m\r\n")
+	}
+	slog.Info("远程终端会话开始", "session", sid, "shell", shell, "uid", os.Geteuid())
 	a.streamInteractiveShell(server, sid, sh, lang)
 }
 

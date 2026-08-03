@@ -5,7 +5,7 @@
 **開源、可私有化的主機監控與 SRE 運維平台**  
 觀測 · 告警 · 自癒 · 遠端運維 · AI 診斷 —— 收斂進一個你完全掌控的二進位。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
+[![Version](https://img.shields.io/badge/Version-v0.19.61-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.61)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -57,7 +57,7 @@ AIOps 把高頻路徑收斂為 **一個可自託管的平台**：
 5. **遠端運維** — Web 終端（回放／旁觀／審計／二次密碼）、遠端桌面（JPEG／H.264）、埠轉發／HTTP 代理與 SSRF 防護。
 6. **安全與交付** — RBAC、MFA、Agent 指紋、AES-256-GCM；Android／HarmonyOS 獨立分發。
 
-目前版本 **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · 鏡像 [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+目前版本 **[v0.19.61](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.61)** · 鏡像 [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
