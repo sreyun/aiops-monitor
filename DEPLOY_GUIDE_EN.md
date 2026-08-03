@@ -1,7 +1,7 @@
 # Deploy guide moved
 
-> **文档已迁移** → **[docs/deploy.en.md](docs/deploy.en.md)**
+> **文档已迁移** → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
 >
-> This page moved to **[docs/deploy.en.md](docs/deploy.en.md)** (部署指南已迁移).
+> This page moved to **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**.
 
-请更新书签；根目录保留本跳转页以兼容旧链接。
+请更新书签；本跳转页仅用于兼容旧链接。

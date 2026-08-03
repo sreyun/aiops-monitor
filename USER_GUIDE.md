@@ -1,7 +1,7 @@
 # 使用说明书已迁移
 
-> **文档已迁移** → **[docs/user-guide.md](docs/user-guide.md)**
+> **文档已迁移** → **[docs/guides/user-guide.md](docs/guides/user-guide.md)**
 >
-> This page moved to **[docs/user-guide.md](docs/user-guide.md)** (User guide moved).
+> This page moved to **[docs/guides/user-guide.md](docs/guides/user-guide.md)**.
 
-请更新书签；根目录保留本跳转页以兼容旧链接。
+请更新书签；本跳转页仅用于兼容旧链接。

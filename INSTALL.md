@@ -1,7 +1,7 @@
 # 安装指南已迁移
 
-> **文档已迁移** → **[docs/install.md](docs/install.md)**
+> **文档已迁移** → **[docs/getting-started/install.md](docs/getting-started/install.md)**
 >
-> This page moved to **[docs/install.md](docs/install.md)** (Installation guide moved).
+> This page moved to **[docs/getting-started/install.md](docs/getting-started/install.md)**.
 
-请更新书签；根目录保留本跳转页以兼容旧链接。
+请更新书签；本跳转页仅用于兼容旧链接。

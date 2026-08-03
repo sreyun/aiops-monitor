@@ -5,7 +5,7 @@
 **オープンソースのセルフホスト型ホスト監視 & SRE プラットフォーム**  
 観測 · アラート · 自動修復 · リモート運用 · AI 診断 — 完全に自分で制御できる 1 バイナリへ。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.58-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)
+[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -55,9 +55,9 @@ AIOps はよく使う経路を **1 つのセルフホスト基盤** にまとめ
 3. **修復 & SRE** — 承認ガード付き Playbook；インシデント、SLO、チケット、凍結ウィンドウ、監査付き break-glass。
 4. **AI 診断** — 点検＋RCA（OpenAI 互換、未設定時はヒューリスティック）；pgvector RAG、Skills、MCP（Cursor／Claude）；音声セルフテスト。
 5. **リモート運用** — Web 端末（再生／観戦／監査／二次パスワード）、リモートデスクトップ（JPEG／H.264）、ポート転送／HTTP プロキシと SSRF 防御。
-6. **セキュアな提供** — RBAC、MFA、Agent 指紋、AES-256-GCM；既定は Vue コンソール（`/?ui=legacy` でクラシック）；Android／HarmonyOS は別配布。
+6. **セキュアな提供** — RBAC、MFA、Agent 指紋、AES-256-GCM；Android／HarmonyOS は別配布。
 
-現行リリース **[v0.19.58](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+現行リリース **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-詳細インストール → **[docs/install.en.md](docs/install.en.md)** · 本番 → **[docs/deploy.en.md](docs/deploy.en.md)**
+詳細インストール → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · 本番 → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
 
 ---
 
@@ -88,7 +88,7 @@ go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```mermaid
 flowchart LR
   subgraph Clients
-    Web[Web / Vue]
+    Web[Web Console]
     Mob[Android / HarmonyOS]
   end
   subgraph Server
@@ -118,13 +118,12 @@ flowchart LR
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/install.md](docs/install.md) · [EN](docs/install.en.md) |
-| Production deploy | [docs/deploy.md](docs/deploy.md) · [EN](docs/deploy.en.md) |
-| End-user guide | [docs/user-guide.md](docs/user-guide.md) |
-| Port forward | [docs/forward.md](docs/forward.md) |
-| Content audit / playbooks | [docs/content-audit.md](docs/content-audit.md) |
-| Vue v2 migration | [docs/v2-migration.md](docs/v2-migration.md) |
-| CI / SQL gates | [docs/ci-gate.md](docs/ci-gate.md) |
+| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
+| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
+| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
+| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
+| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
+| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
 
 ---
 

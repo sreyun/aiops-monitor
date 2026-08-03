@@ -5,7 +5,7 @@
 **Open-source, self-hosted host monitoring & SRE platform**  
 Observe · Alert · Remediate · Remote ops · AI diagnosis — one binary you fully control.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.58-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)
+[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -55,9 +55,9 @@ Six pillars — not a laundry list:
 3. **Remediate & SRE** — Playbooks with approval guardrails; incidents, SLO, tickets, freeze windows, audited break-glass.  
 4. **AI diagnosis** — Inspection + RCA (OpenAI-compatible models; heuristics if unset); pgvector RAG, Skills, MCP for Cursor / Claude; speech self-test.  
 5. **Remote ops** — Web terminal (replay, observe, audit, secondary password), remote desktop (JPEG/H.264), port-forward / HTTP proxy with SSRF guards.  
-6. **Secure delivery** — RBAC, MFA, agent fingerprint, AES-256-GCM config crypto; Vue console by default (`/?ui=legacy` for classic UI); Android / HarmonyOS apps distributed separately.
+6. **Secure delivery** — RBAC, MFA, agent fingerprint, AES-256-GCM config crypto; Web console; Android / HarmonyOS apps distributed separately.
 
-Current release **[v0.19.58](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+Current release **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -81,7 +81,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-Full install → **[docs/install.en.md](docs/install.en.md)** · Production → **[docs/deploy.en.md](docs/deploy.en.md)**
+Full install → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · Production → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
 
 ---
 
@@ -90,7 +90,7 @@ Full install → **[docs/install.en.md](docs/install.en.md)** · Production → 
 ```mermaid
 flowchart LR
   subgraph Clients
-    Web[Web / Vue]
+    Web[Web Console]
     Mob[Android / HarmonyOS]
   end
   subgraph Server
@@ -120,13 +120,12 @@ Long-form docs live under [`docs/`](docs/README.md). Old root filenames remain a
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/install.md](docs/install.md) · [EN](docs/install.en.md) |
-| Production deploy | [docs/deploy.md](docs/deploy.md) · [EN](docs/deploy.en.md) |
-| End-user guide | [docs/user-guide.md](docs/user-guide.md) |
-| Port forward | [docs/forward.md](docs/forward.md) |
-| Content audit / playbooks | [docs/content-audit.md](docs/content-audit.md) |
-| Vue v2 migration | [docs/v2-migration.md](docs/v2-migration.md) |
-| CI / SQL gates | [docs/ci-gate.md](docs/ci-gate.md) |
+| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
+| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
+| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
+| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
+| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
+| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
 
 ---
 

@@ -5,7 +5,7 @@
 **開源、可私有化的主機監控與 SRE 運維平台**  
 觀測 · 告警 · 自癒 · 遠端運維 · AI 診斷 —— 收斂進一個你完全掌控的二進位。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.58-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)
+[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -55,9 +55,9 @@ AIOps 把高頻路徑收斂為 **一個可自託管的平台**：
 3. **自癒與 SRE** — 劇本審批護欄；事件、SLO、工單、凍結窗、可審計 break-glass。
 4. **AI 診斷** — 巡檢與根因（OpenAI 相容模型，未設定時啟發式）；pgvector RAG、Skills、MCP（Cursor／Claude）；語音自測。
 5. **遠端運維** — Web 終端（回放／旁觀／審計／二次密碼）、遠端桌面（JPEG／H.264）、埠轉發／HTTP 代理與 SSRF 防護。
-6. **安全與交付** — RBAC、MFA、Agent 指紋、AES-256-GCM；預設 Vue 控制台（`/?ui=legacy` 回退經典版）；Android／HarmonyOS 獨立分發。
+6. **安全與交付** — RBAC、MFA、Agent 指紋、AES-256-GCM；Android／HarmonyOS 獨立分發。
 
-目前版本 **[v0.19.58](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)** · 鏡像 [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+目前版本 **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · 鏡像 [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-完整安裝 → **[docs/install.md](docs/install.md)** · 生產部署 → **[docs/deploy.md](docs/deploy.md)**
+完整安裝 → **[docs/getting-started/install.md](docs/getting-started/install.md)** · 生產部署 → **[docs/getting-started/deploy.md](docs/getting-started/deploy.md)**
 
 ---
 
@@ -88,7 +88,7 @@ go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```mermaid
 flowchart LR
   subgraph Clients
-    Web[Web / Vue]
+    Web[Web Console]
     Mob[Android / HarmonyOS]
   end
   subgraph Server
@@ -118,13 +118,12 @@ flowchart LR
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/install.md](docs/install.md) · [EN](docs/install.en.md) |
-| Production deploy | [docs/deploy.md](docs/deploy.md) · [EN](docs/deploy.en.md) |
-| End-user guide | [docs/user-guide.md](docs/user-guide.md) |
-| Port forward | [docs/forward.md](docs/forward.md) |
-| Content audit / playbooks | [docs/content-audit.md](docs/content-audit.md) |
-| Vue v2 migration | [docs/v2-migration.md](docs/v2-migration.md) |
-| CI / SQL gates | [docs/ci-gate.md](docs/ci-gate.md) |
+| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
+| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
+| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
+| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
+| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
+| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
 
 ---
 

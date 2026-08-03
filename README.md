@@ -5,7 +5,7 @@
 **一个开源、可私有化的主机监控与 SRE 运维平台**  
 观测 · 告警 · 自愈 · 远程运维 · AI 诊断 —— 收敛进一个你完全掌控的二进制。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.58-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)
+[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -82,9 +82,9 @@ AIOps 把高频路径收敛为 **一个可自托管的平台**：
 
 - RBAC（admin / operator / viewer）· MFA · Agent 机器指纹 · 配置 AES-256-GCM。
 - 主机/Web 安全扫描、FIM、内容审计（合规可控）。
-- **Vue 控制台**默认启用（`/?ui=legacy` 回退经典版）；Android / HarmonyOS 客户端独立分发。
+- Web 控制台与 **Android / HarmonyOS** 客户端独立分发。
 
-当前版本 **[v0.19.58](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+当前版本 **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -110,7 +110,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # 需 Go 1.26+
 ```
 
-完整步骤 → **[docs/install.md](docs/install.md)** · 生产加固 → **[docs/deploy.md](docs/deploy.md)**
+完整步骤 → **[docs/getting-started/install.md](docs/getting-started/install.md)** · 生产加固 → **[docs/getting-started/deploy.md](docs/getting-started/deploy.md)**
 
 ---
 
@@ -119,7 +119,7 @@ go build ./cmd/server ./cmd/agent   # 需 Go 1.26+
 ```mermaid
 flowchart LR
   subgraph Clients
-    Web[Web / Vue]
+    Web[Web Console]
     Mob[Android / HarmonyOS]
   end
   subgraph Server
@@ -152,13 +152,12 @@ flowchart LR
 
 | 你想… | 打开 |
 |------|------|
-| 安装 Agent / 服务端 | [docs/install.md](docs/install.md) · [EN](docs/install.en.md) |
-| 生产部署 / 备份 / 容灾 | [docs/deploy.md](docs/deploy.md) · [EN](docs/deploy.en.md) |
-| 按功能学怎么用 | [docs/user-guide.md](docs/user-guide.md) |
-| 端口转发 | [docs/forward.md](docs/forward.md) |
-| 内容审计与剧本 | [docs/content-audit.md](docs/content-audit.md) |
-| Vue v2 迁移 | [docs/v2-migration.md](docs/v2-migration.md) |
-| CI / SQL 门禁 | [docs/ci-gate.md](docs/ci-gate.md) |
+| 安装 Agent / 服务端 | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
+| 生产部署 / 备份 / 容灾 | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
+| 按功能学怎么用 | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
+| 端口转发 | [docs/guides/forward.md](docs/guides/forward.md) |
+| 内容审计与剧本 | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
+| CI / SQL 门禁 | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
 
 ---
 

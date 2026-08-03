@@ -5,7 +5,7 @@
 **Открытая self-hosted платформа мониторинга хостов и SRE**  
 Наблюдение · Алерты · Автовосстановление · Удалённые ops · ИИ-диагностика — один бинарник под вашим контролем.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.58-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)
+[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -55,9 +55,9 @@ AIOps сводит обычный путь в **одну self-hosted платф�
 3. **Восстановление и SRE** — playbook с approval-гарантиями; инциденты, SLO, тикеты, окна заморозки, аудируемый break-glass.
 4. **ИИ-диагностика** — инспекция + RCA (модели совместимые с OpenAI; иначе эвристика); RAG на pgvector, Skills, MCP (Cursor / Claude); самотест речи.
 5. **Удалённые ops** — web-терминал (replay, наблюдение, аудит, второй пароль), удалённый рабочий стол (JPEG/H.264), port-forward / HTTP-прокси с защитой SSRF.
-6. **Безопасная поставка** — RBAC, MFA, fingerprint агента, AES-256-GCM; консоль Vue по умолчанию (`/?ui=legacy` для classic UI); Android / HarmonyOS отдельно.
+6. **Безопасная поставка** — RBAC, MFA, fingerprint агента, AES-256-GCM; веб-консоль; Android / HarmonyOS отдельно.
 
-Текущий релиз **[v0.19.58](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.58)** · Зеркала: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+Текущий релиз **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · Зеркала: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-Установка → **[docs/install.en.md](docs/install.en.md)** · Прод → **[docs/deploy.en.md](docs/deploy.en.md)**
+Установка → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · Прод → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
 
 ---
 
@@ -88,7 +88,7 @@ go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```mermaid
 flowchart LR
   subgraph Clients
-    Web[Web / Vue]
+    Web[Web Console]
     Mob[Android / HarmonyOS]
   end
   subgraph Server
@@ -118,13 +118,12 @@ flowchart LR
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/install.md](docs/install.md) · [EN](docs/install.en.md) |
-| Production deploy | [docs/deploy.md](docs/deploy.md) · [EN](docs/deploy.en.md) |
-| End-user guide | [docs/user-guide.md](docs/user-guide.md) |
-| Port forward | [docs/forward.md](docs/forward.md) |
-| Content audit / playbooks | [docs/content-audit.md](docs/content-audit.md) |
-| Vue v2 migration | [docs/v2-migration.md](docs/v2-migration.md) |
-| CI / SQL gates | [docs/ci-gate.md](docs/ci-gate.md) |
+| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
+| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
+| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
+| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
+| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
+| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
 
 ---
 
