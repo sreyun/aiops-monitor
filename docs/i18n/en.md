@@ -5,15 +5,15 @@
 **Open-source, self-hosted host monitoring & SRE platform**  
 Observe · Alert · Remediate · Remote ops · AI diagnosis — one binary you fully control.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
+[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
 
-**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+**[简体中文](../../README.md) · [繁體中文](zh-TW.md) · [English](en.md) · [日本語](ja.md) · [한국어](ko.md) · [Français](fr.md) · [Deutsch](de.md) · [Español](es.md) · [Português](pt-BR.md) · [Русский](ru.md)**
 
-[Quick start](#-quick-start) · [Core capabilities](#-core-capabilities) · [Docs](docs/README.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
+[Quick start](#-quick-start) · [Core capabilities](#-core-capabilities) · [Docs](../README.md) · [Changelog](../../CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
 
 </div>
 
@@ -57,7 +57,7 @@ Six pillars — not a laundry list:
 5. **Remote ops** — Web terminal (replay, observe, audit, secondary password), remote desktop (JPEG/H.264), port-forward / HTTP proxy with SSRF guards.  
 6. **Secure delivery** — RBAC, MFA, agent fingerprint, AES-256-GCM config crypto; Web console; Android / HarmonyOS apps distributed separately.
 
-Current release **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+Current release **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -81,7 +81,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-Full install → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · Production → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
+Full install → **[../getting-started/install.en.md](../getting-started/install.en.md)** · Production → **[../getting-started/deploy.en.md](../getting-started/deploy.en.md)**
 
 ---
 
@@ -116,16 +116,16 @@ flowchart LR
 
 ## 📚 Documentation
 
-Long-form docs live under [`docs/`](docs/README.md). Old root filenames remain as **redirect stubs**.
+Long-form docs live under [`docs/`](../README.md). The repo root keeps only the Chinese README and changelog.
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
-| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
-| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
-| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
-| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
-| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
+| Install | [../getting-started/install.md](../getting-started/install.md) · [EN](../getting-started/install.en.md) |
+| Production deploy | [../getting-started/deploy.md](../getting-started/deploy.md) · [EN](../getting-started/deploy.en.md) |
+| End-user guide | [../guides/user-guide.md](../guides/user-guide.md) |
+| Port forward | [../guides/forward.md](../guides/forward.md) |
+| Content audit / playbooks | [../guides/content-audit.md](../guides/content-audit.md) |
+| CI / SQL gates | [../engineering/ci-gate.md](../engineering/ci-gate.md) |
 
 ---
 
@@ -139,7 +139,7 @@ If AIOps replaces a glue stack for you, **please Star the repo** — it keeps th
 
 ## License
 
-[MIT](LICENSE). No host caps, no “enterprise-only” traps. Mobile clients are separate packages (source not in this repo).
+[MIT](../../LICENSE). No host caps, no “enterprise-only” traps. Mobile clients are separate packages (source not in this repo).
 
 ---
 

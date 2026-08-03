@@ -5,15 +5,15 @@
 **Plataforma open-source autoalojada de monitorización de hosts y SRE**  
 Observar · Alertar · Remediar · Ops remotas · Diagnóstico IA — un binario bajo tu control.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
+[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
 
-**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+**[简体中文](../../README.md) · [繁體中文](zh-TW.md) · [English](en.md) · [日本語](ja.md) · [한국어](ko.md) · [Français](fr.md) · [Deutsch](de.md) · [Español](es.md) · [Português](pt-BR.md) · [Русский](ru.md)**
 
-[Inicio rápido](#-inicio-rápido) · [Capacidades clave](#-capacidades-clave) · [Documentación](docs/README.md) · [Registro de cambios](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
+[Inicio rápido](#-inicio-rápido) · [Capacidades clave](#-capacidades-clave) · [Documentación](../README.md) · [Registro de cambios](../../CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
 
 </div>
 
@@ -57,7 +57,7 @@ Seis pilares — no una lista interminable:
 5. **Ops remotas** — Terminal web (replay, observar, auditoría, contraseña secundaria), escritorio remoto (JPEG/H.264), port-forward / proxy HTTP con protección SSRF.
 6. **Entrega segura** — RBAC, MFA, huella del agente, cifrado AES-256-GCM; consola Web; Android / HarmonyOS por separado.
 
-Versión actual **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · Espejos: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+Versión actual **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · Espejos: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-Instalación → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · Producción → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
+Instalación → **[../getting-started/install.en.md](../getting-started/install.en.md)** · Producción → **[../getting-started/deploy.en.md](../getting-started/deploy.en.md)**
 
 ---
 
@@ -114,16 +114,16 @@ flowchart LR
 
 ## 📚 Documentación
 
-La documentación larga está en [`docs/`](docs/README.md). Los nombres antiguos en la raíz siguen como **redirecciones**.
+La documentación larga y los README localizados están en [`docs/`](../README.md). En la raíz solo quedan el README chino y el changelog.
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
-| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
-| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
-| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
-| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
-| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
+| Install | [../getting-started/install.md](../getting-started/install.md) · [EN](../getting-started/install.en.md) |
+| Production deploy | [../getting-started/deploy.md](../getting-started/deploy.md) · [EN](../getting-started/deploy.en.md) |
+| End-user guide | [../guides/user-guide.md](../guides/user-guide.md) |
+| Port forward | [../guides/forward.md](../guides/forward.md) |
+| Content audit / playbooks | [../guides/content-audit.md](../guides/content-audit.md) |
+| CI / SQL gates | [../engineering/ci-gate.md](../engineering/ci-gate.md) |
 
 ---
 
@@ -137,7 +137,7 @@ Si AIOps reemplaza un stack pegado, **deja una Star** — mantiene el proyecto v
 
 ## Licencia
 
-[MIT](LICENSE). Sin tope de hosts. Clientes móviles en paquetes separados (código fuente fuera de este repo).
+[MIT](../../LICENSE). Sin tope de hosts. Clientes móviles en paquetes separados (código fuente fuera de este repo).
 
 ---
 

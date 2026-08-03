@@ -5,13 +5,13 @@
 **一个开源、可私有化的主机监控与 SRE 运维平台**  
 观测 · 告警 · 自愈 · 远程运维 · AI 诊断 —— 收敛进一个你完全掌控的二进制。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
+[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
 
-**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+**[简体中文](README.md) · [繁體中文](docs/i18n/zh-TW.md) · [English](docs/i18n/en.md) · [日本語](docs/i18n/ja.md) · [한국어](docs/i18n/ko.md) · [Français](docs/i18n/fr.md) · [Deutsch](docs/i18n/de.md) · [Español](docs/i18n/es.md) · [Português](docs/i18n/pt-BR.md) · [Русский](docs/i18n/ru.md)**
 
 [快速开始](#-3-分钟上手) · [核心能力](#-核心能力) · [文档中心](docs/README.md) · [变更日志](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
 
@@ -84,7 +84,7 @@ AIOps 把高频路径收敛为 **一个可自托管的平台**：
 - 主机/Web 安全扫描、FIM、内容审计（合规可控）。
 - Web 控制台与 **Android / HarmonyOS** 客户端独立分发。
 
-当前版本 **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+当前版本 **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -148,7 +148,7 @@ flowchart LR
 
 ## 📚 文档中心
 
-所有长文已归拢到 [`docs/`](docs/README.md)，根目录旧文件名保留**跳转页**以免断链。
+所有长文与多语言简介在 [`docs/`](docs/README.md)；根目录仅保留本 README 与变更日志。
 
 | 你想… | 打开 |
 |------|------|

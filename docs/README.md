@@ -1,22 +1,19 @@
 # AIOps 文档中心 · Documentation
 
-> 根目录 [README.md](../README.md) 面向快速了解与试用；完整说明按主题分目录存放。
+> 仓库根目录只保留 [README.md](../README.md)（产品简介）与 [CHANGELOG.md](../CHANGELOG.md)；完整说明按主题存放在本目录。
 
 ## 目录结构
 
 ```text
-docs/
-├── README.md                 # 本索引
-├── getting-started/          # 安装与生产部署
-│   ├── install.md / install.en.md
-│   └── deploy.md  / deploy.en.md
-├── guides/                   # 使用与专项能力
-│   ├── user-guide.md
-│   ├── forward.md
-│   └── content-audit.md
-└── engineering/              # 工程门禁与验收
-    ├── ci-gate.md
-    └── year1-acceptance.md
+/
+├── README.md                 # 产品简介（简体中文）
+├── CHANGELOG.md
+└── docs/
+    ├── README.md             # 本索引
+    ├── i18n/                 # 多语言 README
+    ├── getting-started/      # 安装与生产部署
+    ├── guides/               # 使用与专项能力
+    └── engineering/          # 工程门禁与验收
 ```
 
 ## 多语言 README · Localized READMEs
@@ -24,23 +21,15 @@ docs/
 | Language | File |
 |----------|------|
 | 简体中文 | [../README.md](../README.md) |
-| 繁體中文 | [../README.zh-TW.md](../README.zh-TW.md) |
-| English | [../README_EN.md](../README_EN.md) |
-| 日本語 | [../README.ja.md](../README.ja.md) |
-| 한국어 | [../README.ko.md](../README.ko.md) |
-| Français | [../README.fr.md](../README.fr.md) |
-| Deutsch | [../README.de.md](../README.de.md) |
-| Español | [../README.es.md](../README.es.md) |
-| Português (Brasil) | [../README.pt-BR.md](../README.pt-BR.md) |
-| Русский | [../README.ru.md](../README.ru.md) |
-
-## 快速入口
-
-| 文档 | 说明 |
-|------|------|
-| [../README.md](../README.md) | 产品简介、核心能力、3 分钟上手（中文） |
-| [../README_EN.md](../README_EN.md) | Product overview & quick start (English) |
-| [../CHANGELOG.md](../CHANGELOG.md) | 版本变更记录 |
+| 繁體中文 | [i18n/zh-TW.md](./i18n/zh-TW.md) |
+| English | [i18n/en.md](./i18n/en.md) |
+| 日本語 | [i18n/ja.md](./i18n/ja.md) |
+| 한국어 | [i18n/ko.md](./i18n/ko.md) |
+| Français | [i18n/fr.md](./i18n/fr.md) |
+| Deutsch | [i18n/de.md](./i18n/de.md) |
+| Español | [i18n/es.md](./i18n/es.md) |
+| Português (Brasil) | [i18n/pt-BR.md](./i18n/pt-BR.md) |
+| Русский | [i18n/ru.md](./i18n/ru.md) |
 
 ## 入门 · Getting started
 
@@ -68,6 +57,6 @@ docs/
 
 ## 文档约定
 
-- **根目录**只保留：`README*.md`、`CHANGELOG.md`，以及旧路径**兼容跳转页**（`INSTALL.md` 等）。
-- **正文**按 `getting-started/` · `guides/` · `engineering/` 分类存放；旧扁平路径（如 `docs/install.md`）保留跳转页。
-- 链接失效时，优先查本索引；欢迎 PR 修正死链。
+- **根目录**仅保留：`README.md`、`CHANGELOG.md`（外加代码 / 配置 / 许可证等非文档文件）。
+- **多语言简介**统一放在 `docs/i18n/`；长文放在 `getting-started/` · `guides/` · `engineering/`。
+- 不再保留旧路径跳转页，避免仓库文件列表被 stub 淹没。

@@ -5,15 +5,15 @@
 **오픈소스 셀프호스팅 호스트 모니터링 & SRE 플랫폼**  
 관측 · 알림 · 자동복구 · 원격 운영 · AI 진단 — 완전히 통제하는 하나의 바이너리로.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
+[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
 
-**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+**[简体中文](../../README.md) · [繁體中文](zh-TW.md) · [English](en.md) · [日本語](ja.md) · [한국어](ko.md) · [Français](fr.md) · [Deutsch](de.md) · [Español](es.md) · [Português](pt-BR.md) · [Русский](ru.md)**
 
-[빠른 시작](#-빠른-시작) · [핵심 기능](#-핵심-기능) · [문서](docs/README.md) · [변경 로그](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
+[빠른 시작](#-빠른-시작) · [핵심 기능](#-핵심-기능) · [문서](../README.md) · [변경 로그](../../CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
 
 </div>
 
@@ -57,7 +57,7 @@ AIOps는 자주 쓰는 경로를 **하나의 셀프호스팅 플랫폼**으로 �
 5. **원격 운영** — 웹 터미널(재생 / 관전 / 감사 / 2차 비밀번호), 원격 데스크톱(JPEG/H.264), 포트 포워드 / HTTP 프록시와 SSRF 방어.
 6. **안전한 제공** — RBAC, MFA, Agent 지문, AES-256-GCM; Web 콘솔; Android / HarmonyOS 별도 배포.
 
-현재 릴리스 **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+현재 릴리스 **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-설치 상세 → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · 운영 → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
+설치 상세 → **[../getting-started/install.en.md](../getting-started/install.en.md)** · 운영 → **[../getting-started/deploy.en.md](../getting-started/deploy.en.md)**
 
 ---
 
@@ -114,16 +114,16 @@ flowchart LR
 
 ## 📚 문서
 
-장문은 [`docs/`](docs/README.md)에 모았습니다. 루트 옛 파일명은 **리다이렉트**로 유지됩니다.
+장문과 다국어 README는 [`docs/`](../README.md)에 모았습니다. 루트에는 중국어 README와 CHANGELOG만 둡니다.
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
-| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
-| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
-| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
-| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
-| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
+| Install | [../getting-started/install.md](../getting-started/install.md) · [EN](../getting-started/install.en.md) |
+| Production deploy | [../getting-started/deploy.md](../getting-started/deploy.md) · [EN](../getting-started/deploy.en.md) |
+| End-user guide | [../guides/user-guide.md](../guides/user-guide.md) |
+| Port forward | [../guides/forward.md](../guides/forward.md) |
+| Content audit / playbooks | [../guides/content-audit.md](../guides/content-audit.md) |
+| CI / SQL gates | [../engineering/ci-gate.md](../engineering/ci-gate.md) |
 
 ---
 
@@ -137,7 +137,7 @@ AIOps가 조합 스택을 대체했다면 **Star** 부탁드립니다.
 
 ## 라이선스
 
-[MIT](LICENSE). 호스트 수 제한 없음. 모바일은 별도 패키지(본 저장소에 소스 없음).
+[MIT](../../LICENSE). 호스트 수 제한 없음. 모바일은 별도 패키지(본 저장소에 소스 없음).
 
 ---
 

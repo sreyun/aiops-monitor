@@ -5,15 +5,15 @@
 **オープンソースのセルフホスト型ホスト監視 & SRE プラットフォーム**  
 観測 · アラート · 自動修復 · リモート運用 · AI 診断 — 完全に自分で制御できる 1 バイナリへ。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
+[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
 
-**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+**[简体中文](../../README.md) · [繁體中文](zh-TW.md) · [English](en.md) · [日本語](ja.md) · [한국어](ko.md) · [Français](fr.md) · [Deutsch](de.md) · [Español](es.md) · [Português](pt-BR.md) · [Русский](ru.md)**
 
-[クイックスタート](#-クイックスタート) · [コア機能](#-コア機能) · [ドキュメント](docs/README.md) · [変更履歴](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
+[クイックスタート](#-クイックスタート) · [コア機能](#-コア機能) · [ドキュメント](../README.md) · [変更履歴](../../CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
 
 </div>
 
@@ -57,7 +57,7 @@ AIOps はよく使う経路を **1 つのセルフホスト基盤** にまとめ
 5. **リモート運用** — Web 端末（再生／観戦／監査／二次パスワード）、リモートデスクトップ（JPEG／H.264）、ポート転送／HTTP プロキシと SSRF 防御。
 6. **セキュアな提供** — RBAC、MFA、Agent 指紋、AES-256-GCM；Android／HarmonyOS は別配布。
 
-現行リリース **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+現行リリース **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-詳細インストール → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · 本番 → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
+詳細インストール → **[../getting-started/install.en.md](../getting-started/install.en.md)** · 本番 → **[../getting-started/deploy.en.md](../getting-started/deploy.en.md)**
 
 ---
 
@@ -114,16 +114,16 @@ flowchart LR
 
 ## 📚 ドキュメント
 
-長文は [`docs/`](docs/README.md) に集約。ルートの旧ファイル名は**リダイレクト**として残しています。
+長文と多言語 README は [`docs/`](../README.md) に集約。ルートには中国語 README と CHANGELOG のみ残します。
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
-| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
-| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
-| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
-| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
-| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
+| Install | [../getting-started/install.md](../getting-started/install.md) · [EN](../getting-started/install.en.md) |
+| Production deploy | [../getting-started/deploy.md](../getting-started/deploy.md) · [EN](../getting-started/deploy.en.md) |
+| End-user guide | [../guides/user-guide.md](../guides/user-guide.md) |
+| Port forward | [../guides/forward.md](../guides/forward.md) |
+| Content audit / playbooks | [../guides/content-audit.md](../guides/content-audit.md) |
+| CI / SQL gates | [../engineering/ci-gate.md](../engineering/ci-gate.md) |
 
 ---
 
@@ -137,7 +137,7 @@ AIOps が寄せ集めスタックを置き換えたら、**ぜひ Star** をお�
 
 ## ライセンス
 
-[MIT](LICENSE)。ホスト数制限なし。モバイルは別パッケージ（本リポジトリにソースなし）。
+[MIT](../../LICENSE)。ホスト数制限なし。モバイルは別パッケージ（本リポジトリにソースなし）。
 
 ---
 

@@ -5,15 +5,15 @@
 **Open-Source, selbst gehostete Host-Monitoring- & SRE-Plattform**  
 Beobachten · Alarmieren · Beheben · Remote-Ops · KI-Diagnose — eine Binary unter Ihrer Kontrolle.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.59-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)
+[![Version](https://img.shields.io/badge/Version-v0.19.60-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
 [![Stars](https://img.shields.io/github/stars/sreyun/aiops-monitor?style=social)](https://github.com/sreyun/aiops-monitor)
 
-**[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [English](README_EN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Русский](README.ru.md)**
+**[简体中文](../../README.md) · [繁體中文](zh-TW.md) · [English](en.md) · [日本語](ja.md) · [한국어](ko.md) · [Français](fr.md) · [Deutsch](de.md) · [Español](es.md) · [Português](pt-BR.md) · [Русский](ru.md)**
 
-[Schnellstart](#-schnellstart) · [Kernfähigkeiten](#-kernfähigkeiten) · [Dokumentation](docs/README.md) · [Änderungsprotokoll](CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
+[Schnellstart](#-schnellstart) · [Kernfähigkeiten](#-kernfähigkeiten) · [Dokumentation](../README.md) · [Änderungsprotokoll](../../CHANGELOG.md) · [Releases](https://github.com/sreyun/aiops-monitor/releases)
 
 </div>
 
@@ -57,7 +57,7 @@ Sechs Säulen — keine Feature-Wäscheliste:
 5. **Remote-Ops** — Web-Terminal (Replay, Beobachten, Audit, Zweitpasswort), Remote-Desktop (JPEG/H.264), Port-Forward / HTTP-Proxy mit SSRF-Schutz.
 6. **Sichere Auslieferung** — RBAC, MFA, Agent-Fingerprint, AES-256-GCM; Web-Konsole; Android / HarmonyOS separat.
 
-Aktuelles Release **[v0.19.59](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.59)** · Spiegel: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+Aktuelles Release **[v0.19.60](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.60)** · Spiegel: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 
@@ -79,7 +79,7 @@ export AIOPS_VM_URL="http://127.0.0.1:8428"
 go build ./cmd/server ./cmd/agent   # Go 1.26+
 ```
 
-Installation → **[docs/getting-started/install.en.md](docs/getting-started/install.en.md)** · Produktion → **[docs/getting-started/deploy.en.md](docs/getting-started/deploy.en.md)**
+Installation → **[../getting-started/install.en.md](../getting-started/install.en.md)** · Produktion → **[../getting-started/deploy.en.md](../getting-started/deploy.en.md)**
 
 ---
 
@@ -114,16 +114,16 @@ flowchart LR
 
 ## 📚 Dokumentation
 
-Lange Texte liegen unter [`docs/`](docs/README.md). Alte Root-Dateinamen bleiben als **Weiterleitungen**.
+Lange Texte und lokalisierte READMEs liegen unter [`docs/`](../README.md). Im Root bleiben nur das chinesische README und das Changelog.
 
 | Need | Doc |
 |------|-----|
-| Install | [docs/getting-started/install.md](docs/getting-started/install.md) · [EN](docs/getting-started/install.en.md) |
-| Production deploy | [docs/getting-started/deploy.md](docs/getting-started/deploy.md) · [EN](docs/getting-started/deploy.en.md) |
-| End-user guide | [docs/guides/user-guide.md](docs/guides/user-guide.md) |
-| Port forward | [docs/guides/forward.md](docs/guides/forward.md) |
-| Content audit / playbooks | [docs/guides/content-audit.md](docs/guides/content-audit.md) |
-| CI / SQL gates | [docs/engineering/ci-gate.md](docs/engineering/ci-gate.md) |
+| Install | [../getting-started/install.md](../getting-started/install.md) · [EN](../getting-started/install.en.md) |
+| Production deploy | [../getting-started/deploy.md](../getting-started/deploy.md) · [EN](../getting-started/deploy.en.md) |
+| End-user guide | [../guides/user-guide.md](../guides/user-guide.md) |
+| Port forward | [../guides/forward.md](../guides/forward.md) |
+| Content audit / playbooks | [../guides/content-audit.md](../guides/content-audit.md) |
+| CI / SQL gates | [../engineering/ci-gate.md](../engineering/ci-gate.md) |
 
 ---
 
@@ -137,7 +137,7 @@ Wenn AIOps einen Klebe-Stack ersetzt: **bitte einen Star** — das hält das Pro
 
 ## Lizenz
 
-[MIT](LICENSE). Kein Host-Cap. Mobile Clients als separate Pakete (Quellcode nicht in diesem Repo).
+[MIT](../../LICENSE). Kein Host-Cap. Mobile Clients als separate Pakete (Quellcode nicht in diesem Repo).
 
 ---
 
