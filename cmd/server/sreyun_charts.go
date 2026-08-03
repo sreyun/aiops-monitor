@@ -434,11 +434,18 @@ func promMatrixToChatChart(series []promMatrix, title string, maxSeries int) map
 		lookups[i] = m
 	}
 	rows := make([]map[string]any, 0, len(tsList))
+	last := make([]float64, len(series))
+	have := make([]bool, len(series))
 	for _, ts := range tsList {
 		row := map[string]any{"timestamp": ts}
 		for i := range series {
 			if v, ok := lookups[i][ts]; ok {
+				last[i] = v
+				have[i] = true
 				row["s"+fmt.Sprint(i)] = round3(v)
+			} else if have[i] {
+				// LOCF：多序列 Prom 矩阵时间戳不对齐时补齐，避免聊天图缺线
+				row["s"+fmt.Sprint(i)] = round3(last[i])
 			}
 		}
 		rows = append(rows, row)
@@ -919,7 +926,7 @@ func (h *SreyunCore) execForecastMetric(args map[string]any) (string, error) {
 	if hostID != "" {
 		learnKey = "ai:" + hostID + ":" + metricKey
 	}
-	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, learnKey)
+	band, mape, r2, method, errMsg := robustForecastWithKey(hist, to, horizonSec, step, learnKey, fcModelAuto)
 	if errMsg != "" {
 		return capabilityJSON(capabilityResult{OK: false, Error: errMsg}), nil
 	}

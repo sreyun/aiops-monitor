@@ -3962,7 +3962,7 @@ async function openAIConfig(){
     if($("speechTTSModel")) $("speechTTSModel").value=c.speech_tts_model||"";
     if($("speechTTSVoice")) $("speechTTSVoice").value=c.speech_tts_voice||"";
     AI_SPEECH_STATUS={prefer:!!c.speech_prefer_cloud,stt:!!(c.speech_stt_model||"").trim(),tts:!!(c.speech_tts_model||"").trim()};
-    AI_TERM_ENABLED=!!c.hermes_terminal_enabled; renderAITermState();
+    AI_TERM_ENABLED=!!(c.ai_terminal_enabled ?? c.hermes_terminal_enabled); renderAITermState();
     updateAllAISettingsSummaries();
     applyAiCardCollapsedState();
     syncAIPresetActive();
@@ -4887,6 +4887,9 @@ function filterDisplayContent(text){
   t=t.replace(/\b(api_key|apikey|secret|password|passwd|token)\s*[:=]\s*['"]?[^\s'"]+['"]?/gi,'$1='+I18N.t("sre.redacted","[已隐藏]"));
   t=t.replace(/\bhermes(?:\s+agent)?\b/gi,"智能运维服务");
   t=t.replace(/hermes_auto_approve/gi,"ai_auto_approve");
+  t=t.replace(/hermes_terminal_enabled/gi,"ai_terminal_enabled");
+  t=t.replace(/hermes_enabled/gi,"ai_agent_enabled");
+  t=t.replace(/\bhermes(?:\s+agent)?\b/gi,"智能运维服务");
   // Defense-in-depth: replace known host ids with HostPicker labels when available.
   try{
     const hosts=(typeof HOSTS!=="undefined"&&Array.isArray(HOSTS))?HOSTS

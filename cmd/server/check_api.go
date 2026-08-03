@@ -79,7 +79,7 @@ func (s *Server) handleUpsertCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.checks.runNow(saved.ID)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: Tz("log.save_check", saved.Name)})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: Tz("log.save_check", saved.Name)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
@@ -137,6 +137,6 @@ func (s *Server) handleCheckHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteCheck(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteCheck(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: Tz("log.delete_check", id)})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Message: Tz("log.delete_check", id)})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

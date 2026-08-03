@@ -84,6 +84,9 @@ fix-summary.html
 # 产品官网（独立部署，不纳入项目源码）
 website/
 
+# 独立前端工程（不纳入主仓；服务端内嵌 UI 仍在 cmd/server/web）
+frontend/
+
 # CI/CD 配置（仅保留 release.yml 自动构建，其他 .github/ 内容不提交）
 .github/*
 !.github/workflows/

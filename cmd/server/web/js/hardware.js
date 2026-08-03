@@ -978,11 +978,15 @@ async function loadHwHistory() {
       // 把多序列（每个传感器/风扇一条）对齐成 createChart 需要的 samples 结构
       const tsSet = new Set();
       series.forEach(s => s.pts.forEach(p => tsSet.add(p[0])));
-      const samples = [...tsSet].sort((a, b) => a - b).map(ts => {
+      const rawSamples = [...tsSet].sort((a, b) => a - b).map(ts => {
         const row = { timestamp: ts };
         series.forEach((s, i) => { const hit = s.pts.find(p => p[0] === ts); row["v" + i] = hit ? hit[1] : null; });
         return row;
       });
+      const keys = series.map((_, i) => "v" + i);
+      const samples = typeof alignJoinedSeriesSamples === "function"
+        ? alignJoinedSeriesSamples(rawSamples, keys)
+        : rawSamples;
       const palette = ["#4c8dff", "#f7b23b", "#2fd07a", "#f2545b", "#8b5cf6", "#43b6f0", "#e06c9a", "#6ac4b8"];
       const defs = series.slice(0, 8).map((s, i) => ({
         key: "v" + i, label: s.name, color: palette[i % palette.length], fmt,

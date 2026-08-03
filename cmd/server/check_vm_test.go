@@ -24,6 +24,25 @@ func TestParseVMCheckExport(t *testing.T) {
 	}
 }
 
+// Staggered check series must LOCF — missing up must NOT invent OK=false / 0ms.
+func TestParseVMCheckExportLOCF(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_check_up","check_id":"c1"},"values":[1],"timestamps":[1700000000000]}
+{"metric":{"__name__":"aiops_check_latency_ms","check_id":"c1"},"values":[42.5,50],"timestamps":[1700000000000,1700000030000]}
+{"metric":{"__name__":"aiops_check_status_code","check_id":"c1"},"values":[200],"timestamps":[1700000000000]}
+`
+	pts := parseVMCheckExport(strings.NewReader(nd))
+	if len(pts) != 2 {
+		t.Fatalf("应重组 2 个时间点，得到 %d", len(pts))
+	}
+	if !pts[0].OK || pts[0].LatencyMs != 42.5 || pts[0].StatusCode != 200 {
+		t.Fatalf("首点错误: %+v", pts[0])
+	}
+	// ts+30 只有 latency —— OK/status 必须 LOCF，不能假离线/假 0
+	if !pts[1].OK || pts[1].LatencyMs != 50 || pts[1].StatusCode != 200 {
+		t.Fatalf("LOCF 失败（假离线/丢 status）: %+v", pts[1])
+	}
+}
+
 // TestPushChecksFormat 验证拨测指标的 Prometheus 文本格式（名称/label/值）正确，供 VM 摄取。
 func TestPushChecksFormat(t *testing.T) {
 	// 直接构造一批样本，走 pushChecks 的格式化逻辑（用一个不发请求的方式：复用 lblEsc + 手工断言 label）。

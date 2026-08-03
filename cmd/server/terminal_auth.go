@@ -116,7 +116,7 @@ func (s *Server) handleTerminalPasswordSet(w http.ResponseWriter, r *http.Reques
 	// so the user doesn't need to verify immediately after setting.
 	s.auth.markTerminalVerified(r)
 
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r),
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning",
 		Message: Tz("log.terminal_password_set", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -166,7 +166,7 @@ func (s *Server) handleTerminalPasswordVerify(w http.ResponseWriter, r *http.Req
 	s.auth.terminalAttemptReset(acc.Username)
 	s.auth.markTerminalVerified(r)
 
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r),
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info",
 		Message: Tz("log.terminal_verified", acc.Username)})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

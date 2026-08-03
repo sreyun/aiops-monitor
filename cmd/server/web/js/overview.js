@@ -376,7 +376,7 @@ function renderTop(hosts) {
         if (fill) { fill.style.width = width + "%"; fill.style.background = color; }
         const valEl = item.querySelector(".top-val");
         if (valEl) valEl.textContent = disp;
-        item.title = `${h.hostname || h.id} · ${disp}`;
+        item.title = `${hostDisplayTitle(h)} · ${disp}`;
       });
     });
     return;
@@ -405,8 +405,8 @@ function renderTop(hosts) {
       else if (panel.key === "load") disp = v.toFixed(2);
       else if (panel.key === "proc") disp = v.toFixed(0);
       else disp = v.toFixed(1);
-      return `<div class="top-item" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" title="${esc(h.hostname || h.id)} · ${esc(disp)}">
-        <span class="top-name">${esc(h.hostname || h.id)}</span>
+      return `<div class="top-item" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(hostDisplayTitle(h))}" title="${esc(hostDisplayTitle(h))} · ${esc(disp)}">
+        <span class="top-name">${esc(hostDisplayTitle(h))}</span>
         <div class="top-bar"><div class="top-bar-fill" style="width:${width}%;background:${color}"></div></div>
         <span class="top-val mono">${esc(disp)}</span>
       </div>`;
@@ -486,7 +486,7 @@ function applyLogFilters(items) {
   }
   if (LOG_SEARCH) {
     filtered = filtered.filter(e => matchesSearchTokens(
-      [e.message, e.actor, e.host, e.kind, e.level].filter(Boolean).join(" "),
+  [e.message, e.username, e.actor, e.host, e.kind, e.level, e.ip].filter(Boolean).join(" "),
       LOG_SEARCH
     ));
   }
@@ -498,9 +498,9 @@ function exportLogsCSV() {
   const rows = applyLogFilters(LAST_LOG);
   if (!rows.length) { toast(I18N.t("empty.no_log_export"), "err"); return; }
   const escCsv = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
-  const lines = [I18N.t("section.csv_header")];
-  rows.forEach(e => lines.push([fmtDateTime(e.timestamp), translateLogKind(e.kind), translateLogLevel(e.level), e.actor || "", e.host || "", e.message].map(escCsv).join(",")));
-  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const lines = ["时间,类型,级别,用户名,操作者,IP,主机,内容"];
+  rows.forEach(e => lines.push([fmtDateTime(e.timestamp), translateLogKind(e.kind), translateLogLevel(e.level), e.username || "", e.actor || "", e.ip || "", formatLogHost(e), redactLogMessage(e.message || "")].map(escCsv).join(",")));
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = `AIOps-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
@@ -514,12 +514,19 @@ function renderLog(items) {
   const n = items.length;
   $("logCount").textContent = n; $("navLog").textContent = n;
   const kcls = k => k === "operation" ? "op" : k === "system" ? "sys" : k === "terminal" ? "term" : "plg";
-  const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.actor||""}|${e.host||""}`;
-  const row = e => `<div class="row-item ${esc(e.level)}" data-key="${esc(logKey(e))}">
+  const logKey = e => `${e.kind}|${e.message}|${e.level}|${e.timestamp||0}|${e.username||e.actor||""}|${e.host||""}`;
+  const row = e => {
+    const user = String(e.username || (!looksLikeLogIP(e.actor) ? e.actor : "") || "—");
+    // 右侧固定为访问者（操作发起方）IP，主机已在内容列展示
+    const visitorIP = String(e.ip || (looksLikeLogIP(e.actor) ? e.actor : "") || "").trim() || "—";
+    const msg = redactLogMessage(e.message || "");
+    return `<div class="row-item log-row ${esc(e.level)}" data-key="${esc(logKey(e))}">
     <span class="kind ${kcls(e.kind)}">${esc(translateLogKind(e.kind))}</span>
-    <span class="msg">${esc(e.message)}</span>
-    <span class="src">${esc(e.actor || "")}${e.host ? " · " + esc(e.host) : ""}</span>
+    <span class="msg" title="${esc(msg)}">${esc(msg)}</span>
+    <span class="log-user" title="${esc(user)}">${esc(user)}</span>
+    <span class="src log-ip mono" title="${esc(I18N.t("ui.visitor_ip", "访问者 IP") + ": " + visitorIP)}">${esc(visitorIP)}</span>
     <span class="log-time mono">${fmtDateTime(e.timestamp)}</span></div>`;
+  };
   
   const filtered = applyLogFilters(items);
   const total = filtered.length;
@@ -529,6 +536,46 @@ function renderLog(items) {
   const pageItems = filtered.slice((LOG_PAGE - 1) * LOG_PAGE_SIZE, LOG_PAGE * LOG_PAGE_SIZE);
   $("log").innerHTML = pageItems.length ? pageItems.map(row).join("") : `<div class="empty-line">${I18N.t("empty.no_logs")}</div>`;
   renderLogPager(pages, total);
+}
+
+function looksLikeLogIP(s) {
+  s = String(s || "").trim();
+  if (!s) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(s)) return true;
+  return s.includes(":") && !/\s/.test(s);
+}
+
+function formatLogHost(e) {
+  const raw = String((e && e.host) || "").trim();
+  if (!raw) return "";
+  // Already hostname (ip)?
+  if (/\([^)]+\)/.test(raw) || !/^[0-9a-fA-F]{8,}$/.test(raw)) {
+    if (typeof HostPicker !== "undefined" && HostPicker.displayHost && /^[0-9a-fA-F]{8,}$/.test(raw)) {
+      return HostPicker.displayHost(raw);
+    }
+    return raw;
+  }
+  if (typeof HostPicker !== "undefined" && HostPicker.displayHost) return HostPicker.displayHost(raw);
+  return I18N.t("ui.unknown_host", "未知主机");
+}
+
+function redactLogMessage(msg) {
+  let t = String(msg || "");
+  const hosts = (typeof HOSTS !== "undefined" && Array.isArray(HOSTS)) ? HOSTS
+    : ((typeof HOST_META !== "undefined" && Array.isArray(HOST_META)) ? HOST_META : []);
+  // Longer ids first
+  const list = hosts.filter(h => h && h.id).slice().sort((a, b) => String(b.id).length - String(a.id).length);
+  list.forEach(h => {
+    const lab = (typeof hostDisplayTitle === "function") ? hostDisplayTitle(h)
+      : ((typeof HostPicker !== "undefined" && HostPicker.hostTitle) ? HostPicker.hostTitle(h) : (h.hostname || "未知主机"));
+    if (!lab) return;
+    t = t.split(h.id).join(lab);
+    if (h.id.length >= 8) t = t.split(h.id.slice(0, 8)).join(lab);
+  });
+  t = t.replace(/\bhermes(?:\s+agent)?\b/gi, "智能运维服务");
+  t = t.replace(/\bbreak-glass\b/gi, "紧急放行");
+  t = t.replace(/\b[0-9a-fA-F]{8,32}\b/g, "未知主机");
+  return t;
 }
 
 function renderLogPager(pages, total) {

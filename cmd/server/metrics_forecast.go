@@ -19,6 +19,7 @@ type metricsForecastReq struct {
 	HorizonSec int64               `json:"horizon_sec"` // 0 = equal to max history span
 	Step       int64               `json:"step"`        // 0 = auto from median delta
 	NowTS      int64               `json:"now_ts"`      // optional client "now"; padded when series end earlier
+	Method     string              `json:"method"`      // auto | damped-holt | drift | holt-winters | flat | …
 }
 
 type metricsForecastIn struct {
@@ -180,7 +181,11 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]forecastSeriesOut, 0, len(prep)*2)
-	meta := forecastMeta{Mode: "forecast", OK: false, NowTS: globalEnd, HorizonSec: horizon}
+	reqMethod := normalizeForecastMethod(req.Method)
+	meta := forecastMeta{
+		Mode: "forecast", OK: false, NowTS: globalEnd, HorizonSec: horizon,
+		Requested: reqMethod, Models: forecastModelCatalog(),
+	}
 	var bestMAPE float64 = 1e9
 	bestMethod := ""
 	anyOK := false
@@ -203,8 +208,8 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 		if hz < step*8 {
 			hz = step * 8
 		}
-		learnKey := "metrics:" + sanitizeForecastLearnKey(p.name)
-		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, hz, step, learnKey)
+		learnKey := "" // UI metrics path: deterministic; no learn-key bias so model switches stay visible
+		fc, mape, r2, method, errMsg := robustForecastWithKey(pts, fromTS, hz, step, learnKey, reqMethod)
 		if errMsg != "" || len(fc) == 0 {
 			continue
 		}
@@ -231,9 +236,10 @@ func (s *Server) handleMetricsForecast(w http.ResponseWriter, r *http.Request) {
 	if anyOK {
 		meta.OK = true
 		meta.Method = bestMethod
+		meta.MethodLabel = forecastMethodLabel(bestMethod)
 		meta.MAPE = bestMAPE
 		meta.Message = fmt.Sprintf("左=实时 · 右=预测（%s，MAPE≈%.1f%%，%d 序列）",
-			bestMethod, bestMAPE, countForecastKinds(out))
+			forecastMethodLabel(bestMethod), bestMAPE, countForecastKinds(out))
 	} else {
 		meta.Message = "数据不足，暂无法预测（每条序列至少约 4 个采样点）"
 	}

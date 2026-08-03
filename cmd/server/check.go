@@ -43,6 +43,13 @@ type CheckPoint struct {
 	LatencyMs  float64 `json:"latency_ms"`
 	StatusCode int     `json:"status_code,omitempty"`
 	LossPct    float64 `json:"loss_pct,omitempty"`
+	// Optional timing breakdown (written when probe records them; LOCF-aligned on VM read).
+	DnsMs     float64 `json:"dns_ms,omitempty"`
+	TcpMs     float64 `json:"tcp_ms,omitempty"`
+	TlsMs     float64 `json:"tls_ms,omitempty"`
+	TtfbMs    float64 `json:"ttfb_ms,omitempty"`
+	CertDays  float64 `json:"cert_days,omitempty"`
+	RespBytes float64 `json:"resp_bytes,omitempty"`
 }
 
 // checkRunner executes operator-defined synthetic checks (HTTP / TCP) on their

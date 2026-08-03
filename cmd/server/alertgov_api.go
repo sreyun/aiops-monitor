@@ -50,6 +50,6 @@ func (s *Server) handleSetGovernance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "更新告警治理规则（静默/抑制/路由）"})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "更新告警治理规则（静默/抑制/路由）"})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

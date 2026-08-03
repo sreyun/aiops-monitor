@@ -448,12 +448,23 @@
       if (v.startsWith("host:")) {
         const id = v.slice(5);
         const h = (hosts || []).find(x => x.id === id);
-        return h ? hostTitle(h) : id;
+        return h ? hostTitle(h) : t("ui.unknown_host", "未知主机");
       }
       if (v.startsWith("folder:")) {
         const id = v.slice(7);
         const paths = (typeof HOST_FOLDERS !== "undefined" && HOST_FOLDERS && HOST_FOLDERS.paths) ? HOST_FOLDERS.paths : {};
-        return paths[id] || id;
+        const name = paths[id];
+        if (name) return name;
+        const folders = folderTree();
+        const find = (nodes) => {
+          for (const n of (nodes || [])) {
+            if (n.id === id) return n.name || n.path || "";
+            const hit = find(n.children);
+            if (hit) return hit;
+          }
+          return "";
+        };
+        return find(folders) || t("ui.unknown_folder", "未知分组");
       }
       if (v.startsWith("category:")) return v.slice(9) || t("section.uncategorized", "未分类");
       if (v.startsWith("system:")) return v.slice(7);
@@ -461,6 +472,20 @@
     });
     if (labels.length <= 3) return labels.join("、");
     return labels.slice(0, 3).join("、") + t("playbook.target_more", " 等") + labels.length + t("playbook.target_items", "项");
+  }
+
+  function resolveHost(idOrHost, hosts) {
+    if (!idOrHost) return null;
+    if (typeof idOrHost === "object") return idOrHost;
+    const id = String(idOrHost);
+    const list = hosts || (typeof HOSTS !== "undefined" ? HOSTS : null)
+      || (typeof HOST_META !== "undefined" ? HOST_META : null) || [];
+    return (list || []).find(h => h && h.id === id) || null;
+  }
+
+  /** Resolve id or host object → hostname (ip). Never returns raw host id. */
+  function displayHost(idOrHost, hosts) {
+    return hostTitle(resolveHost(idOrHost, hosts) || { hostname: "", ip: "" });
   }
 
   function optionLabel(h) {
@@ -501,5 +526,7 @@
     folderTree,
     parseTargetTokens,
     serializeTargetTokens,
+    resolveHost,
+    displayHost,
   };
 })(typeof window !== "undefined" ? window : globalThis);

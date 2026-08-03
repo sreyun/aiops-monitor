@@ -1018,10 +1018,11 @@ async function loadCheckHistory() {
   const load = (typeof beginRangeLoad === "function")
     ? beginRangeLoad(anchorKey)
     : { signal: undefined, isCurrent: () => true };
-  // 快捷跨度按钮 + 自定义绝对区间（与主机趋势图一致）
+  // 快捷跨度按钮 + 自定义绝对区间 + 预测 + AI（与主机趋势图一致）
   const ctrl = `${renderChartControls(custom ? -1 : range, "crange")}
     <button class="chip-btn ${custom ? "active" : ""}" data-chk-custom-toggle title="${I18N.t("time.custom_range") || "自定义时间范围"}">${I18N.t("time.custom") || "自定义"}</button>
     ${typeof forecastChipHTML === "function" ? forecastChipHTML("checks") : ""}
+    <button type="button" class="chip-btn ai-assist-btn" data-chk-ai title="${I18N.t("hosts.ai_analyze_title", "用 AI 解读该拨测近期趋势")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("hosts.ai_analyze", "AI 分析")}</button>
     <span class="chart-custom-range" id="chkCustomPanel"${custom ? "" : " hidden"}>
       <input type="datetime-local" id="chkCustomFrom" class="dt-input" value="${toLocalDatetimeValue(from > 0 ? from : now - 3600)}">
       <span class="dt-sep">→</span>
@@ -1042,6 +1043,9 @@ async function loadCheckHistory() {
       return;
     }
     const samples = pts.map(p => ({ timestamp: p.timestamp, latency_ms: p.latency_ms, loss_pct: (typeof p.loss_pct === "number" ? p.loss_pct : null), ok: p.ok }));
+    const aligned = typeof alignJoinedSeriesSamples === "function"
+      ? alignJoinedSeriesSamples(samples, ["latency_ms", "loss_pct"])
+      : samples;
     const isPing = type === "ping";
     const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(1);
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
@@ -1050,23 +1054,43 @@ async function loadCheckHistory() {
     const wrap = (cid, sub) => `<div class="chart-wrap"><div class="chart-sub-title">${esc(sub)}</div><canvas id="${cid}" width="1000" height="240"></canvas>` +
       `<button class="chart-enlarge" data-chart="${cid}" title="${I18N.t('ui.zoom_preview')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></button></div>`;
     const latSub = (isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency")) + "(" + I18N.t("unit.ms") + ")";
+    const chartTitleBase = `${name} · ${latSub}`;
+    const reloadBase = {
+      checkId: id,
+      checkType: type,
+      checkName: name,
+      base: CHK_HIST.base || "checks",
+      mode: "check",
+      forecastScope: "checks"
+    };
     body.innerHTML = `<div class="chart-controls">${ctrl}</div>
       <div class="chart-container">${wrap("chkLat", latSub)}${isPing ? wrap("chkLoss", I18N.t("form.loss_rate") + "(%)") : ""}</div>
       <div class="hint">采样 ${pts.length} 个 · 时间跨度 ${span} · 可用率 ${uptime}% · 平均延时 ${avgLat} ${I18N.t("unit.ms")} · 悬停查看数值，拖动框选放大，双击还原。</div>`;
     const specs = [
-      { id: "chkLat", samples, series: [
+      { id: "chkLat", samples: aligned, series: [
         { key: "latency_ms", label: isPing ? I18N.t("form.avg_latency") : I18N.t("form.latency"), color: "#4c8dff", fmt: v => v.toFixed(0) + " " + I18N.t("unit.ms") },
-      ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
+      ], yMin: 0, yMax: null, opts: {
+        title: chartTitleBase, legendMode: "dash", cssH: 220, forecastScope: "checks",
+        reload: Object.assign({}, reloadBase)
+      } },
     ];
     if (isPing) {
-      specs.push({ id: "chkLoss", samples, series: [
+      const lossTitle = `${name} · ${I18N.t("form.loss_rate")}(%)`;
+      specs.push({ id: "chkLoss", samples: aligned, series: [
         { key: "loss_pct", label: I18N.t("form.loss_rate"), color: "#f2545b", fmt: v => v.toFixed(0) + "%" },
-      ], yMin: 0, yMax: 100, opts: { title: "", legendMode: "dash", cssH: 220 } });
+      ], yMin: 0, yMax: 100, opts: {
+        title: lossTitle, legendMode: "dash", cssH: 220, forecastScope: "checks",
+        reload: Object.assign({}, reloadBase)
+      } });
     }
     if (!load.isCurrent()) return;
     CHK_CHARTS = typeof mountChartsWithForecast === "function"
       ? await mountChartsWithForecast("checks", specs, load)
       : Object.fromEntries(specs.map(sp => [sp.id, createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, sp.opts)]));
+    // 缓存最近一次拨测历史样本，供弹窗内 AI 分析使用
+    CHK_HIST.lastSamples = aligned;
+    CHK_HIST.lastUptime = uptime;
+    CHK_HIST.lastAvgLat = avgLat;
   } catch (e) {
     if (e && (e.name === "AbortError" || /aborted/i.test(String(e.message || e)))) return;
     if (!load.isCurrent()) return;
@@ -1076,8 +1100,47 @@ async function loadCheckHistory() {
 document.addEventListener("chart-forecast-toggle", (ev) => {
   if (ev.detail && ev.detail.scope === "checks" && CHK_HIST && CHK_HIST.id) loadCheckHistory();
 });
+function analyzeCheckHistoryAI() {
+  if (typeof openAIAssist !== "function") {
+    if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err");
+    return;
+  }
+  const samples = (CHK_HIST && CHK_HIST.lastSamples) || [];
+  if (!samples.length) {
+    if (typeof toast === "function") toast(I18N.t("empty.no_history", "暂无历史数据"), "err");
+    return;
+  }
+  const { id, name, type } = CHK_HIST;
+  const first = samples[0], last = samples[samples.length - 1];
+  const t0 = +(first.timestamp || 0), t1 = +(last.timestamp || 0);
+  const lats = samples.map(p => +p.latency_ms).filter(v => isFinite(v));
+  const avg = lats.length ? (lats.reduce((a, b) => a + b, 0) / lats.length) : 0;
+  const peak = lats.length ? Math.max(...lats) : 0;
+  const okN = samples.filter(p => p.ok).length;
+  const lines = [
+    `拨测：${name || id}（id=${id}，类型=${type || "?"}）`,
+    `样本数：${samples.length}，时间跨度：约 ${((t1 - t0) / 3600).toFixed(2)} 小时`,
+    `可用率：${CHK_HIST.lastUptime != null ? CHK_HIST.lastUptime : (samples.length ? (okN / samples.length * 100).toFixed(1) : "—")}%（成功 ${okN}/${samples.length}）`,
+    `延时：均值 ${avg.toFixed(0)} ms · 峰值 ${peak.toFixed(0)} ms · 当前 ${(last.latency_ms || 0).toFixed(0)} ms`,
+  ];
+  if (type === "ping") {
+    const losses = samples.map(p => p.loss_pct).filter(v => typeof v === "number" && isFinite(v));
+    if (losses.length) {
+      lines.push(`丢包：均值 ${(losses.reduce((a, b) => a + b, 0) / losses.length).toFixed(1)}% · 峰值 ${Math.max(...losses).toFixed(1)}%`);
+    }
+  }
+  lines.push("", "请基于拨测可用性与延时/丢包趋势做根因研判与处置建议，关注尖峰、超时与连续失败。");
+  openAIAssist({
+    task: "chart_analysis",
+    mode: "analyze",
+    title: "AI · 拨测趋势 · " + (name || id),
+    context: lines.join("\n").slice(0, 12000),
+    hint: "正在解读该拨测历史趋势…"
+  });
+}
 // 历史弹窗：时间范围切换（快捷/自定义）+ 图表放大委托
 safeAddEventListener("checkHistBody", "click", e => {
+  if (e.target.closest("[data-chk-ai]")) { analyzeCheckHistoryAI(); return; }
   const tog = e.target.closest("[data-chk-custom-toggle]");
   if (tog) { const p = $("chkCustomPanel"); if (p) { p.hidden = !p.hidden; if (!p.hidden) { const f = $("chkCustomFrom"); if (f) f.focus(); } } return; }
   if (e.target.closest("[data-chk-custom-apply]")) { applyChkCustomRange(); return; }
@@ -1172,7 +1235,7 @@ function openCheckModal(check) {
 function populateHostSelect(check) {
   const sel = $("ckHost");
   sel.innerHTML = `<option value="">-- 选择主机 --</option>` + HOST_META.map(h =>
-    `<option value="${esc(h.id)}" ${check && check.target.startsWith(h.id + "/") ? "selected" : ""}>${esc(h.hostname || h.id)}</option>`
+    `<option value="${esc(h.id)}" ${check && check.target.startsWith(h.id + "/") ? "selected" : ""}>${esc(typeof hostDisplayTitle === "function" ? hostDisplayTitle(h) : ((h.hostname || "") + (h.ip ? " (" + h.ip + ")" : "") || I18N.t("ui.unknown_host", "未知主机")))}</option>`
   ).join("");
 }
 async function saveCheck() {
@@ -2000,8 +2063,15 @@ function showSetNewPassword(token) {
 }
 
 async function logout() {
-  try { await fetch(`${API}/logout`, { method: "POST" }); } catch (e) {}
-  location.reload();
+  try {
+    await fetch(`${API}/logout`, { method: "POST", credentials: "same-origin" });
+  } catch (e) { /* network / CSRF — still clear local session */ }
+  try {
+    // Best-effort cookie clear if API was blocked (e.g. transient CSRF behind proxy).
+    document.cookie = "aiops_session=; Path=/; Max-Age=0; SameSite=Lax";
+    document.cookie = "session=; Path=/; Max-Age=0; SameSite=Lax";
+  } catch (_) {}
+  location.href = "/";
 }
 
 /* ---------- 管理员：数据保留 / 命令策略 / PG 备份 ---------- */

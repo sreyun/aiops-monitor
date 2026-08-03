@@ -111,14 +111,14 @@ func (s *Server) handleUpsertAPISystem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.apimon.runNow(saved.ID)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存 API 监控业务系统：" + saved.Name})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "保存 API 监控业务系统：" + saved.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
 func (s *Server) handleDeleteAPISystem(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteAPISystem(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除 API 监控业务系统：" + id})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Message: "删除 API 监控业务系统：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -142,7 +142,7 @@ func (s *Server) handleAPISystemMaint(w http.ResponseWriter, r *http.Request) {
 	if until > 0 {
 		action = "进入维护窗口 " + strconv.Itoa(req.Minutes) + " 分钟"
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "API 业务系统" + action + "：" + id})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "API 业务系统" + action + "：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "maint_until": until})
 }
 
@@ -239,14 +239,14 @@ func (s *Server) handleUpsertAPITransaction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.apimon.runTxnNow(saved.ID)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.clientIP(r), Message: "保存 API 合成事务：" + saved.Name})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Message: "保存 API 合成事务：" + saved.Name})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": saved.ID})
 }
 
 func (s *Server) handleDeleteAPITransaction(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_ = s.cfg.DeleteAPITransaction(id)
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "warning", Actor: s.clientIP(r), Message: "删除 API 合成事务：" + id})
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "warning", Message: "删除 API 合成事务：" + id})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

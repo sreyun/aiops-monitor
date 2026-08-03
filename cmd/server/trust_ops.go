@@ -167,9 +167,10 @@ func (s *Server) enforceRemoteGate(w http.ResponseWriter, r *http.Request, hostI
 	ok, reason := s.remoteGateCheck(hostID, s.actorName(r), highRisk, bg)
 	if ok {
 		if reason == "break_glass" && s.store != nil {
-			s.store.AddLog(LogEntry{
-				Kind: KindOperation, Level: "warning", Actor: s.actorName(r), Host: hostID,
-				Message: "远程闸门 break-glass：" + hostID,
+			label := s.hostLabelForID(hostID)
+			s.addAuditLog(r, LogEntry{
+				Kind: KindOperation, Level: "warning", Host: label,
+				Message: "远程闸门紧急放行：" + label,
 			})
 		}
 		return true

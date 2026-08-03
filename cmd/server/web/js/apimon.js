@@ -474,6 +474,9 @@ async function loadAPIHistory() {
       online: p.ok ? 100 : 0,
       resp_kb: (p.resp_bytes || 0) / 1024,
     }));
+    const aligned = typeof alignJoinedSeriesSamples === "function"
+      ? alignJoinedSeriesSamples(samples, ["latency_ms", "dns_ms", "tcp_ms", "tls_ms", "ttfb_ms", "online", "resp_kb"])
+      : samples;
     const uptime = (pts.filter(p => p.ok).length / pts.length * 100).toFixed(2);
     const avgLat = (pts.reduce((s, p) => s + (p.latency_ms || 0), 0) / pts.length).toFixed(0);
     const p95 = apiHistP95(pts.map(p => p.latency_ms || 0)).toFixed(0);
@@ -495,17 +498,17 @@ async function loadAPIHistory() {
       ${apiHistHistogram(pts)}
       <div class="hint">数据从 VictoriaMetrics 回读，重启不丢；曲线可悬停查看数值、拖动框选放大、双击还原。延迟分布直方图按样本总延时分桶，尾部偏暖色，便于识别长尾与双峰。</div>`;
     const specs = [
-      { id: "apiHLat", samples, series: [
+      { id: "apiHLat", samples: aligned, series: [
         { key: "latency_ms", label: "总延时", color: "#4c8dff", fmt: v => v.toFixed(0) + " ms" },
         { key: "dns_ms", label: "DNS", color: "#22c55e", fmt: v => v.toFixed(1) + " ms" },
         { key: "tcp_ms", label: "TCP", color: "#eab308", fmt: v => v.toFixed(1) + " ms" },
         { key: "tls_ms", label: "TLS", color: "#a855f7", fmt: v => v.toFixed(1) + " ms" },
         { key: "ttfb_ms", label: "TTFB", color: "#f97316", fmt: v => v.toFixed(1) + " ms" },
       ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
-      { id: "apiHAvail", samples, series: [
+      { id: "apiHAvail", samples: aligned, series: [
         { key: "online", label: "在线", color: "#22c55e", fmt: v => (v >= 50 ? "在线" : "离线") },
       ], yMin: 0, yMax: 100, opts: { title: "", legendMode: "dash", cssH: 220 } },
-      { id: "apiHBytes", samples, series: [
+      { id: "apiHBytes", samples: aligned, series: [
         { key: "resp_kb", label: "响应体", color: "#06b6d4", fmt: v => v.toFixed(1) + " KB" },
       ], yMin: 0, yMax: null, opts: { title: "", legendMode: "dash", cssH: 220 } },
     ];

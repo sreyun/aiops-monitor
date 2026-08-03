@@ -636,7 +636,18 @@ func (s *Server) handleSetHostFolder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.store.AddLog(LogEntry{Kind: KindOperation, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r),
-		Message: Tz("log.set_category", shortID(id), req.FolderID)})
+	label := s.hostLabelForID(id)
+	folderName := "未分组"
+	if req.FolderID != "" {
+		folders, _ := s.cfg.hostFoldersSnapshot()
+		paths := folderPathMap(folders)
+		if p := paths[req.FolderID]; p != "" {
+			folderName = p
+		} else {
+			folderName = "未知分组"
+		}
+	}
+	s.addAuditLog(r, LogEntry{Kind: KindOperation, Level: "info", Host: label,
+		Message: Tz("log.set_category", label, folderName)})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "host_id": id, "folder_id": req.FolderID})
 }

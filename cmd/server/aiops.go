@@ -79,10 +79,10 @@ type AIConfig struct {
 	// AllowUnverifiedAIOutputLearning：显式允许把尚未被人工采纳的普通对话输出写入 RAG。
 	// 默认关闭，防止提示注入或模型幻觉污染长期记忆；推荐依赖采纳/反馈/执行结果学习。
 	AllowUnverifiedAIOutputLearning bool `json:"allow_unverified_ai_output_learning,omitempty"`
-	// Sreyun Agent 配置
-	SreyunEnabled         bool `json:"hermes_enabled,omitempty"`          // 启用 Sreyun 自主 Agent
-	SreyunAutoApprove     bool `json:"hermes_auto_approve,omitempty"`     // 低风险操作自动执行
-	SreyunTerminalEnabled bool `json:"hermes_terminal_enabled,omitempty"` // AI 终端只读巡检权限（独立开关，开启需校验终端密码；仅允许只读诊断命令）
+	// Sreyun Agent 配置（对外 JSON 字段一律使用 ai_*，禁止 hermes 字样）
+	SreyunEnabled         bool `json:"ai_agent_enabled,omitempty"`    // 启用自主 Agent
+	SreyunAutoApprove     bool `json:"ai_auto_approve,omitempty"`     // 低风险操作自动执行
+	SreyunTerminalEnabled bool `json:"ai_terminal_enabled,omitempty"` // AI 终端只读巡检权限
 	// 成本估算单价（每 100 万 token）；用于 AI 调用观测与历史组合曲线。0=不估算费用（仍记 token）。
 	InputPricePer1M  float64 `json:"input_price_per_1m,omitempty"`
 	OutputPricePer1M float64 `json:"output_price_per_1m,omitempty"`
@@ -95,7 +95,7 @@ type AIConfig struct {
 	// MCPRateLimitPerMin：MCP Bearer 每分钟调用上限；0=默认 60。
 	MCPRateLimitPerMin int `json:"mcp_rate_limit_per_min,omitempty"`
 	// WriteToolsRequireApproval：写工具是否强制 approval_id。
-	// 与 hermes_auto_approve 组合：仅当 auto_approve=true 且本开关=false 时可跳过审批（实验室模式）；
+	// 与 ai_auto_approve 组合：仅当 auto_approve=true 且本开关=false 时可跳过审批（实验室模式）；
 	// 默认/生产请保持本开关为 true（前端默认勾选）。
 	WriteToolsRequireApproval bool `json:"write_tools_require_approval,omitempty"`
 	// RedactSensitiveFields：对提示词/响应做轻量脱敏后再落审计或展示。
@@ -113,6 +113,43 @@ type AIConfig struct {
 	AutoDefendEnabled bool `json:"auto_defend_enabled,omitempty"`
 	// SelfEvolveEnabled：每日维护循环额外执行技能提炼后的成长日记与自我优化总结。
 	SelfEvolveEnabled bool `json:"self_evolve_enabled,omitempty"`
+}
+
+
+// UnmarshalJSON accepts both ai_* (preferred) and legacy hermes_* keys so upgrades
+// do not drop Agent settings; marshaling always emits ai_* only.
+func (c *AIConfig) UnmarshalJSON(b []byte) error {
+	type alias AIConfig
+	var plain alias
+	if err := json.Unmarshal(b, &plain); err != nil {
+		return err
+	}
+	*c = AIConfig(plain)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil
+	}
+	pickBool := func(keys ...string) (bool, bool) {
+		for _, k := range keys {
+			if v, ok := raw[k]; ok {
+				var b bool
+				if json.Unmarshal(v, &b) == nil {
+					return b, true
+				}
+			}
+		}
+		return false, false
+	}
+	if v, ok := pickBool("ai_agent_enabled", "hermes_enabled"); ok {
+		c.SreyunEnabled = v
+	}
+	if v, ok := pickBool("ai_auto_approve", "hermes_auto_approve"); ok {
+		c.SreyunAutoApprove = v
+	}
+	if v, ok := pickBool("ai_terminal_enabled", "hermes_terminal_enabled"); ok {
+		c.SreyunTerminalEnabled = v
+	}
+	return nil
 }
 
 // embedReady reports whether embedding (RAG write/retrieve) can run.

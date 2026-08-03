@@ -15,6 +15,7 @@ type panelForecastReq struct {
 	Mode            string `json:"mode"`             // forecast | pop | yoy | forecast+pop | forecast+yoy
 	HorizonSec      int64  `json:"horizon_sec"`      // 0 = equal to (to-from)
 	HistoryLookback int64  `json:"history_lookback"` // extra history for model fit; 0 = auto
+	Method          string `json:"method"`           // auto | damped-holt | drift | holt-winters | flat | …
 }
 
 type forecastPoint struct {
@@ -34,15 +35,19 @@ type forecastSeriesOut struct {
 }
 
 type forecastMeta struct {
-	Mode       string  `json:"mode"`
-	HorizonSec int64   `json:"horizon_sec"`
-	Step       int64   `json:"step"`
-	NowTS      int64   `json:"now_ts,omitempty"` // boundary: left=history, right=forecast
-	Method     string  `json:"method,omitempty"`
-	MAPE       float64 `json:"mape,omitempty"`
-	R2         float64 `json:"r2,omitempty"`
-	Message    string  `json:"message,omitempty"`
-	OK         bool    `json:"ok"`
+	Mode        string              `json:"mode"`
+	HorizonSec  int64               `json:"horizon_sec"`
+	Step        int64               `json:"step"`
+	NowTS       int64               `json:"now_ts,omitempty"` // boundary: left=history, right=forecast
+	Method      string              `json:"method,omitempty"`
+	MethodLabel string              `json:"method_label,omitempty"`
+	Requested   string              `json:"requested_method,omitempty"` // auto | damped-holt | …
+	Suggested   string              `json:"suggested_method,omitempty"` // morphology hint
+	MAPE        float64             `json:"mape,omitempty"`
+	R2          float64             `json:"r2,omitempty"`
+	Message     string              `json:"message,omitempty"`
+	OK          bool                `json:"ok"`
+	Models      []forecastModelInfo `json:"models,omitempty"`
 }
 
 // handleDashboardQueryForecast returns history + optional forecast / PoP / YoY overlays.
@@ -175,7 +180,7 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 				}
 				// UI path: empty learnKey + no calibration so the same history yields the
 				// same forecast (matches /metrics/forecast host-detail contract).
-				fc, mape, r2, method, errMsg := robustForecastWithKey(src.Points, req.To, horizon, req.Step, "")
+				fc, mape, r2, method, errMsg := robustForecastWithKey(src.Points, req.To, horizon, req.Step, "", req.Method)
 				if errMsg != "" || len(fc) == 0 {
 					if hi == 0 {
 						meta.OK = false
@@ -206,9 +211,12 @@ func (s *Server) handleDashboardQueryForecast(w http.ResponseWriter, r *http.Req
 			if anyOK {
 				meta.OK = true
 				meta.Method = bestMethod
+				meta.MethodLabel = forecastMethodLabel(bestMethod)
+				meta.Requested = normalizeForecastMethod(req.Method)
+				meta.Models = forecastModelCatalog()
 				meta.MAPE = bestMAPE
 				meta.R2 = bestR2
-				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）", bestMethod, bestMAPE)
+				meta.Message = fmt.Sprintf("左=历史 · 中轴=现在 · 右=预测（%s，MAPE≈%.1f%%）", forecastMethodLabel(bestMethod), bestMAPE)
 			} else if meta.Message == "" {
 				meta.OK = false
 				meta.Message = "数据不足，暂无法预测（至少需要约 4 个采样点）"
@@ -298,9 +306,19 @@ func holtLinearForecast(hist [][2]float64, fromTS, horizon, step int64) (band []
 	return robustForecast(hist, fromTS, horizon, step)
 }
 
-// robustForecast 兼容入口（无自学习 key）。
+// robustForecast 兼容入口（无自学习 key，智能匹配）。
 func robustForecast(hist [][2]float64, fromTS, horizon, step int64) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
-	return robustForecastWithKey(hist, fromTS, horizon, step, "")
+	return robustForecastWithKey(hist, fromTS, horizon, step, "", fcModelAuto)
+}
+
+// robustForecastWithKey 多模型 holdout 选型；learnKey 非空时用历史自学习得分微调选型。
+// preferMethod：auto（默认按数据类型智能匹配）或用户指定的模型族。
+func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learnKey string, preferMethod ...string) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
+	prefer := fcModelAuto
+	if len(preferMethod) > 0 {
+		prefer = preferMethod[0]
+	}
+	return robustForecastSelect(hist, fromTS, horizon, step, learnKey, prefer)
 }
 
 // seriesProfile 刻画时序形态，驱动模型候选与选型偏置。
@@ -448,8 +466,9 @@ func movingAverage(vals []float64, win int) []float64 {
 	return out
 }
 
-// robustForecastWithKey 多模型 holdout 选型；learnKey 非空时用历史自学习得分微调选型。
-func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learnKey string) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
+// robustForecastSelect 多模型 holdout 选型；learnKey 非空时用历史自学习得分微调选型。
+// preferMethod=auto 时按数据类型（形态画像）自动匹配最优模型；否则强制使用用户所选模型族。
+func robustForecastSelect(hist [][2]float64, fromTS, horizon, step int64, learnKey, preferMethod string) (band []forecastPoint, mape, r2 float64, method, errMsg string) {
 	if step < 1 {
 		step = 15
 	}
@@ -466,6 +485,7 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 		}
 	}
 	prof := profileSeries(vals)
+	preferMethod = normalizeForecastMethod(preferMethod)
 	// 抖动序列：先平滑再拟合，避免把采样噪声当成趋势/形态
 	fitVals := vals
 	if prof.jittery {
@@ -523,6 +543,9 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 		if wp >= 6 && n >= wp*2 {
 			candNames = append(candNames, fmt.Sprintf("seasonal-%d", wp))
 		}
+	}
+	if forced := forceCandidateNames(preferMethod, period, shapeP, n, prof); len(forced) > 0 {
+		candNames = forced
 	}
 
 	type candScore struct {
@@ -611,6 +634,7 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			best = c
 		}
 	}
+	forcedPick := preferMethod != "" && preferMethod != fcModelAuto
 	var flatCand *candScore
 	for i := range cands {
 		if cands[i].name == "flat" {
@@ -618,7 +642,7 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			break
 		}
 	}
-	if best.name != "flat" && flatCand != nil && (prof.stationary || (prof.jittery && prof.trendStr < 0.4)) {
+	if !forcedPick && best.name != "flat" && flatCand != nil && (prof.stationary || (prof.jittery && prof.trendStr < 0.4)) {
 		rel := (flatCand.nMAE - best.nMAE) / math.Max(flatCand.nMAE, 1e-6)
 		thresh := 0.04
 		if prof.jittery {
@@ -629,7 +653,7 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 		}
 	}
 	// 稀疏突发若误选 flat，改用形态/季节类；抖动序列则偏向阻尼 Holt
-	if best.name == "flat" && prof.bursty && !prof.jittery {
+	if !forcedPick && best.name == "flat" && prof.bursty && !prof.jittery {
 		var alt *candScore
 		for i := range cands {
 			c := &cands[i]
@@ -643,7 +667,7 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			best = *alt
 		}
 	}
-	if (best.name == "flat" || best.name == "drift") && prof.jittery && prof.trendStr >= 0.35 {
+	if !forcedPick && (best.name == "flat" || best.name == "drift") && prof.jittery && prof.trendStr >= 0.35 {
 		for i := range cands {
 			if cands[i].name == "damped-holt" {
 				best = cands[i]
@@ -652,7 +676,7 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 		}
 	}
 	// 单调上升（磁盘占用等）：禁止 flat 低估填满时间
-	if prof.monotonicUp && best.name == "flat" {
+	if !forcedPick && prof.monotonicUp && best.name == "flat" {
 		for i := range cands {
 			if cands[i].name == "drift" {
 				best = cands[i]
@@ -707,8 +731,9 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 		method = "flat"
 	}
 
-	// 最终再轻平滑预测轨迹，去掉残余锯齿；与末点衔接
-	if len(future) >= 5 {
+	// 最终再轻平滑预测轨迹，去掉残余锯齿；与末点衔接。
+	// 用户强制选模时跳过重平滑，避免把「一路涨/跌」与「基本不变」抹成同一条线。
+	if !forcedPick && len(future) >= 5 {
 		sw := len(future) / 3
 		if sw < 3 {
 			sw = 3
@@ -761,8 +786,16 @@ func robustForecastWithKey(hist [][2]float64, fromTS, horizon, step int64, learn
 			recentSlope = (fitVals[n-1] - fitVals[n-8]) / 7
 		}
 		cap := math.Abs(recentSlope)*float64(steps)*0.55 + seriesStd(fitVals)*0.8 + 1
-		if cap < maxDelta {
+		if !forcedPick && cap < maxDelta {
 			maxDelta = cap
+		}
+	}
+	if forcedPick {
+		// 放宽钳制，让下拉切换模型时右侧虚线形态可辨
+		maxDelta = math.Max(maxDelta, (hiB-loB)*0.95)
+		maxDelta = math.Max(maxDelta, math.Abs(anchor)*0.55+seriesStd(fitVals)*2.2+1)
+		if method == "flat" {
+			maxDelta = math.Min(maxDelta, seriesStd(fitVals)*0.35+1)
 		}
 	}
 	if looksLikePercentUnit(vals) {

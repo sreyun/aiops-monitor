@@ -8,6 +8,17 @@ function hostCategoryBadgeHTML(h) {
   return `<span class="cat-badge" data-act="cat" title="${esc(tip)}">${label}</span>`;
 }
 
+/** User-facing host label: hostname (ip). Never show raw host id. */
+function hostDisplayTitle(h) {
+  if (typeof HostPicker !== "undefined" && HostPicker.hostTitle) return HostPicker.hostTitle(h || {});
+  const name = (h && h.hostname) ? String(h.hostname).trim() : "";
+  const ip = (h && (h.ip || h.agent_ip || h.primary_ip)) ? String(h.ip || h.agent_ip || h.primary_ip).trim() : "";
+  if (name && ip) return `${name} (${ip})`;
+  if (name) return name;
+  if (ip) return ip;
+  return I18N.t("ui.unknown_host", "未知主机");
+}
+
 /* ---------- 渲染：主机卡片 ---------- */
 function hostCard(h) {
   const m = h.latest || {};
@@ -45,10 +56,10 @@ function hostCard(h) {
   const agentVer = (typeof agentVersionBadgeHTML === "function") ? agentVersionBadgeHTML(h) : "";
   const agentSel = (typeof agentSelectCheckboxHTML === "function") ? agentSelectCheckboxHTML(h) : "";
   const outdatedCls = (typeof agentHostCardClass === "function") ? agentHostCardClass(h) : "";
-  return `<div class="host ${h.online ? "online" : "offline"}${outdatedCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
+  return `<div class="host ${h.online ? "online" : "offline"}${outdatedCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(hostDisplayTitle(h))}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
     <div class="host-head">
       <div class="host-name">${agentSel}<span class="dot ${h.online ? "on" : "off"}"></span>
-        <div class="hn" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
+        <div class="hn" data-act="detail" title="${esc(hostDisplayTitle(h))}">${esc(hostDisplayTitle(h))}</div>
       </div>
       <div class="host-tags">
         ${hostCategoryBadgeHTML(h)}
@@ -142,10 +153,10 @@ function hostRow(h) {
   const agentVer = (typeof agentVersionBadgeHTML === "function") ? agentVersionBadgeHTML(h) : "";
   const agentSel = (typeof agentSelectCheckboxHTML === "function") ? agentSelectCheckboxHTML(h) : "";
   const outdatedCls = (typeof agentHostCardClass === "function") ? agentHostCardClass(h) : "";
-  return `<div class="host hrow ${statusCls}${outdatedCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(h.hostname || h.id)}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
+  return `<div class="host hrow ${statusCls}${outdatedCls}" tabindex="0" data-id="${esc(h.id)}" data-name="${esc(hostDisplayTitle(h))}" data-cat="${esc(h.category || "")}" data-folder="${esc(h.folder_id || "")}">
     ${agentSel}<span class="hrow-dot ${h.online ? "on" : "off"}"></span>
     <div class="hrow-id">
-      <div class="hrow-name" data-act="detail" title="${esc(h.hostname || h.id)}">${esc(h.hostname || h.id)}</div>
+      <div class="hrow-name" data-act="detail" title="${esc(hostDisplayTitle(h))}">${esc(hostDisplayTitle(h))}</div>
       <div class="hrow-sub" title="${ipTitle}">${h.ip ? `<span class="mono">${esc(h.ip)}</span>` : ""}${h.platform ? `<span class="hrow-sep">·</span>${esc(h.platform)}` : ""}${agentVer ? `<span class="hrow-sep">·</span>${agentVer}` : ""}</div>
     </div>
     <span class="os-badge">${esc((h.os || "?").toUpperCase())}</span>
@@ -1099,6 +1110,38 @@ function alignUnixFloor(ts, step) {
   return Math.floor(ts / step) * step;
 }
 
+/**
+ * Client-side LOCF for core gauges when a sample is missing the field entirely
+ * (undefined/null). Does NOT treat numeric 0 as missing — that needs server
+ * presence maps (history_align.go). Prevents load1/5/15 from vanishing on
+ * partial JSON / older API payloads.
+ */
+function alignHistoryGaugeSamples(samples) {
+  const keys = [
+    "cpu_percent", "mem_percent", "disk_percent", "swap_percent",
+    "load1", "load5", "load15", "proc_count", "net_conns",
+    "net_recv_rate", "net_sent_rate",
+    "disk_io_util_percent", "disk_read_rate", "disk_write_rate",
+    "disk_read_iops", "disk_write_iops"
+  ];
+  const last = Object.create(null);
+  const out = [];
+  for (const sm of samples || []) {
+    if (!sm) continue;
+    const row = Object.assign({}, sm);
+    for (const k of keys) {
+      const v = row[k];
+      if (v == null || (typeof v === "number" && !isFinite(v))) {
+        if (last[k] != null) row[k] = last[k];
+      } else {
+        last[k] = +v;
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 /** Resolve [from,to] for host detail; freeze within the same host+preset session. */
 function resolveDetailWindow() {
   if (DETAIL_CUSTOM) {
@@ -1154,9 +1197,10 @@ async function loadAndRenderCharts() {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(DETAIL_HOST_ID)}/history?from=${from}&to=${to}`,
       load.signal ? { signal: load.signal } : undefined);
     if (!load.isCurrent()) return;
-    const samples = await r.json().catch(() => []);
+    const rawSamples = await r.json().catch(() => []);
     if (!load.isCurrent()) return;
-    if (!Array.isArray(samples) || !samples.length) {
+    const samples = alignHistoryGaugeSamples(Array.isArray(rawSamples) ? rawSamples : []);
+    if (!samples.length) {
       DETAIL_SAMPLES = [];
       body.innerHTML = `<div class="empty-line">${I18N.t("empty.no_history")}</div>`;
       return;
@@ -1313,13 +1357,25 @@ async function loadAndRenderCharts() {
         const sp = DETAIL_CHART_PENDING[cid];
         if (sp && sp.series) allSeries.push(...sp.series);
       });
+      const fcMethod = typeof getChartForecastModel === "function" ? getChartForecastModel("host-detail") : "auto";
       const en = await enrichSharedForecast(samples, allSeries, {
         forecast: true,
         signal: load.signal,
-        isCurrent: () => load.isCurrent()
+        isCurrent: () => load.isCurrent(),
+        method: fcMethod,
+        forecastScope: "host-detail"
       });
       if (!load.isCurrent() || (en && en.stale)) return;
       DETAIL_SHARED_FC = en;
+      // Surface which model actually ran (helps verify model switching).
+      try {
+        const meta = en && en.meta;
+        const hint = meta && (meta.message || meta.Message);
+        const hintEl = body.querySelector(".hint");
+        if (hintEl && hint) {
+          hintEl.textContent = `${I18N.t("section.sample_points")}: ${samples.length} · ${I18N.t("section.granularity")}: ${gran} · ${hint}`;
+        }
+      } catch (_) {}
     }
 
     DETAIL_CHARTS = {};
@@ -1535,17 +1591,35 @@ function seriesVal(s, sample) {
   return (v === null || v === undefined || isNaN(v)) ? null : v;
 }
 
-// smoothPath — 将折线数据点绘制为平滑的二次贝塞尔曲线
-function smoothPath(ctx, pts) {
-  if (pts.length < 2) return;
-  ctx.beginPath();
+// seriesPathCommands — 折线或「穿过采样点」的 Catmull-Rom 曲线（控制点 Y 钳制到段内，避免虚高/虚低尖峰）。
+// 描边与填充必须共用同一套指令，否则会出现「点/Tooltip 在峰值、实线却矮一截」的幽灵峰。
+function seriesPathCommands(ctx, pts, smooth) {
+  if (!pts || pts.length < 2) return;
   ctx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length - 1; i++) {
-    const cx = (pts[i].x + pts[i + 1].x) / 2;
-    const cy = (pts[i].y + pts[i + 1].y) / 2;
-    ctx.quadraticCurveTo(pts[i].x, pts[i].y, cx, cy);
+  const useSmooth = !!smooth && pts.length > 12;
+  if (!useSmooth) {
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    return;
   }
-  ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    let cp1x = p1.x + (p2.x - p0.x) / 6;
+    let cp1y = p1.y + (p2.y - p0.y) / 6;
+    let cp2x = p2.x - (p3.x - p1.x) / 6;
+    let cp2y = p2.y - (p3.y - p1.y) / 6;
+    const yLo = Math.min(p1.y, p2.y), yHi = Math.max(p1.y, p2.y);
+    cp1y = Math.max(yLo, Math.min(yHi, cp1y));
+    cp2y = Math.max(yLo, Math.min(yHi, cp2y));
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+  }
+}
+function smoothPath(ctx, pts) {
+  if (!pts || pts.length < 2) return;
+  ctx.beginPath();
+  seriesPathCommands(ctx, pts, true);
 }
 
 // drawChartEmpty — 在 Canvas 上绘制空状态插画
@@ -1915,48 +1989,66 @@ function drawChart(state) {
   }
 
   // Series clipped strictly to the plot rect — peaks cannot paint into legend/title.
+  // Multi-series (load1/5/15, DNS/TCP/…): never area-fill + never Catmull-Rom smooth.
+  // Dense 1h/3h samples make gauges nearly coincide; fills/smoothing stack into
+  // "1～2 条曲线" 闪烁假象。单序列仍保留面积与轻平滑。
   ctx.save();
   ctx.beginPath();
   ctx.rect(pad.left, pad.top, cw, ch);
   ctx.clip();
-  series.forEach((s, sIdx) => {
+  const histSeriesN = series.filter(s => !s.dashed && s.kind !== "forecast"
+    && s.kind !== "compare_pop" && s.kind !== "compare_yoy" && !s.compare).length;
+  const multiHist = histSeriesN > 1;
+  const built = series.map((s, sIdx) => {
     const pts = [];
     vis.forEach((sm, i) => {
       const v = seriesVal(s, sm);
       if (v !== null) pts.push({ x: xAt(i), y: yAt(v), val: v });
     });
+    return { s, sIdx, pts };
+  });
+  // Pass 1: area fill only for single history series (forecast/compare never fill).
+  if (!multiHist) {
+    built.forEach(({ s, pts }) => {
+      if (pts.length < 2) return;
+      if (s.dashed || s.kind === "forecast" || s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) return;
+      const wantSmooth = pts.length > 12;
+      const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+      grad.addColorStop(0, s.color + "35");
+      grad.addColorStop(0.4, s.color + "15");
+      grad.addColorStop(0.7, s.color + "06");
+      grad.addColorStop(1, s.color + "01");
+      ctx.fillStyle = grad;
+      const baseY = pad.top + ch;
+      ctx.beginPath();
+      seriesPathCommands(ctx, pts, wantSmooth);
+      ctx.lineTo(pts[pts.length - 1].x, baseY);
+      ctx.lineTo(pts[0].x, baseY);
+      ctx.closePath();
+      ctx.fill();
+    });
+  }
+  // Pass 2: strokes on top so every series stays visible when values nearly overlap.
+  built.forEach(({ s, sIdx, pts }) => {
     if (pts.length < 2) return;
     ctx.save();
     ctx.strokeStyle = s.color;
-    ctx.lineWidth = sIdx === 0 ? 2.2 : 1.8;
+    // Stagger widths so nearly-identical gauges (load1≈load5≈load15) remain separable.
+    ctx.lineWidth = multiHist ? Math.max(1.4, 2.4 - sIdx * 0.35) : (sIdx === 0 ? 2.2 : 1.8);
     ctx.lineJoin = "round"; ctx.lineCap = "round";
     if (s.dashed || s.kind === "forecast") ctx.setLineDash([6, 4]);
     else if (s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) ctx.setLineDash([2, 3]);
+    else if (multiHist && sIdx > 0 && sIdx % 2 === 1) ctx.setLineDash([10, 3]); // alternate slight dash
     else ctx.setLineDash([]);
-    if (pts.length > 12 && !s.dashed && s.kind !== "forecast") { smoothPath(ctx, pts); } else {
-      ctx.beginPath();
-      pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-    }
+    // Dense short windows: polyline only — smooth pulls coincident gauges into one ribbon.
+    const wantSmooth = !multiHist && pts.length > 12 && pts.length <= 240
+      && !s.dashed && s.kind !== "forecast"
+      && s.kind !== "compare_pop" && s.kind !== "compare_yoy" && !s.compare;
+    ctx.beginPath();
+    seriesPathCommands(ctx, pts, wantSmooth);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
-
-    if (s.dashed || s.kind === "forecast" || s.kind === "compare_pop" || s.kind === "compare_yoy" || s.compare) {
-      // Forecast / compare: dashed stroke only — keep solid fill for realtime history (left).
-      return;
-    }
-    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-    grad.addColorStop(0, s.color + "35");
-    grad.addColorStop(0.4, s.color + "15");
-    grad.addColorStop(0.7, s.color + "06");
-    grad.addColorStop(1, s.color + "01");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pad.top + ch);
-    pts.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.lineTo(pts[pts.length - 1].x, pad.top + ch);
-    ctx.closePath();
-    ctx.fill();
   });
 
   // Realtime | forecast boundary (left=历史, right=预测)，中轴居中
@@ -2094,8 +2186,8 @@ function showChartTip(state, e, li) {
 // larger canvas that keeps the source's current visible window and stays fully
 // interactive (hover / box-zoom / dbl-click reset).
 let ZOOM_CHART_SRC = null;
-/** Reload context for zoom time-range switching (host history / AI chart). */
-let ZOOM_CTX = null; // { hostId, mode, metrics, series, yMin, yMax, titleBase, forecastScope, rangeH, custom }
+/** Reload context for zoom time-range switching (host / check / AI chart). */
+let ZOOM_CTX = null; // { hostId, checkId, checkType, checkName, apiBase, mode, metrics, series, yMin, yMax, titleBase, forecastScope, rangeH, custom, canReload }
 
 function zoomMetricField(m) {
   switch (String(m || "").toLowerCase()) {
@@ -2127,6 +2219,9 @@ function estimateZoomRangeHours(src) {
     }
   }
   if (typeof DETAIL_TIME_RANGE === "number" && DETAIL_TIME_RANGE > 0) return DETAIL_TIME_RANGE;
+  if (typeof CHK_HIST !== "undefined" && CHK_HIST && typeof CHK_HIST.range === "number" && CHK_HIST.range > 0 && !CHK_HIST.custom) {
+    return CHK_HIST.range;
+  }
   return 6;
 }
 
@@ -2135,10 +2230,16 @@ function buildZoomCtxFromSrc(src) {
   const series = (base.series || src.series || []).filter(s => s && s.kind !== "forecast" && !s.dashed);
   const reload = base.reload || src.reload || null;
   const hostId = (reload && reload.hostId) || (src.forecastScope === "host-detail" ? DETAIL_HOST_ID : "") || "";
+  const checkId = (reload && (reload.checkId || reload.id)) || "";
   const mode = (reload && reload.mode) || (hostId && series.some(s => /_percent$|^load\d/.test(String(s.key || ""))) ? "fields" : (reload ? reload.mode : ""));
+  const canReload = !!(hostId || (reload && reload.hostId) || checkId || (reload && typeof reload.fetch === "function"));
   return {
     hostId: hostId || (reload && reload.hostId) || "",
-    mode: mode || (reload && reload.metrics ? "ai-mapped" : (hostId ? "fields" : "")),
+    checkId: checkId || "",
+    checkType: (reload && (reload.checkType || reload.type)) || "",
+    checkName: (reload && (reload.checkName || reload.name)) || "",
+    apiBase: (reload && reload.base) || "checks",
+    mode: mode || (reload && reload.metrics ? "ai-mapped" : (hostId ? "fields" : (checkId ? "check" : ""))),
     metrics: (reload && reload.metrics) || [],
     series,
     yMin: base.yMin != null ? base.yMin : src.yMin,
@@ -2146,8 +2247,8 @@ function buildZoomCtxFromSrc(src) {
     titleBase: String((base.title || src.title || "").replace(/\s*[·•]\s*放大预览\s*$/, "")),
     forecastScope: src.forecastScope || (reload && reload.forecastScope) || "",
     rangeH: estimateZoomRangeHours(src),
-    custom: null,
-    canReload: !!(hostId || (reload && reload.hostId))
+    custom: (typeof CHK_HIST !== "undefined" && CHK_HIST && CHK_HIST.custom && checkId && CHK_HIST.id === checkId) ? CHK_HIST.custom : null,
+    canReload
   };
 }
 
@@ -2195,7 +2296,27 @@ async function fetchZoomHostSamples(hostId, from, to) {
   const r = await fetch(`${API}/hosts/${encodeURIComponent(hostId)}/history?from=${from}&to=${to}`, { credentials: "same-origin" });
   if (!r.ok) throw new Error("历史拉取失败 HTTP " + r.status);
   const j = await r.json();
-  return Array.isArray(j) ? j : (Array.isArray(j.samples) ? j.samples : []);
+  const raw = Array.isArray(j) ? j : (Array.isArray(j.samples) ? j.samples : []);
+  return typeof alignHistoryGaugeSamples === "function" ? alignHistoryGaugeSamples(raw) : raw;
+}
+
+async function fetchZoomCheckSamples(checkId, from, to, apiBase) {
+  const sinceMin = Math.max(1, Math.ceil((to - from) / 60));
+  const qs = new URLSearchParams({ since_min: String(sinceMin), from: String(from), to: String(to) });
+  const base = apiBase || "checks";
+  const r = await fetch(`${API}/${base}/${encodeURIComponent(checkId)}/history?${qs}`, { credentials: "same-origin" });
+  if (!r.ok) throw new Error("拨测历史拉取失败 HTTP " + r.status);
+  const all = await r.json().catch(() => []);
+  const pts = (Array.isArray(all) ? all : []).filter(p => {
+    const ts = +(p.timestamp || p.ts || 0);
+    return ts >= from && ts <= to;
+  });
+  return pts.map(p => ({
+    timestamp: p.timestamp || p.ts,
+    latency_ms: p.latency_ms,
+    loss_pct: (typeof p.loss_pct === "number" ? p.loss_pct : null),
+    ok: p.ok
+  }));
 }
 
 function resolveZoomWindow() {
@@ -2220,8 +2341,27 @@ function zoomTitleWithRange(base, from, to) {
   return `${clean}（${label}） · ${I18N.t("ui.zoom_preview", "放大预览")}`;
 }
 
+function syncZoomRangeToCheckHist() {
+  if (!ZOOM_CTX || !ZOOM_CTX.checkId || typeof CHK_HIST === "undefined" || !CHK_HIST) return;
+  if (CHK_HIST.id !== ZOOM_CTX.checkId) return;
+  if (ZOOM_CTX.custom) {
+    CHK_HIST.custom = { from: ZOOM_CTX.custom.from, to: ZOOM_CTX.custom.to };
+  } else {
+    CHK_HIST.custom = null;
+    CHK_HIST.range = ZOOM_CTX.rangeH || CHK_HIST.range || 1;
+  }
+  // 放大预览改时间后，同步底层历史弹窗（若仍打开），避免关闭后看到旧区间
+  const mask = typeof $ === "function" ? $("checkHistMask") : null;
+  if (mask && mask.classList.contains("show") && typeof loadCheckHistory === "function") {
+    clearTimeout(syncZoomRangeToCheckHist._t);
+    syncZoomRangeToCheckHist._t = setTimeout(() => {
+      try { loadCheckHistory(); } catch (_) {}
+    }, 80);
+  }
+}
+
 async function reloadZoomChartData() {
-  if (!ZOOM_CTX || !ZOOM_CTX.canReload || !ZOOM_CTX.hostId) {
+  if (!ZOOM_CTX || !ZOOM_CTX.canReload) {
     await refreshChartZoomFromSrc();
     return;
   }
@@ -2230,8 +2370,34 @@ async function reloadZoomChartData() {
   const wrap = $("chartZoomCanvas") && $("chartZoomCanvas").closest(".chart-wrap");
   if (wrap) wrap.classList.add("is-loading");
   try {
-    const raw = await fetchZoomHostSamples(ZOOM_CTX.hostId, win.from, win.to);
-    const samples = mapHostSamplesForZoom(raw, ZOOM_CTX);
+    let samples = [];
+    let reloadMeta = {
+      forecastScope: ZOOM_CTX.forecastScope
+    };
+    if (ZOOM_CTX.checkId) {
+      samples = await fetchZoomCheckSamples(ZOOM_CTX.checkId, win.from, win.to, ZOOM_CTX.apiBase);
+      reloadMeta = {
+        checkId: ZOOM_CTX.checkId,
+        checkType: ZOOM_CTX.checkType,
+        checkName: ZOOM_CTX.checkName,
+        base: ZOOM_CTX.apiBase || "checks",
+        mode: "check",
+        forecastScope: ZOOM_CTX.forecastScope || "checks"
+      };
+      syncZoomRangeToCheckHist();
+    } else if (ZOOM_CTX.hostId) {
+      const raw = await fetchZoomHostSamples(ZOOM_CTX.hostId, win.from, win.to);
+      samples = mapHostSamplesForZoom(raw, ZOOM_CTX);
+      reloadMeta = {
+        hostId: ZOOM_CTX.hostId,
+        mode: ZOOM_CTX.mode,
+        metrics: ZOOM_CTX.metrics,
+        forecastScope: ZOOM_CTX.forecastScope
+      };
+    } else {
+      await refreshChartZoomFromSrc();
+      return;
+    }
     if (!samples.length) {
       if (typeof toast === "function") toast(I18N.t("empty.no_history", "暂无历史数据"), "err");
       return;
@@ -2244,12 +2410,7 @@ async function reloadZoomChartData() {
       samples, series,
       yMin: ZOOM_CTX.yMin, yMax: ZOOM_CTX.yMax,
       title, horizonSec,
-      reload: {
-        hostId: ZOOM_CTX.hostId,
-        mode: ZOOM_CTX.mode,
-        metrics: ZOOM_CTX.metrics,
-        forecastScope: ZOOM_CTX.forecastScope
-      }
+      reload: reloadMeta
     };
     ZOOM_CHART_SRC = {
       all: samples, series, yMin: ZOOM_CTX.yMin, yMax: ZOOM_CTX.yMax,
@@ -2288,7 +2449,12 @@ async function refreshChartZoomFromSrc() {
   if (fcOn && horizonSec > 0 && horizonSec < 1800) horizonSec = 1800;
   let sm = samples, ser = series, nowTs = 0;
   if (fcOn && typeof enrichSamplesWithForecast === "function" && samples && samples.length >= 4) {
-    const en = await enrichSamplesWithForecast(samples, series, { forecast: true, horizonSec });
+    const en = await enrichSamplesWithForecast(samples, series, {
+      forecast: true,
+      horizonSec,
+      method: typeof getChartForecastModel === "function" ? getChartForecastModel(scope) : "auto",
+      forecastScope: scope || ""
+    });
     if (en && !en.stale) {
       const sliced = typeof sliceForecastForChart === "function"
         ? sliceForecastForChart(en, series, samples) : en;
@@ -2323,8 +2489,9 @@ function openChartZoom(src) {
   const tools = $("chartZoomTools");
   if (tools) {
     const scope = (ZOOM_CTX && ZOOM_CTX.forecastScope) || src.forecastScope || "";
-    // 仅保留「预测」按钮本身，避免再出现一个重复的「预测」文字标签
-    tools.innerHTML = (scope && typeof forecastChipHTML === "function") ? forecastChipHTML(scope) : "";
+    const fc = (scope && typeof forecastChipHTML === "function") ? forecastChipHTML(scope) : "";
+    const ai = `<button type="button" class="chip-btn ai-assist-btn" data-zoom-ai title="${I18N.t("hosts.ai_analyze_title", "用 AI 解读当前趋势图")}"><span class="ai-assist-btn-ic">🤖</span>${I18N.t("hosts.ai_analyze", "AI 分析")}</button>`;
+    tools.innerHTML = fc + ai;
   }
   renderZoomRangeControls();
   const panel = $("chartZoomCustomPanel");
@@ -2360,6 +2527,69 @@ function openChartZoom(src) {
   if (z) { z.i0 = 0; z.i1 = (z.all ? z.all.length : 1) - 1; drawChart(z); }
   DETAIL_CHARTS.__zoom = z;
 }
+
+function analyzeZoomChartAI() {
+  if (typeof openAIAssist !== "function") {
+    if (typeof toast === "function") toast(I18N.t("assist.unavailable", "AI 面板未就绪"), "err");
+    return;
+  }
+  const src = ZOOM_CHART_SRC;
+  if (!src) {
+    if (typeof toast === "function") toast(I18N.t("empty.no_history", "暂无历史数据"), "err");
+    return;
+  }
+  const base = src._fcBase || src._aiBase || {};
+  const samples = ((base.samples || src.all) || []).filter(Boolean);
+  const series = ((ZOOM_CTX && ZOOM_CTX.series) || base.series || src.series || [])
+    .filter(s => s && s.kind !== "forecast" && !s.dashed);
+  if (!samples.length || !series.length) {
+    if (typeof toast === "function") toast(I18N.t("empty.no_history", "暂无历史数据"), "err");
+    return;
+  }
+  const first = samples[0], last = samples[samples.length - 1];
+  const t0 = +(first.timestamp || first.ts || 0);
+  const t1 = +(last.timestamp || last.ts || 0);
+  const title = (ZOOM_CTX && ZOOM_CTX.titleBase) || src.title || I18N.t("ui.trend", "趋势");
+  const lines = [
+    `图表：${title}`,
+    ZOOM_CTX && ZOOM_CTX.checkId ? `拨测：${ZOOM_CTX.checkName || ZOOM_CTX.checkId}（id=${ZOOM_CTX.checkId}，类型=${ZOOM_CTX.checkType || "?"}）` : "",
+    ZOOM_CTX && ZOOM_CTX.hostId ? `主机：${(typeof HostPicker !== "undefined" && HostPicker.displayHost) ? HostPicker.displayHost(ZOOM_CTX.hostId) : (ZOOM_CTX.titleBase || "未知主机")}` : "",
+    `样本数：${samples.length}，时间跨度：约 ${((t1 - t0) / 3600).toFixed(2)} 小时（${t0 ? new Date(t0 * 1000).toLocaleString() : "?"} → ${t1 ? new Date(t1 * 1000).toLocaleString() : "?"}）`,
+  ].filter(Boolean);
+  series.forEach(s => {
+    const key = s.key;
+    let sum = 0, n = 0, peak = -Infinity, cur = null;
+    samples.forEach(sm => {
+      let v;
+      try { v = typeof seriesVal === "function" ? seriesVal(s, sm) : sm[key]; } catch (_) { v = null; }
+      if (v == null || !isFinite(+v)) return;
+      v = +v;
+      sum += v; n++;
+      if (v > peak) peak = v;
+      cur = v;
+    });
+    if (!n) {
+      lines.push(`${s.label || key}：无有效采样`);
+      return;
+    }
+    const fmt = typeof s.fmt === "function" ? s.fmt : (v => String(Math.round(v * 100) / 100));
+    lines.push(`${s.label || key}：均值 ${fmt(sum / n)} · 峰值 ${fmt(peak)} · 当前 ${fmt(cur)}`);
+  });
+  if (ZOOM_CTX && ZOOM_CTX.checkId) {
+    const okN = samples.filter(sm => sm.ok === true).length;
+    if (samples.some(sm => typeof sm.ok === "boolean")) {
+      lines.push(`可用率：${(okN / samples.length * 100).toFixed(1)}%（成功 ${okN}/${samples.length}）`);
+    }
+  }
+  lines.push("", "请基于以上趋势做根因研判与处置建议；关注尖峰、突降、持续抬升与可用率变化。");
+  openAIAssist({
+    task: "chart_analysis",
+    mode: "analyze",
+    title: "AI · 趋势诊断 · " + title,
+    context: lines.join("\n").slice(0, 12000),
+    hint: "正在解读当前放大预览中的趋势…"
+  });
+}
 document.addEventListener("chart-forecast-toggle", (ev) => {
   if (!ev.detail || !ZOOM_CHART_SRC) return;
   const scope = ZOOM_CHART_SRC.forecastScope || (ZOOM_CTX && ZOOM_CTX.forecastScope) || "";
@@ -2369,8 +2599,14 @@ document.addEventListener("chart-forecast-toggle", (ev) => {
   refreshChartZoomFromSrc().catch(() => {});
 });
 
-// Zoom modal: time-range chips + custom range
+// Zoom modal: time-range chips + custom range + AI
 safeAddEventListener("chartZoomMask", "click", (e) => {
+  if (e.target.closest && e.target.closest("[data-zoom-ai]")) {
+    e.preventDefault();
+    e.stopPropagation();
+    analyzeZoomChartAI();
+    return;
+  }
   if (!ZOOM_CTX) return;
   const rangeBtn = e.target.closest && e.target.closest("[data-zoom-range]");
   if (rangeBtn) {

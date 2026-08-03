@@ -4,8 +4,65 @@
  * Supports AbortSignal + isCurrent() so stale responses never paint a new canvas.
  * ============================================================================ */
 window._FC_ON = window._FC_ON || {};
+window._FC_MODEL = window._FC_MODEL || {}; // scope -> model id
 /** Host detail mounts many charts; keep headroom for CPU/mem/disk/net/conns/IO/… */
 const FC_MAX_SERIES = 32;
+/** Prefer core gauges when capping shared forecast (load1/5/15 must never be squeezed out). */
+const FC_PRIORITY_KEYS = [
+  "cpu_percent", "mem_percent", "disk_percent",
+  "load1", "load5", "load15",
+  "latency_ms", "dns_ms", "tcp_ms", "tls_ms", "ttfb_ms", "online", "loss_pct",
+  "net_recv_rate", "net_sent_rate", "net_conns",
+  "disk_io_util_percent", "disk_read_rate", "disk_write_rate",
+  "disk_read_iops", "disk_write_iops", "proc_count", "swap_percent",
+  "in_util", "out_util", "in_bps", "out_bps"
+];
+
+function _fcPriorityRank(key) {
+  const k = String(key || "");
+  const i = FC_PRIORITY_KEYS.indexOf(k);
+  if (i >= 0) return i;
+  if (k.indexOf("load") === 0) return FC_PRIORITY_KEYS.length;
+  if (/^(latency|dns|tcp|tls|ttfb|loss|ok|online)/i.test(k)) return FC_PRIORITY_KEYS.length + 1;
+  return FC_PRIORITY_KEYS.length + 50;
+}
+
+/**
+ * LOCF-align joined multi-series sample rows for keys that are null/undefined
+ * (not numeric 0 — that needs server presence maps). Used by SNMP/hardware/host
+ * matrix joins so staggered Prom timestamps never open gaps in createChart.
+ */
+function alignJoinedSeriesSamples(samples, keys) {
+  const keyList = keys && keys.length
+    ? keys
+    : null;
+  const last = Object.create(null);
+  const out = [];
+  for (const sm of samples || []) {
+    if (!sm) continue;
+    const row = Object.assign({}, sm);
+    const useKeys = keyList || Object.keys(row).filter(k => k !== "timestamp" && k !== "ts");
+    for (const k of useKeys) {
+      const v = row[k];
+      if (v == null || (typeof v === "number" && !isFinite(v))) {
+        if (last[k] != null) row[k] = last[k];
+      } else if (typeof v === "number" || (typeof v === "string" && v !== "" && isFinite(+v))) {
+        last[k] = +v;
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** User-facing forecast models — labels emphasize use-case, not algorithm jargon. */
+const FC_MODEL_OPTIONS = [
+  { id: "auto", label: "智能匹配（推荐）", title: "系统按当前数据形态自动选最合适的预测方式" },
+  { id: "damped-holt", label: "平滑波动", title: "适合 CPU、延时、连接数等上下抖动的指标" },
+  { id: "drift", label: "一路涨/跌", title: "适合磁盘占用、容量等持续上升或下降的指标" },
+  { id: "holt-winters", label: "有规律起伏", title: "适合流量、访问量等带日/周周期的指标" },
+  { id: "flat", label: "基本不变", title: "适合可用率等几乎稳定在某一水平的指标" },
+];
 
 function isChartForecastOn(scope) {
   return !!(window._FC_ON && window._FC_ON[scope]);
@@ -14,9 +71,24 @@ function setChartForecastOn(scope, on) {
   window._FC_ON = window._FC_ON || {};
   window._FC_ON[scope] = !!on;
 }
+function getChartForecastModel(scope) {
+  const m = (window._FC_MODEL && window._FC_MODEL[scope]) || "auto";
+  return FC_MODEL_OPTIONS.some(o => o.id === m) ? m : "auto";
+}
+function setChartForecastModel(scope, model) {
+  window._FC_MODEL = window._FC_MODEL || {};
+  const id = String(model || "auto");
+  window._FC_MODEL[scope] = FC_MODEL_OPTIONS.some(o => o.id === id) ? id : "auto";
+}
 function forecastChipHTML(scope, on) {
   const active = on != null ? !!on : isChartForecastOn(scope);
-  return `<button type="button" class="chip-btn${active ? " active" : ""}" data-chart-forecast="${esc(scope || "default")}" title="多序列趋势预测：左侧实时，右侧未来（虚线）">预测</button>`;
+  const sc = esc(scope || "default");
+  const cur = getChartForecastModel(scope);
+  const opts = FC_MODEL_OPTIONS.map(o =>
+    `<option value="${esc(o.id)}" ${o.id === cur ? "selected" : ""} title="${esc(o.title)}">${esc(o.label)}</option>`
+  ).join("");
+  return `<button type="button" class="chip-btn${active ? " active" : ""}" data-chart-forecast="${sc}" title="多序列趋势预测：左侧实时，右侧未来（虚线）">预测</button>` +
+    `<select class="chip-select fc-model-sel" data-chart-fc-model="${sc}" title="选择预测方式（默认推荐智能匹配）" ${active ? "" : "disabled"}>${opts}</select>`;
 }
 
 function _fcStillCurrent(opts) {
@@ -36,9 +108,14 @@ function _fcSampleTs(sm) {
  * Build request payload from Canvas samples + series defs (supports transform).
  * Hold-forward each series to the global last timestamp so every forecast shares
  * the same "now" boundary (avoids empty purple zones for sparse TCP/UDP/…).
+ * Also LOCF-fills intra-series null gaps so staggered Prom joins never drop a
+ * series below the <4-point forecast floor (load1/5/15 flicker).
  */
 function buildForecastRequestSeries(samples, seriesDefs) {
-  const use = (seriesDefs || []).filter(s => !s.kind || s.kind === "history").slice(0, FC_MAX_SERIES);
+  const ranked = (seriesDefs || []).filter(s => !s.kind || s.kind === "history")
+    .slice()
+    .sort((a, b) => _fcPriorityRank(a.key) - _fcPriorityRank(b.key) || String(a.key).localeCompare(String(b.key)));
+  const use = ranked.slice(0, FC_MAX_SERIES);
   let globalLast = 0;
   for (const sm of samples || []) {
     const ts = _fcSampleTs(sm);
@@ -47,13 +124,20 @@ function buildForecastRequestSeries(samples, seriesDefs) {
   const out = [];
   for (const s of use) {
     const pts = [];
+    let lastV = null;
     for (const sm of samples || []) {
-      let v;
-      try { v = typeof seriesVal === "function" ? seriesVal(s, sm) : sm[s.key]; } catch (_) { v = null; }
-      if (v == null || !isFinite(+v)) continue;
       const ts = _fcSampleTs(sm);
       if (!ts) continue;
-      pts.push([ts, +v]);
+      let v;
+      try { v = typeof seriesVal === "function" ? seriesVal(s, sm) : sm[s.key]; } catch (_) { v = null; }
+      if (v == null || !isFinite(+v)) {
+        if (lastV == null) continue;
+        v = lastV; // LOCF across null/missing join gaps
+      } else {
+        lastV = +v;
+        v = lastV;
+      }
+      pts.push([ts, v]);
     }
     if (pts.length < 4) continue;
     // Dedup timestamps (keep last)
@@ -103,7 +187,10 @@ async function enrichSamplesWithForecast(samples, seriesDefs, opts) {
         series: reqSeries,
         horizon_sec: opts.horizonSec || Math.max(0, Math.round(globalSpan)),
         step: opts.step || 0,
-        now_ts: globalLast || 0
+        now_ts: globalLast || 0,
+        method: opts.method != null && opts.method !== ""
+          ? opts.method
+          : (getChartForecastModel(opts.forecastScope || "") || "auto")
       })
     };
     if (opts.signal) fetchOpts.signal = opts.signal;
@@ -178,7 +265,18 @@ async function enrichSharedForecast(samples, allSeriesDefs, opts) {
     seen.add(k);
     uniq.push(s);
   }
-  return enrichSamplesWithForecast(samples, uniq, Object.assign({}, opts, { forecast: true }));
+  // Cap after priority sort so load1/5/15 / core gauges survive dense host-detail pages.
+  uniq.sort((a, b) => _fcPriorityRank(a.key) - _fcPriorityRank(b.key) || String(a.key || "").localeCompare(String(b.key || "")));
+  const capped = uniq.slice(0, FC_MAX_SERIES);
+  const scope = opts.forecastScope || "";
+  const method = (opts.method != null && opts.method !== "")
+    ? opts.method
+    : getChartForecastModel(scope);
+  return enrichSamplesWithForecast(samples, capped, Object.assign({}, opts, {
+    forecast: true,
+    method,
+    forecastScope: scope
+  }));
 }
 
 /**
@@ -264,6 +362,8 @@ async function createChartWithForecast(canvasId, samples, series, yMin, yMax, op
       forecast: true,
       horizonSec: opts.horizonSec || 0,
       step: opts.step || 0,
+      method: opts.method || getChartForecastModel(opts.forecastScope || ""),
+      forecastScope: opts.forecastScope || "",
       signal: opts.signal,
       isCurrent: opts.isCurrent
     });
@@ -319,7 +419,17 @@ async function mountChartsWithForecast(scope, specs, loadOpts) {
   if (!want) {
     for (const sp of list) {
       if (!isCurrent()) return out;
-      out[sp.id] = createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, Object.assign({}, sp.opts || {}, { forecastScope: scope }));
+      const reload = (sp.opts && sp.opts.reload) || null;
+      out[sp.id] = createChart(sp.id, sp.samples, sp.series, sp.yMin, sp.yMax, Object.assign({}, sp.opts || {}, {
+        forecastScope: scope,
+        reload,
+        _fcBase: {
+          samples: sp.samples, series: sp.series, yMin: sp.yMin, yMax: sp.yMax,
+          title: (sp.opts && sp.opts.title) || "",
+          reload,
+          horizonSec: loadOpts.horizonSec || 0
+        }
+      }));
     }
     return out;
   }
@@ -335,14 +445,26 @@ async function mountChartsWithForecast(scope, specs, loadOpts) {
     signal,
     isCurrent,
     horizonSec: loadOpts.horizonSec || 0,
-    step: loadOpts.step || 0
+    step: loadOpts.step || 0,
+    method: getChartForecastModel(scope),
+    forecastScope: scope
   });
   if (!isCurrent() || (en && en.stale)) return out;
 
   for (const sp of list) {
     if (!isCurrent()) return out;
     const sliced = sliceForecastForChart(en, sp.series, sp.samples);
-    const baseOpts = Object.assign({}, sp.opts || {}, { forecastScope: scope });
+    const reload = (sp.opts && sp.opts.reload) || null;
+    const baseOpts = Object.assign({}, sp.opts || {}, {
+      forecastScope: scope,
+      reload,
+      _fcBase: {
+        samples: sp.samples, series: sp.series, yMin: sp.yMin, yMax: sp.yMax,
+        title: (sp.opts && sp.opts.title) || "",
+        reload,
+        horizonSec: loadOpts.horizonSec || 0
+      }
+    });
     if (sliced) {
       out[sp.id] = createChart(sp.id, sliced.samples, sliced.series, sp.yMin, sp.yMax,
         Object.assign(baseOpts, { nowTs: sliced.nowTs || 0 }));
@@ -362,5 +484,24 @@ document.addEventListener("click", (e) => {
   const on = !isChartForecastOn(scope);
   setChartForecastOn(scope, on);
   btn.classList.toggle("active", on);
-  document.dispatchEvent(new CustomEvent("chart-forecast-toggle", { detail: { scope, on } }));
+  document.querySelectorAll(`[data-chart-fc-model="${scope}"]`).forEach(sel => { sel.disabled = !on; });
+  document.dispatchEvent(new CustomEvent("chart-forecast-toggle", { detail: { scope, on, method: getChartForecastModel(scope) } }));
+});
+document.addEventListener("change", (e) => {
+  const sel = e.target && e.target.closest && e.target.closest("[data-chart-fc-model]");
+  if (!sel) return;
+  e.stopPropagation();
+  const scope = sel.getAttribute("data-chart-fc-model") || "default";
+  const prev = getChartForecastModel(scope);
+  setChartForecastModel(scope, sel.value);
+  const next = getChartForecastModel(scope);
+  // Keep sibling selects in sync (detail + zoom).
+  document.querySelectorAll(`[data-chart-fc-model="${scope}"]`).forEach(el => {
+    if (el !== sel) el.value = next;
+  });
+  if (isChartForecastOn(scope)) {
+    document.dispatchEvent(new CustomEvent("chart-forecast-toggle", {
+      detail: { scope, on: true, method: next, modelChanged: next !== prev }
+    }));
+  }
 });

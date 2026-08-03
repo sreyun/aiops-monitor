@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"aiops-monitor/shared"
 )
 
 // The VM read path must reassemble per-series export lines into per-timestamp
@@ -21,6 +23,68 @@ func TestVMExportParse(t *testing.T) {
 	}
 	if s[1].Timestamp != 105 || s[1].CPUPercent != 50 || s[1].MemPercent != 70 {
 		t.Errorf("sample@105 wrong: %+v", s[1])
+	}
+	// load1 only arrived at ts=100 — LOCF must carry it to ts=105 (was the
+	// "missing curve" bug when independent Prom series join by exact ts).
+	if s[1].Load1 != 1.5 {
+		t.Errorf("sample@105 Load1 should LOCF from 100, got %v", s[1].Load1)
+	}
+}
+
+// Staggered load1/5/15 series must all stay continuous after join — otherwise
+// host-detail「系统负载」flickers between 1/2/3 curves across time ranges.
+func TestVMExportParseLoadLOCF(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_load1","host":"h1"},"values":[1.1,1.2],"timestamps":[100000,110000]}
+{"metric":{"__name__":"aiops_load5","host":"h1"},"values":[2.5],"timestamps":[105000]}
+{"metric":{"__name__":"aiops_load15","host":"h1"},"values":[3.0,3.1],"timestamps":[100000,115000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 4 {
+		t.Fatalf("expected 4 timestamps, got %d", len(s))
+	}
+	// ts=100: load1=1.1, load15=3.0, load5 unset→0
+	if s[0].Load1 != 1.1 || s[0].Load15 != 3.0 || s[0].Load5 != 0 {
+		t.Errorf("ts=100 wrong: load1=%v load5=%v load15=%v", s[0].Load1, s[0].Load5, s[0].Load15)
+	}
+	// ts=105: load5 arrives; load1/15 LOCF
+	if s[1].Load1 != 1.1 || s[1].Load5 != 2.5 || s[1].Load15 != 3.0 {
+		t.Errorf("ts=105 LOCF wrong: load1=%v load5=%v load15=%v", s[1].Load1, s[1].Load5, s[1].Load15)
+	}
+	// ts=110: load1 updates; load5/15 LOCF
+	if s[2].Load1 != 1.2 || s[2].Load5 != 2.5 || s[2].Load15 != 3.0 {
+		t.Errorf("ts=110 LOCF wrong: load1=%v load5=%v load15=%v", s[2].Load1, s[2].Load5, s[2].Load15)
+	}
+	// ts=115: load15 updates; load1/5 LOCF
+	if s[3].Load1 != 1.2 || s[3].Load5 != 2.5 || s[3].Load15 != 3.1 {
+		t.Errorf("ts=115 LOCF wrong: load1=%v load5=%v load15=%v", s[3].Load1, s[3].Load5, s[3].Load15)
+	}
+	// Real zero must not be overwritten by LOCF once marked present.
+	nd2 := `{"metric":{"__name__":"aiops_load1","host":"h1"},"values":[1.5,0],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_load5","host":"h1"},"values":[2.0],"timestamps":[100000]}`
+	s2 := parseVMExport(strings.NewReader(nd2))
+	if len(s2) != 2 || s2[1].Load1 != 0 || s2[1].Load5 != 2.0 {
+		t.Errorf("real zero Load1 must stick + Load5 LOCF: %+v", s2)
+	}
+}
+
+func TestAlignSamplesToStep(t *testing.T) {
+	in := []shared.Sample{
+		{Timestamp: 100, Metrics: shared.Metrics{Load1: 1, Load5: 2}},
+		{Timestamp: 108, Metrics: shared.Metrics{Load1: 1.5, Load5: 2.5}},
+	}
+	out := alignSamplesToStep(in, 100, 120, 5)
+	if len(out) < 4 {
+		t.Fatalf("expected stepped grid, got %d: %+v", len(out), out)
+	}
+	// t=100 → load1=1; t=105 still LOCF from 100; t=110 from 108
+	by := map[int64]shared.Sample{}
+	for _, s := range out {
+		by[s.Timestamp] = s
+	}
+	if by[100].Load1 != 1 || by[105].Load1 != 1 {
+		t.Errorf("LOCF before update: %+v", by)
+	}
+	if by[110].Load1 != 1.5 || by[110].Load5 != 2.5 {
+		t.Errorf("after update: %+v", by[110])
 	}
 }
 
@@ -48,8 +112,16 @@ func TestVMExportParseGPU(t *testing.T) {
 	if s[0].GPUs[0].Name != "GPU0" || s[0].GPUs[1].Name != "GPU1" {
 		t.Errorf("sample@100 GPU 应按 Name 排序：%+v", s[0].GPUs)
 	}
-	if len(s[1].GPUs) != 1 || s[1].GPUs[0].Name != "GPU0" || s[1].GPUs[0].UtilPercent != 40 { // ts=105：仅 GPU0
-		t.Errorf("sample@105 GPU 重建错误：%+v", s[1].GPUs)
+	// ts=105：GPU0 更新；GPU1 由 hold-forward 保留（避免多卡曲线闪烁消失）
+	if len(s[1].GPUs) != 2 {
+		t.Fatalf("sample@105 应 hold-forward 2 块 GPU，实际 %d：%+v", len(s[1].GPUs), s[1].GPUs)
+	}
+	by105 := map[string]float64{}
+	for _, g := range s[1].GPUs {
+		by105[g.Name] = g.UtilPercent
+	}
+	if by105["GPU0"] != 40 || by105["GPU1"] != 55 {
+		t.Errorf("sample@105 GPU hold-forward 错误：%+v", s[1].GPUs)
 	}
 }
 
@@ -88,8 +160,12 @@ func TestVMExportParseDisks(t *testing.T) {
 	if s[0].Disks[0].Percent != 60 || s[0].Disks[0].Used != 600 || s[0].Disks[0].Total != 1000 {
 		t.Errorf("C: 明细（percent/used/total）错误：%+v", s[0].Disks[0])
 	}
-	if len(s[1].Disks) != 1 || s[1].Disks[0].Path != "C:" || s[1].Disks[0].Percent != 62 {
+	// ts=105：C: 更新；D: hold-forward 保留
+	if len(s[1].Disks) != 2 || s[1].Disks[0].Path != "C:" || s[1].Disks[0].Percent != 62 {
 		t.Errorf("sample@105 C: 错误：%+v", s[1].Disks)
+	}
+	if s[1].Disks[1].Path != "D:" || s[1].Disks[1].Percent != 30 {
+		t.Errorf("sample@105 D: 应 hold-forward：%+v", s[1].Disks)
 	}
 }
 
@@ -109,6 +185,21 @@ func TestVMExportParseGPUFull(t *testing.T) {
 	g := s[0].GPUs[0]
 	if g.Name != "GPU0" || g.UtilPercent != 30 || g.Temp != 65 || g.MemUsed != 2000 || g.MemFree != 6000 || g.MemTotal != 8000 || g.MemPercent != 25 {
 		t.Errorf("GPU 多指标重建错误：%+v", g)
+	}
+}
+
+// Partial GPU field updates must not clobber other fields via whole-struct overwrite.
+func TestVMExportParseGPUFieldHold(t *testing.T) {
+	nd := `{"metric":{"__name__":"aiops_gpu_util_percent","host":"h1","gpu":"GPU0"},"values":[30,40],"timestamps":[100000,105000]}
+{"metric":{"__name__":"aiops_gpu_temp_c","host":"h1","gpu":"GPU0"},"values":[65],"timestamps":[100000]}
+{"metric":{"__name__":"aiops_gpu_mem_percent","host":"h1","gpu":"GPU0"},"values":[25],"timestamps":[100000]}`
+	s := parseVMExport(strings.NewReader(nd))
+	if len(s) != 2 || len(s[1].GPUs) != 1 {
+		t.Fatalf("samples=%d gpus=%v", len(s), s)
+	}
+	g := s[1].GPUs[0]
+	if g.UtilPercent != 40 || g.Temp != 65 || g.MemPercent != 25 {
+		t.Errorf("ts=105 应更新 util=40 并 hold temp/mem：%+v", g)
 	}
 }
 
@@ -137,8 +228,12 @@ func TestVMExportParseConns(t *testing.T) {
 	if get(0, "tcp", "ESTABLISHED") != 12 || get(0, "tcp", "TIME_WAIT") != 3 || get(0, "udp", "") != 7 {
 		t.Errorf("sample@100 连接计数错误：%+v", s[0].Conns)
 	}
-	if len(s[1].Conns) != 1 || get(1, "tcp", "ESTABLISHED") != 15 { // ts=105 仅 ESTABLISHED
+	// ts=105：ESTABLISHED 更新；TIME_WAIT / udp hold-forward 保留
+	if len(s[1].Conns) != 3 || get(1, "tcp", "ESTABLISHED") != 15 {
 		t.Errorf("sample@105 连接计数错误：%+v", s[1].Conns)
+	}
+	if get(1, "tcp", "TIME_WAIT") != 3 || get(1, "udp", "") != 7 {
+		t.Errorf("sample@105 连接应 hold-forward：%+v", s[1].Conns)
 	}
 }
 
