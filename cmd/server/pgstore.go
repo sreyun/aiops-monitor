@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"aiops-monitor/shared"
+
 	_ "github.com/lib/pq"
 )
 
@@ -47,10 +48,10 @@ func pgFromEnv() *pgStore {
 // ============================================================================
 
 type pgStore struct {
-	db        *sql.DB
-	flowJobs  chan flowJob // NetFlow 明细异步入库队列（解耦 agent POST 与 PG 写入，防连接池饿死）
-	flowSpill chan flowJob // 二级有界重试缓冲
-	flowDrop  atomic.Int64
+	db         *sql.DB
+	flowJobs   chan flowJob // NetFlow 明细异步入库队列（解耦 agent POST 与 PG 写入，防连接池饿死）
+	flowSpill  chan flowJob // 二级有界重试缓冲
+	flowDrop   atomic.Int64
 	flowSpillN atomic.Int64
 }
 
@@ -123,11 +124,12 @@ func openPGStore(dsn string) (*pgStore, error) {
 		return nil, sql.ErrConnDone
 	}
 	ps := &pgStore{db: db, flowJobs: make(chan flowJob, 512), flowSpill: make(chan flowJob, 256)}
+	// 先创建分区表（ai_call_events_p 等），再运行版本迁移（v9+ 依赖这些表）
+	ps.migrateDualTrackPartitions()
 	if err := ps.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
-	ps.migrateDualTrackPartitions()
 	ps.hydrateAuditChainTip()
 	ps.ensureAIExperimentsTable()
 	// 2 个后台工作协程串行化 Flow 明细写入：HTTP 摄入只入队即返回，写库不再占住请求连接。
@@ -1297,14 +1299,14 @@ func (p *pgStore) insertMemoryEmbeddingScoped(kind, source, content string, emb 
 }
 
 type memoryHit struct {
-	ID         int64   `json:"id"`
-	Kind       string  `json:"kind"`
-	Source     string  `json:"source"`
-	Content    string  `json:"content"`
-	Distance   float64 `json:"distance"`
-	ServiceID  string  `json:"service_id,omitempty"`
-	Category   string  `json:"category,omitempty"`
-	Verified   bool    `json:"verified,omitempty"`
+	ID        int64   `json:"id"`
+	Kind      string  `json:"kind"`
+	Source    string  `json:"source"`
+	Content   string  `json:"content"`
+	Distance  float64 `json:"distance"`
+	ServiceID string  `json:"service_id,omitempty"`
+	Category  string  `json:"category,omitempty"`
+	Verified  bool    `json:"verified,omitempty"`
 }
 
 // searchMemory 按余弦距离取最相近的 N 条 AI 记忆（RAG 检索，跨对话/文件/URL/历史）。
@@ -1953,16 +1955,16 @@ func (p *pgStore) skillCount() int {
 
 // memoryBrowseItem 记忆浏览器列表项（不含 embedding）。
 type memoryBrowseItem struct {
-	ID         int64   `json:"id"`
-	Kind       string  `json:"kind"`
-	Source     string  `json:"source"`
-	Content    string  `json:"content"`
-	CreatedAt  int64   `json:"created_at"`
-	LastHitAt  int64   `json:"last_hit_at"`
-	Priority   float64 `json:"priority"`
-	ServiceID  string  `json:"service_id,omitempty"`
-	Category   string  `json:"category,omitempty"`
-	Verified   bool    `json:"verified"`
+	ID        int64   `json:"id"`
+	Kind      string  `json:"kind"`
+	Source    string  `json:"source"`
+	Content   string  `json:"content"`
+	CreatedAt int64   `json:"created_at"`
+	LastHitAt int64   `json:"last_hit_at"`
+	Priority  float64 `json:"priority"`
+	ServiceID string  `json:"service_id,omitempty"`
+	Category  string  `json:"category,omitempty"`
+	Verified  bool    `json:"verified"`
 }
 
 // listMemories 按时间倒序列出记忆，可选 kind / verified 过滤。limit 默认 50、上限 200。
@@ -2855,11 +2857,11 @@ func (p *pgStore) scanContainerRow(hostID, hostName, runtime string, snapshot js
 		containers = []any{}
 	}
 	return map[string]any{
-		"host_id":          hostID,
-		"host_name":        hostName,
-		"runtime":          runtime,
-		"container_count":  count,
-		"containers":       containers,
+		"host_id":         hostID,
+		"host_name":       hostName,
+		"runtime":         runtime,
+		"container_count": count,
+		"containers":      containers,
 		// Unix 秒：与主机指标等 API 一致；避免 time.Time 默认 RFC3339 字符串导致客户端 Long 解析失败。
 		"updated_at": updatedAt.Unix(),
 	}

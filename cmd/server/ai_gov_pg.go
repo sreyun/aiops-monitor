@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"strings"
 	"time"
 )
@@ -31,38 +33,37 @@ ON CONFLICT (id) DO UPDATE SET used=EXCLUDED.used, used_at=EXCLUDED.used_at`,
 		a.ID, a.Tool, a.ArgsHash, a.Actor, a.CreatedAt, a.ExpiresAt, a.Used, a.UsedAt)
 }
 
-func (p *pgStore) consumeWriteApprovalPG(id, tool, argsHash string) bool {
+func (p *pgStore) consumeWriteApprovalPG(ctx context.Context, id, tool, argsHash string) bool {
 	if p == nil || p.db == nil || id == "" {
 		return false
 	}
 	now := time.Now().Unix()
-	tx, err := p.db.Begin()
-	if err != nil {
-		return false
-	}
-	defer tx.Rollback()
-	var a writeApproval
-	err = tx.QueryRow(`
+	consumed := false
+	err := p.withPgTx(ctx, func(tx *sql.Tx) error {
+		var a writeApproval
+		err := tx.QueryRowContext(ctx, `
 SELECT id, tool, args_hash, actor, created_at, expires_at, used FROM ai_write_approvals WHERE id=$1 FOR UPDATE`, id).
-		Scan(&a.ID, &a.Tool, &a.ArgsHash, &a.Actor, &a.CreatedAt, &a.ExpiresAt, &a.Used)
-	if err != nil || a.Used {
-		return false
-	}
-	if a.ExpiresAt > 0 && now > a.ExpiresAt {
-		_, _ = tx.Exec(`DELETE FROM ai_write_approvals WHERE id=$1`, id)
-		_ = tx.Commit()
-		return false
-	}
-	if a.Tool != "" && tool != "" && !strings.EqualFold(a.Tool, tool) {
-		return false
-	}
-	if strings.TrimSpace(a.ArgsHash) == "" || strings.TrimSpace(argsHash) == "" || a.ArgsHash != argsHash {
-		return false
-	}
-	if _, err := tx.Exec(`UPDATE ai_write_approvals SET used=TRUE, used_at=$2 WHERE id=$1`, id, now); err != nil {
-		return false
-	}
-	return tx.Commit() == nil
+			Scan(&a.ID, &a.Tool, &a.ArgsHash, &a.Actor, &a.CreatedAt, &a.ExpiresAt, &a.Used)
+		if err != nil || a.Used {
+			return nil
+		}
+		if a.ExpiresAt > 0 && now > a.ExpiresAt {
+			_, _ = tx.ExecContext(ctx, `DELETE FROM ai_write_approvals WHERE id=$1`, id)
+			return nil
+		}
+		if a.Tool != "" && tool != "" && !strings.EqualFold(a.Tool, tool) {
+			return nil
+		}
+		if strings.TrimSpace(a.ArgsHash) == "" || strings.TrimSpace(argsHash) == "" || a.ArgsHash != argsHash {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE ai_write_approvals SET used=TRUE, used_at=$2 WHERE id=$1`, id, now); err != nil {
+			return err
+		}
+		consumed = true
+		return nil
+	})
+	return err == nil && consumed
 }
 
 func (p *pgStore) insertAIToolAudit(e aiToolAuditEntry) {

@@ -447,6 +447,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/backup-config", s.handleSetBackupCfg)
 	mux.HandleFunc("GET /api/v1/admin/cmd-policy", s.handleGetCmdPolicy)
 	mux.HandleFunc("POST /api/v1/admin/cmd-policy", s.handleSetCmdPolicy)
+	mux.HandleFunc("GET /api/v1/admin/ai/billing-reconcile", s.handleAIBillingReconcile)
+	mux.HandleFunc("GET /api/v1/admin/ai/prompts", s.handleAIPrompts)
 	mux.HandleFunc("POST /api/v1/tickets/{id}", s.handleUpdateTicket)
 	mux.HandleFunc("POST /api/v1/tickets/{id}/comment", s.handleCommentTicket)
 	mux.HandleFunc("DELETE /api/v1/tickets/{id}", s.handleDeleteTicket)

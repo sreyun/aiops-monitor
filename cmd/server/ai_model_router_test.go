@@ -61,3 +61,47 @@ func TestEstimateQueryCostAndGuardrail(t *testing.T) {
 		t.Fatal("no guardrail should allow")
 	}
 }
+
+func TestInferRouteReason(t *testing.T) {
+	cfg := AIConfig{
+		Model:          "gpt-4o",
+		CheapModel:     "gpt-4o-mini",
+		TaskModelsJSON: `{"promql":"qwen-turbo"}`,
+	}
+	cases := []struct {
+		task, model, want string
+	}{
+		// TaskModelsJSON 优先
+		{"promql", "qwen-turbo", routeReasonTaskModels},
+		// Cheap task 走 cheap model
+		{"summarize", "gpt-4o-mini", routeReasonCheapModel},
+		// 主模型
+		{"diagnose", "gpt-4o", routeReasonPrimary},
+		// 不在任何路由选择 → fallback
+		{"diagnose", "claude-sonnet", routeReasonFallback},
+		// 空模型 → unknown
+		{"diagnose", "", routeReasonUnknown},
+	}
+	for _, c := range cases {
+		if got := inferRouteReason(cfg, c.task, c.model); got != c.want {
+			t.Errorf("inferRouteReason(%q,%q) = %q, want %q", c.task, c.model, got, c.want)
+		}
+	}
+}
+
+// TestInferRouteReasonMatchesRoute：推断结果必须与 resolveModelForTask 的实际路由一致
+// （对非 fallback 的 usedModel），保证账本里的 reason 反映真实路由。
+func TestInferRouteReasonMatchesRoute(t *testing.T) {
+	cfg := AIConfig{
+		Model:          "gpt-4o",
+		CheapModel:     "gpt-4o-mini",
+		TaskModelsJSON: `{"promql":"qwen-turbo","summarize":"qwen-turbo"}`,
+	}
+	for _, task := range []string{"promql", "summarize", "chart_analysis", "diagnose", "translate"} {
+		routed, _ := resolveModelForTask(cfg, task)
+		got := inferRouteReason(cfg, task, routed)
+		if got == routeReasonFallback || got == routeReasonUnknown {
+			t.Errorf("task %q routed to %q but reason=%q (should be task_models/cheap/primary)", task, routed, got)
+		}
+	}
+}

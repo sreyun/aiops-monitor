@@ -92,6 +92,16 @@ type aiCallStat struct {
 	PromptTokens     int     `json:"prompt_tokens,omitempty"`     // Provider usage（若有）
 	CompletionTokens int     `json:"completion_tokens,omitempty"` // Provider usage（若有）
 	CostEstimate     float64 `json:"cost_estimate,omitempty"`     // 按配置单价估算
+	// UsageSource 标记 token 来源：exact=Provider usage 捕获，estimated=字符粗估。
+	// 计费只认 exact；estimated 仅供估算口径。
+	UsageSource string `json:"usage_source,omitempty"`
+	// PromptVersion 是本次调用使用的系统提示词模板版本指纹（见 prompt_render.go）。
+	// 用于复盘「哪个提示词版本产出了这个回答/成本」。
+	PromptVersion string `json:"prompt_version,omitempty"`
+	// RouteReason 是本次调用的模型路由决策原因：task_models | cheap_model | primary | fallback。
+	// 由 recordAICallActor 在落库时按 (task, usedModel) 推断（见 inferRouteReason），
+	// 使「这次为什么选这个模型」在账本中可审计——智能路由决策可追溯的基础。
+	RouteReason string `json:"route_reason,omitempty"`
 }
 
 type aiTaskAgg struct {
@@ -251,21 +261,25 @@ func (h *aiStatsHub) snapshot() map[string]any {
 }
 
 // recordAICall 统一观测入口（assist / chat / diagnose 等均可调用）。
-func (s *Server) recordAICall(task, model string, latencyMs int64, ok bool, errStr string, memHits, skillHits int, reply string) {
-	s.recordAICallActor(task, model, "", latencyMs, ok, errStr, memHits, skillHits, reply)
+// ctx 携带 usage 槽位 id（见 withAIUsageSlot），使本调用能读到 LLM 调用写入的
+// 精确 token 而非仅字符粗估。无槽位时安全回退到全局估算。
+func (s *Server) recordAICall(ctx context.Context, task, model string, latencyMs int64, ok bool, errStr string, memHits, skillHits int, reply string) {
+	s.recordAICallActor(ctx, task, model, "", latencyMs, ok, errStr, memHits, skillHits, reply)
 }
 
 // recordAICallActor 同上，附带操作者（用于成本/用户分析）。
-func (s *Server) recordAICallActor(task, model, actor string, latencyMs int64, ok bool, errStr string, memHits, skillHits int, reply string) {
+func (s *Server) recordAICallActor(ctx context.Context, task, model, actor string, latencyMs int64, ok bool, errStr string, memHits, skillHits int, reply string) {
 	if s == nil || s.aiStats == nil {
 		return
 	}
 	approx := estimateTokens(reply)
 	promptTok, completionTok := 0, approx
-	if p, c, got := takeCapturedAIUsage(); got {
+	usageSource := "estimated"
+	if p, c, got := takeCapturedAIUsageCtx(ctx); got {
 		promptTok, completionTok = p, c
 		if promptTok+completionTok > 0 {
 			approx = promptTok + completionTok
+			usageSource = "exact"
 		}
 	}
 	cfg := AIConfig{}
@@ -279,6 +293,9 @@ func (s *Server) recordAICallActor(task, model, actor string, latencyMs int64, o
 		ReplyChars: len([]rune(reply)), ApproxTokens: approx,
 		PromptTokens: promptTok, CompletionTokens: completionTok,
 		CostEstimate: estimateAICost(cfg, promptTok, completionTok, approx),
+		UsageSource:  usageSource,
+		PromptVersion: promptVersionFor("assist-" + strings.TrimPrefix(task, "assist:")),
+		RouteReason:   inferRouteReason(cfg, task, model),
 	}
 	s.aiStats.record(st)
 	if s.pg != nil {
@@ -405,7 +422,7 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 			if m == cfg.Model {
 				continue
 			}
-			s.recordAICallActor(task+":moa", m, actor, 0, true, "", 0, 0, "")
+			s.recordAICallActor(ctx, task+":moa", m, actor, 0, true, "", 0, 0, "")
 		}
 	} else {
 		reply, usedModel, err = s.streamChatWithFallback(ctx, w, cfg, msgs, nil, false, opts)
@@ -429,7 +446,7 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 		vStart := time.Now()
 		vtxt := streamSelfVerify(ctx, w, cfg, safeCtx, reply)
 		llmSelfVerify = strings.TrimSpace(vtxt) != ""
-		s.recordAICallActor(task+":verify", cfg.Model, actor, time.Since(vStart).Milliseconds(), true, "", 0, 0, vtxt)
+		s.recordAICallActor(ctx, task+":verify", cfg.Model, actor, time.Since(vStart).Milliseconds(), true, "", 0, 0, vtxt)
 		if llmSelfVerify {
 			reply = reply + "\n\n" + vtxt
 		}
@@ -445,7 +462,7 @@ func (s *Server) streamOrchestratedAssist(ctx context.Context, w http.ResponseWr
 	if usedModel == "" {
 		usedModel = cfg.Model
 	}
-	s.recordAICallActor(task, usedModel, actor, latency, err == nil, errStr, memHits, skillHits, reply)
+	s.recordAICallActor(ctx, task, usedModel, actor, latency, err == nil, errStr, memHits, skillHits, reply)
 
 	assistID := ""
 	var verify *assistVerifyResult

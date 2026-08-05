@@ -1,0 +1,11 @@
+{
+  "id": "postgres-disk-full",
+  "task": "diagnose",
+  "severity": "critical",
+  "input": "主机 pg-01 告警：数据盘使用率 98%，PostgreSQL 无法写入，WAL 目录增长迅速。应用报 'could not write to file No space left on device'。",
+  "ground_truth_root_cause": ["磁盘满", "WAL", "空间不足"],
+  "expected_actions": ["清理磁盘空间", "检查 WAL 归档是否正常", "删除旧归档或扩容", "检查长事务导致 WAL 膨胀"],
+  "evals": [
+    {"type": "keyword", "keywords": ["磁盘满", "空间不足", "no space left", "WAL"], "min_hit": 2}
+  ]
+}

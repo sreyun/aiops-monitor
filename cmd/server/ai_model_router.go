@@ -123,6 +123,41 @@ func modelPriceFromJSON(raw, model string) *ModelPrice {
 	return nil
 }
 
+// routeReason values recorded in ai_call_events.route_reason.
+const (
+	routeReasonTaskModels = "task_models"
+	routeReasonCheapModel = "cheap_model"
+	routeReasonPrimary    = "primary"
+	routeReasonFallback   = "fallback"
+	routeReasonUnknown    = "unknown"
+)
+
+// inferRouteReason 在落账本时推断一次 AI 调用「为什么用了 usedModel」。
+// 判定顺序与 resolveModelForTask 完全一致（TaskModelsJSON → CheapModel → primary），
+// 最后兜底 fallback：若 usedModel 不属于任何路由选择，则说明是故障转移换上的模型。
+// 之所以在 recordAICallActor 推断而非在决策处透传，是因为 fallback 发生在更深的
+// 调用链（aiChatVWithFallback），只有最终 usedModel 才能准确反映实际执行。
+func inferRouteReason(cfg AIConfig, task, usedModel string) string {
+	usedModel = strings.TrimSpace(usedModel)
+	if usedModel == "" {
+		return routeReasonUnknown
+	}
+	if m := taskModelFromJSON(cfg.TaskModelsJSON, task); m != "" {
+		if strings.EqualFold(strings.TrimSpace(m), usedModel) {
+			return routeReasonTaskModels
+		}
+	}
+	if cheap := strings.TrimSpace(cfg.CheapModel); cheap != "" && isCheapAITask(task) {
+		if strings.EqualFold(cheap, usedModel) {
+			return routeReasonCheapModel
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Model), usedModel) {
+		return routeReasonPrimary
+	}
+	return routeReasonFallback
+}
+
 // EstimateQueryCost 按输入/输出 token 估算一次调用的成本（元）。
 func (d ModelRouteDecision) EstimateQueryCost(inTokens, outTokens int) float64 {
 	return (float64(inTokens)/1e6)*d.InputPer1M + (float64(outTokens)/1e6)*d.OutputPer1M

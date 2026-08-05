@@ -1,0 +1,11 @@
+{
+  "id": "mysql-connection-pool-exhaustion",
+  "task": "diagnose",
+  "severity": "high",
+  "input": "主机 db-01 突发告警：MySQL 连接数飙升，应用大量报 'Too many connections'，CPU 使用率 85%，磁盘 IO 正常。用户反馈线上商城下单超时。",
+  "ground_truth_root_cause": ["连接池", "max_connections", "连接数"],
+  "expected_actions": ["检查 max_connections 配置", "查看活跃连接与 sleep 连接占比", "重启或扩容连接池", "检查慢查询"],
+  "evals": [
+    {"type": "keyword", "keywords": ["连接池", "max_connections", "too many connections"], "min_hit": 2}
+  ]
+}

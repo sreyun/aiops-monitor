@@ -1,0 +1,11 @@
+{
+  "id": "k8s-pod-crashloop",
+  "task": "diagnose",
+  "severity": "high",
+  "input": "K8s 集群 web 命名空间下订单服务 Pod 持续 CrashLoopBackOff，重启 20+ 次。日志末尾显示 OOMKilled，内存 limit 512Mi。",
+  "ground_truth_root_cause": ["OOM", "内存限制", "CrashLoop"],
+  "expected_actions": ["查看 Pod 日志确认 OOM", "检查内存 limit 是否过小", "调整 limit 或定位内存泄漏", "检查是否有大对象/连接泄漏"],
+  "evals": [
+    {"type": "keyword", "keywords": ["OOM", "内存限制", "memory limit", "CrashLoop"], "min_hit": 2}
+  ]
+}

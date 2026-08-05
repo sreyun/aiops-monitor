@@ -84,7 +84,7 @@ AIOps 把高频路径收敛为 **一个可自托管的平台**：
 - 主机/Web 安全扫描、FIM、内容审计（合规可控）。
 - Web 控制台与 **Android / HarmonyOS** 客户端独立分发。
 
-当前版本 **[v0.19.66](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.66)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+当前版本 **[v0.19.67](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.67)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 

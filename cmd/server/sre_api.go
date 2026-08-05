@@ -2083,7 +2083,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errStr = err.Error()
 	}
-	s.recordAICallActor("chat", cfg.Model, s.actorName(r), time.Since(start).Milliseconds(), err == nil, errStr, memHits, skillHits, reply)
+	s.recordAICallActor(r.Context(), "chat", cfg.Model, s.actorName(r), time.Since(start).Milliseconds(), err == nil, errStr, memHits, skillHits, reply)
 	// 未经人工验证的模型输出默认不进入跨会话 RAG；管理员显式接受污染风险后才可开启。
 	if s.shouldRememberUnverifiedAIOutput() && strings.TrimSpace(reply) != "" {
 		go s.rememberAI("chat", "ai_chat", "【用户】\n"+req.Message+"\n\n【AI】\n"+reply)
@@ -2197,6 +2197,12 @@ func buildAssistSystemPrompt(task, ctxText string) string {
 	ctxBlock := ""
 	if strings.TrimSpace(ctxText) != "" {
 		ctxBlock = "\n\n【上下文】\n" + sanitizeAssistContext(ctxText)
+	}
+	// Prompt 外置：若存在命名模板（内嵌 prompts/assist-<task>.md 或部署覆盖目录），
+	// 优先渲染模板；模板缺失才回退到下面的内联字符串。这样私有化客户可改提示词
+	// 而无需重编译，且改模板不破坏既有行为。
+	if tpl, _, err := render("assist-"+task, promptVars{"context_block": ctxBlock}); err == nil {
+		return tpl
 	}
 	switch task {
 	case "logql":
@@ -2791,7 +2797,7 @@ func (s *Server) handleDiagnoseIncident(w http.ResponseWriter, r *http.Request) 
 			full += "\n\n🔎 自我校验：\n" + verify
 		}
 		diagLat := time.Since(diagStart).Milliseconds()
-		s.recordAICallActor("diagnose", usedModel, s.actorName(r), diagLat,
+		s.recordAICallActor(r.Context(), "diagnose", usedModel, s.actorName(r), diagLat,
 			strings.TrimSpace(diag) != "", "", memHits, skillHits, full)
 		if diag != "" {
 			runID := newOpaqueID("run_")
@@ -3972,7 +3978,7 @@ func (s *Server) handleSreyunChat(w http.ResponseWriter, r *http.Request) {
 	if loopMeta.FallbackModel != "" {
 		usedModel = loopMeta.FallbackModel
 	}
-	s.recordAICallActor("sreyun", usedModel, s.actorName(r), lat,
+	s.recordAICallActor(r.Context(), "sreyun", usedModel, s.actorName(r), lat,
 		chatErr == nil && strings.TrimSpace(reply) != "", errStr, 0, 0, reply)
 	runID := newOpaqueID("run_")
 	reqID := requestIDFrom(r)

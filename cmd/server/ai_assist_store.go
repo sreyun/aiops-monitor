@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -182,7 +183,7 @@ func (h *aiGovHub) consumeWriteApproval(id, tool, argsHash string) bool {
 	h.mu.Unlock()
 	// Memory miss (e.g. after restart): try durable PG token.
 	if pg != nil {
-		return pg.consumeWriteApprovalPG(id, tool, argsHash)
+		return pg.consumeWriteApprovalPG(context.Background(), id, tool, argsHash)
 	}
 	return false
 }

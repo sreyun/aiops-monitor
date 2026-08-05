@@ -1,0 +1,11 @@
+{
+  "id": "network-switch-latency",
+  "task": "diagnose",
+  "severity": "medium",
+  "input": "多个主机同时告警：网络延迟从 2ms 飙升至 120ms，丢包率 3%。涉及同一交换机下联的所有主机，跨交换机主机正常。",
+  "ground_truth_root_cause": ["交换机", "广播风暴", "环路"],
+  "expected_actions": ["检查交换机端口流量", "检查交换机 CPU/丢包", "检查环路或广播风暴", "对比跨交换机路径"],
+  "evals": [
+    {"type": "keyword", "keywords": ["交换机", "广播风暴", "环路"], "min_hit": 1}
+  ]
+}

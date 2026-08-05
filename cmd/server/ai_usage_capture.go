@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 )
@@ -65,10 +66,6 @@ func captureAIUsageCtx(ctx context.Context, promptTok, completionTok int) {
 	aiUsageMu.Unlock()
 }
 
-func takeCapturedAIUsage() (promptTok, completionTok int, ok bool) {
-	return takeCapturedAIUsageCtx(context.Background())
-}
-
 func takeCapturedAIUsageCtx(ctx context.Context) (promptTok, completionTok int, ok bool) {
 	if ctx != nil {
 		if id, ok2 := ctx.Value(aiUsageCtxKey{}).(uint64); ok2 {
@@ -110,11 +107,12 @@ func captureAIUsageFromJSONCtx(ctx context.Context, raw []byte) {
 }
 
 type aiModelAgg struct {
-	Count  int     `json:"count"`
-	Fail   int     `json:"fail"`
-	Tokens int64   `json:"tokens"`
-	Cost   float64 `json:"cost"`
-	AvgMs  int64   `json:"avg_ms"`
+	Count        int     `json:"count"`
+	Fail         int     `json:"fail"`
+	Tokens       int64   `json:"tokens"`  // 精确 token（provider usage 捕获）
+	ApproxTokens int64   `json:"approx_tokens"` // 估算 token（字符粗估）
+	Cost         float64 `json:"cost"`
+	AvgMs        int64   `json:"avg_ms"`
 }
 
 func (p *pgStore) aiCallByModelFromPG(sinceTs int64) map[string]aiModelAgg {
@@ -126,7 +124,8 @@ func (p *pgStore) aiCallByModelFromPG(sinceTs int64) map[string]aiModelAgg {
 SELECT COALESCE(NULLIF(model,''),'(unknown)'),
        COUNT(*),
        COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
-       COALESCE(SUM(GREATEST(approx_tokens, prompt_tokens+completion_tokens)),0),
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN prompt_tokens+completion_tokens ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN approx_tokens ELSE 0 END),0),
        COALESCE(SUM(cost_estimate),0),
        COALESCE(SUM(latency_ms),0)
 FROM ai_call_events_p WHERE ts >= $1
@@ -138,16 +137,16 @@ GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 40`, sinceTs)
 	for rows.Next() {
 		var model string
 		var cnt, fl int
-		var tokens, latencySum int64
+		var tokens, approxTokens, latencySum int64
 		var costF float64
-		if rows.Scan(&model, &cnt, &fl, &tokens, &costF, &latencySum) != nil {
+		if rows.Scan(&model, &cnt, &fl, &tokens, &approxTokens, &costF, &latencySum) != nil {
 			continue
 		}
 		avg := int64(0)
 		if cnt > 0 {
 			avg = latencySum / int64(cnt)
 		}
-		out[model] = aiModelAgg{Count: cnt, Fail: fl, Tokens: tokens, Cost: costF, AvgMs: avg}
+		out[model] = aiModelAgg{Count: cnt, Fail: fl, Tokens: tokens, ApproxTokens: approxTokens, Cost: costF, AvgMs: avg}
 	}
 	return out
 }
@@ -170,7 +169,8 @@ SELECT COALESCE(NULLIF(task,''),'(unknown)'),
        COUNT(*),
        COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
        COALESCE(SUM(cost_estimate),0),
-       COALESCE(SUM(GREATEST(approx_tokens, prompt_tokens+completion_tokens)),0),
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN prompt_tokens+completion_tokens ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN approx_tokens ELSE 0 END),0),
        COALESCE(SUM(latency_ms),0)
 FROM ai_call_events_p WHERE ts >= $1
 GROUP BY 1 ORDER BY SUM(cost_estimate) DESC NULLS LAST LIMIT 40`, sinceTs)
@@ -182,8 +182,8 @@ GROUP BY 1 ORDER BY SUM(cost_estimate) DESC NULLS LAST LIMIT 40`, sinceTs)
 		var task string
 		var cnt, fl int
 		var costF float64
-		var tokens, latSum int64
-		if rows.Scan(&task, &cnt, &fl, &costF, &tokens, &latSum) != nil {
+		var tokens, approxTokens, latSum int64
+		if rows.Scan(&task, &cnt, &fl, &costF, &tokens, &approxTokens, &latSum) != nil {
 			continue
 		}
 		avg := int64(0)
@@ -191,6 +191,47 @@ GROUP BY 1 ORDER BY SUM(cost_estimate) DESC NULLS LAST LIMIT 40`, sinceTs)
 			avg = latSum / int64(cnt)
 		}
 		out[task] = aiTaskCostAgg{Count: cnt, Fail: fl, Cost: costF, Tokens: tokens, AvgMs: avg}
+	}
+	return out
+}
+
+// aiRouteReasonAgg 按模型路由原因（task_models/cheap_model/primary/fallback）聚合调用与成本。
+// 这是「智能路由决策可审计」的核心视图：能看出多少调用走了 cheap、多少走了 fallback、
+// 各自花了多少钱——验证路由是否如配置所愿工作。
+type aiRouteReasonAgg struct {
+	Count int     `json:"count"`
+	Fail  int     `json:"fail"`
+	Cost  float64 `json:"cost"`
+	AvgMs int64   `json:"avg_ms"`
+}
+
+func (p *pgStore) aiCallByRouteReasonFromPG(sinceTs int64) map[string]aiRouteReasonAgg {
+	out := map[string]aiRouteReasonAgg{}
+	if p == nil || p.db == nil {
+		return out
+	}
+	rows, err := p.db.Query(`
+SELECT COALESCE(NULLIF(route_reason,''),'(none)'),
+       COUNT(*),
+       COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
+       COALESCE(SUM(cost_estimate),0),
+       COALESCE(AVG(latency_ms),0)::bigint
+FROM ai_call_events_p WHERE ts >= $1
+GROUP BY 1 ORDER BY COUNT(*) DESC`, sinceTs)
+	if err != nil {
+		slog.Warn("PG ?? AI route reason", "err", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r string
+		var cnt, fl int
+		var costF float64
+		var avg int64
+		if rows.Scan(&r, &cnt, &fl, &costF, &avg) != nil {
+			continue
+		}
+		out[r] = aiRouteReasonAgg{Count: cnt, Fail: fl, Cost: costF, AvgMs: avg}
 	}
 	return out
 }

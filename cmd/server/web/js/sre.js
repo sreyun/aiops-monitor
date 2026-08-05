@@ -3911,6 +3911,16 @@ async function loadAIStats(){
       return `<div style="margin:4px 0"><div class="mono" style="font-size:11px;display:flex;justify-content:space-between"><span>${esc(k)}</span><span>${(Number(t.cost)||0).toFixed(4)} ${esc(cur)} (${pct}%)</span></div>
         <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:#f97316"></div></div></div>`;
     }).join("");
+    // 模型路由原因（by_route_reason）：展示每次调用「为什么选这个模型」，验证路由是否如配置所愿。
+    const routeNames={task_models:"任务映射",cheap_model:"廉价模型",primary:"主模型",fallback:"故障转移",unknown:"未知",none:"未记录"};
+    const byRoute=j.by_route_reason||{};
+    const routeKeys=Object.keys(byRoute).sort((a,b)=>(byRoute[b].count||0)-(byRoute[a].count||0)).slice(0,6);
+    const routeRows=routeKeys.map(k=>{
+      const t=byRoute[k]||{};
+      const label=routeNames[k]||esc(k);
+      const pct=total?Math.round(((t.count||0)/total)*100):0;
+      return `<tr><td>${esc(label)}</td><td>${t.count||0} <span style="color:var(--muted)">(${pct}%)</span></td><td>${t.fail||0}</td><td>${t.avg_ms||0} ms</td><td>${(Number(t.cost)||0).toFixed(4)} ${esc(cur)}</td></tr>`;
+    }).join("");
     el.innerHTML=`<div class="ai-metric-grid">
       <div class="ai-metric"><div class="hint">调用次数</div><b>${total}</b></div>
       <div class="ai-metric"><div class="hint">失败率</div><b>${rate}%</b></div>
@@ -3926,6 +3936,7 @@ async function loadAIStats(){
     </div>
     ${auditCard}
     ${modelCostBars?`<div class="hint">模型成本占比（TCO）</div><div style="margin-bottom:10px">${modelCostBars}</div>`:""}
+    ${routeRows?`<div class="hint" title="每次调用为什么选这个模型：任务映射 / 廉价模型 / 主模型 / 故障转移">模型路由原因</div><table class="hv-mini-table" style="width:100%;margin-bottom:10px"><thead><tr><th>原因</th><th>次数</th><th>失败</th><th>均延迟</th><th>费用</th></tr></thead><tbody>${routeRows}</tbody></table>`:""}
     ${taskCostRows?`<div class="hint">任务成本 Top</div><table class="hv-mini-table" style="width:100%;margin-bottom:10px"><thead><tr><th>任务</th><th>次数</th><th>Token</th><th>费用</th></tr></thead><tbody>${taskCostRows}</tbody></table>`:""}
     <div class="chart-container ai-usage-chart" style="margin:4px 0 12px">
       <div class="hint" style="margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">

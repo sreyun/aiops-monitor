@@ -1,0 +1,11 @@
+{
+  "id": "nginx-5xx-spike",
+  "task": "diagnose",
+  "severity": "medium",
+  "input": "网关 nginx 告警：5xx 错误率从 0.1% 飙升至 8%，持续 10 分钟。上游 Java 服务 502/504 增多，后端线程池打满。",
+  "ground_truth_root_cause": ["后端", "线程池", "超时"],
+  "expected_actions": ["查看上游后端健康", "检查后端线程池与队列", "检查慢调用/长事务", "检查上游超时配置"],
+  "evals": [
+    {"type": "keyword", "keywords": ["后端", "线程池", "502", "504", "超时"], "min_hit": 2}
+  ]
+}

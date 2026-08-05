@@ -1,0 +1,11 @@
+{
+  "id": "disk-inode-exhaustion",
+  "task": "diagnose",
+  "severity": "medium",
+  "input": "主机 app-01 告警：磁盘空间使用率 40% 但无法创建新文件，提示 'No space left on device'。df 显示空间充足，df -i 显示 inode 使用率 100%。",
+  "ground_truth_root_cause": ["inode", "小文件"],
+  "expected_actions": ["检查 inode 使用率", "查找小文件过多的目录", "清理缓存/临时文件", "定位日志滚动异常"],
+  "evals": [
+    {"type": "keyword", "keywords": ["inode", "索引节点", "小文件"], "min_hit": 2}
+  ]
+}

@@ -686,12 +686,12 @@ func (s *Server) runAssistTaskSync(ctx context.Context, task, userMsg, contextTe
 	errStr := ""
 	if err != nil {
 		errStr = err.Error()
-		s.recordAICallActor(task, usedModel, actor, latency, false, errStr, memHits, skillHits, "")
+		s.recordAICallActor(callCtx, task, usedModel, actor, latency, false, errStr, memHits, skillHits, "")
 		return "", err
 	}
 	reply = strings.TrimSpace(reply)
 	reply, _ = sanitizeAssistActionReply(task, reply)
-	s.recordAICallActor(task, usedModel, actor, latency, true, "", memHits, skillHits, reply)
+	s.recordAICallActor(callCtx, task, usedModel, actor, latency, true, "", memHits, skillHits, reply)
 	_ = expID
 	_ = variant
 	return reply, nil

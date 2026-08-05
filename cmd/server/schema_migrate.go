@@ -71,6 +71,66 @@ CREATE INDEX IF NOT EXISTS backup_meta_created ON backup_meta(created_at DESC);
 		Name:    "partition_backfill_marker",
 		SQL:     `-- backfill of audit_log/events/ai_call_events into *_p is done in migrateDualTrackPartitions`,
 	},
+	{
+		Version: 6,
+		Name:    "optimistic_lock_version_ai_runs",
+		SQL:     `ALTER TABLE ai_runs ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;`,
+	},
+	{
+		Version: 7,
+		Name:    "optimistic_lock_version_incidents",
+		SQL:     `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;`,
+	},
+	{
+		Version: 8,
+		Name:    "hosts_updated_at",
+		SQL:     `ALTER TABLE hosts ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;`,
+	},
+	{
+		Version: 9,
+		Name:    "ai_call_events_usage_source",
+		SQL: `
+ALTER TABLE ai_call_events ADD COLUMN IF NOT EXISTS usage_source TEXT NOT NULL DEFAULT 'estimated';
+ALTER TABLE ai_call_events_p ADD COLUMN IF NOT EXISTS usage_source TEXT NOT NULL DEFAULT 'estimated';
+`,
+	},
+	{
+		Version: 10,
+		Name:    "ai_eval_runs",
+		SQL: `
+CREATE TABLE IF NOT EXISTS ai_eval_runs (
+	id              TEXT PRIMARY KEY,
+	ts              BIGINT NOT NULL,
+	model           TEXT NOT NULL DEFAULT '',
+	mode            TEXT NOT NULL DEFAULT '',   -- offline | online
+	eval_set_version TEXT NOT NULL DEFAULT '',
+	case_count      INT NOT NULL DEFAULT 0,
+	passed_count    INT NOT NULL DEFAULT 0,
+	pass_rate       DOUBLE PRECISION NOT NULL DEFAULT 0,
+	root_cause_hit_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+	action_accept_rate  DOUBLE PRECISION NOT NULL DEFAULT 0,
+	verify_agreement    DOUBLE PRECISION NOT NULL DEFAULT 0,
+	detail          JSONB
+);
+CREATE INDEX IF NOT EXISTS ai_eval_runs_ts ON ai_eval_runs(ts DESC);
+`,
+	},
+	{
+		Version: 11,
+		Name:    "ai_call_events_prompt_version",
+		SQL: `
+ALTER TABLE ai_call_events ADD COLUMN IF NOT EXISTS prompt_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE ai_call_events_p ADD COLUMN IF NOT EXISTS prompt_version TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		Version: 12,
+		Name:    "ai_call_events_route_reason",
+		SQL: `
+ALTER TABLE ai_call_events ADD COLUMN IF NOT EXISTS route_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE ai_call_events_p ADD COLUMN IF NOT EXISTS route_reason TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // runVersionedMigrations applies numbered schema steps after the bootstrap IF NOT EXISTS schema.

@@ -104,6 +104,9 @@ type AIConfig struct {
 	WriteToolsRequireApproval bool `json:"write_tools_require_approval,omitempty"`
 	// RedactSensitiveFields：对提示词/响应做轻量脱敏后再落审计或展示。
 	RedactSensitiveFields bool `json:"redact_sensitive_fields,omitempty"`
+	// PromptOverridesDir：部署级提示词覆盖目录。存在时同名 .md（如 assist-logql.md）
+	// 优先于内嵌模板，私有化客户可改提示词而无需重编译。空=仅用内嵌。
+	PromptOverridesDir string `json:"prompt_overrides_dir,omitempty"`
 	// ---- AI 语音（可选云端 STT/TTS；留空则客户端继续用系统/浏览器语音）----
 	// SpeechEndpoint：OpenAI 兼容音频根路径（如 https://api.openai.com/v1）；留空=复用主 Endpoint 的 /v1 根。
 	SpeechEndpoint string `json:"speech_endpoint,omitempty"`
@@ -673,6 +676,9 @@ func aiChatVStreamOpts(ctx context.Context, cfg AIConfig, messages []map[string]
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var slotID uint64
+	ctx, slotID = withAIUsageSlot(ctx)
+	defer endAIUsageSlot(slotID)
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		return "", nil, fmt.Errorf("AI Endpoint 或模型名未配置")
 	}
@@ -931,6 +937,12 @@ func streamChatInner(ctx context.Context, w http.ResponseWriter, cfg AIConfig, m
 }
 
 func streamChatInnerOpts(ctx context.Context, w http.ResponseWriter, cfg AIConfig, messages []map[string]string, images []chatImage, sendDone bool, opts aiCallOpts) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var slotID uint64
+	ctx, slotID = withAIUsageSlot(ctx)
+	defer endAIUsageSlot(slotID)
 	if cfg.Endpoint == "" || cfg.Model == "" {
 		fmt.Fprintf(w, "data: {\"error\":\"AI 未配置\"}\n\n")
 		return "", nil
@@ -1033,6 +1045,8 @@ func streamChatInnerOpts(ctx context.Context, w http.ResponseWriter, cfg AIConfi
 		}
 		// 分别提取正文增量与思维链增量：思维链走独立 {"reasoning":...} 帧，前端收进折叠区。
 		delta, reasoning := parseStreamDelta(data, prov)
+		// 捕获 SSE 携带的 provider usage（若网关下发了 usage 字段），写入当前 ctx 槽位。
+		captureAIUsageFromJSONCtx(ctx, []byte(data))
 		if reasoning != "" {
 			fmt.Fprintf(w, "data: {\"reasoning\":%s}\n\n", jsonString(reasoning))
 			if flusher != nil {
@@ -1114,6 +1128,13 @@ type streamDeltaChunk struct {
 			} `json:"message"`
 		} `json:"choices"`
 	} `json:"output"`
+	// Usage 由部分 OpenAI 兼容网关在 SSE 中携带（如 DeepSeek / 通义 / Qwen 等）。
+	// 捕获它以便写入精确 token 账本，避免纯字符粗估。
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 // parseStreamDelta 从单个 SSE chunk 提取「正文增量」与「思维链增量」。二者可同时为空，

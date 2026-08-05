@@ -770,6 +770,7 @@ func NewConfigStore(path string, pg *pgStore) (*ConfigStore, error) {
 		// Even when config is unchanged, publish the enroll token for compose agents.
 		cs.writeInstallTokenFile()
 	}
+	defaultPromptStore.SetOverrideDir(cs.cfg.AI.PromptOverridesDir)
 	return cs, nil
 }
 
@@ -1682,6 +1683,7 @@ func (cs *ConfigStore) SetAIConfig(a AIConfig) error {
 	a.SreyunTerminalEnabled = cs.cfg.AI.SreyunTerminalEnabled
 	cs.cfg.AI = a
 	cs.mu.Unlock()
+	defaultPromptStore.SetOverrideDir(a.PromptOverridesDir)
 	return cs.save()
 }
 

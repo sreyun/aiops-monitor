@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,6 +22,68 @@ func TestEstimateAICost(t *testing.T) {
 	}
 	if estimateAICost(AIConfig{}, 100, 100, 100) != 0 {
 		t.Fatal("zero prices should yield zero cost")
+	}
+}
+
+// TestAIUsageSlotConcurrency is the regression guard for billing attribution:
+// 50 concurrent AI calls, each binding a usage slot, must each read back their
+// OWN prompt/completion tokens — never another goroutine's. This is what
+// prevents cost cross-talk (串号) that would break per-user billing.
+func TestAIUsageSlotConcurrency(t *testing.T) {
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make(chan string, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			wantP, wantC := i*10+1, i*10+2
+
+			ctx, id := withAIUsageSlot(context.Background())
+			defer endAIUsageSlot(id)
+			captureAIUsageCtx(ctx, wantP, wantC)
+
+			gotP, gotC, ok := takeCapturedAIUsageCtx(ctx)
+			if !ok {
+				errs <- fmt.Sprintf("goroutine %d: no usage captured", i)
+				return
+			}
+			if gotP != wantP || gotC != wantC {
+				errs <- fmt.Sprintf("goroutine %d: cross-talk got p=%d c=%d want p=%d c=%d", i, gotP, gotC, wantP, wantC)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+}
+
+// TestAIUsageSlotConsumerMarksExact verifies that a captured slot yields
+// usage_source='exact' while a slot-less read falls back to estimated.
+func TestAIUsageSlotConsumerMarksExact(t *testing.T) {
+	s := &Server{aiStats: newAIStatsHub()}
+
+	// With a bound slot -> exact.
+	ctx, id := withAIUsageSlot(context.Background())
+	captureAIUsageCtx(ctx, 100, 50)
+	s.recordAICallActor(ctx, "chat", "m", "u", 10, true, "", 0, 0, "x")
+	endAIUsageSlot(id)
+	snap := s.aiStats.snapshot()
+	recent := snap["recent"].([]aiCallStat)
+	if len(recent) != 1 || recent[0].UsageSource != "exact" || recent[0].PromptTokens != 100 || recent[0].CompletionTokens != 50 {
+		t.Fatalf("expected exact usage, got %+v", recent[0])
+	}
+
+	// No slot -> estimated.
+	s2 := &Server{aiStats: newAIStatsHub()}
+	s2.recordAICallActor(context.Background(), "chat", "m", "u", 10, true, "", 0, 0, "hello world")
+	snap2 := s2.aiStats.snapshot()
+	recent2 := snap2["recent"].([]aiCallStat)
+	if len(recent2) != 1 || recent2[0].UsageSource != "estimated" {
+		t.Fatalf("expected estimated, got %+v", recent2[0])
 	}
 }
 

@@ -1,0 +1,7079 @@
+openapi: 3.1.0
+info:
+  title: AIOps API
+  version: 0.19.67
+  description: Generated from cmd/server/handlers.go — do not edit by hand. Run `go run ./cmd/server/genapi`.
+paths:
+  /api/user/terminal-password/set:
+    post:
+      operationId: s_handleTerminalPasswordSet
+      summary: "POST /api/user/terminal-password/set"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/user/terminal-password/status:
+    get:
+      operationId: s_handleTerminalPasswordStatus
+      summary: "GET /api/user/terminal-password/status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/user/terminal-password/verify:
+    post:
+      operationId: s_handleTerminalPasswordVerify
+      summary: "POST /api/user/terminal-password/verify"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/init:
+    post:
+      operationId: s_handleAccountInit
+      summary: "POST /api/v1/account/init"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/recover-send-code:
+    post:
+      operationId: s_handleRecoverSendCode
+      summary: "POST /api/v1/account/recover-send-code"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/recover-username:
+    post:
+      operationId: s_handleRecoverUsername
+      summary: "POST /api/v1/account/recover-username"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/recover-verify:
+    post:
+      operationId: s_handleRecoverVerify
+      summary: "POST /api/v1/account/recover-verify"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/recover-verify-mfa:
+    post:
+      operationId: s_handleRecoverVerifyMFA
+      summary: "POST /api/v1/account/recover-verify-mfa"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/reset-password:
+    post:
+      operationId: s_handleResetPassword
+      summary: "POST /api/v1/account/reset-password"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/account/send-reset-code:
+    post:
+      operationId: s_handleSendResetCode
+      summary: "POST /api/v1/account/send-reset-code"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/activity:
+    get:
+      operationId: s_handleActivity
+      summary: "GET /api/v1/activity"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/ai/billing-reconcile:
+    get:
+      operationId: s_handleAIBillingReconcile
+      summary: "GET /api/v1/admin/ai/billing-reconcile"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/ai/prompts:
+    get:
+      operationId: s_handleAIPrompts
+      summary: "GET /api/v1/admin/ai/prompts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/backup-config:
+    get:
+      operationId: s_handleGetBackupCfg
+      summary: "GET /api/v1/admin/backup-config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetBackupCfg
+      summary: "POST /api/v1/admin/backup-config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/backups:
+    get:
+      operationId: s_handleListBackups
+      summary: "GET /api/v1/admin/backups"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleCreateBackup
+      summary: "POST /api/v1/admin/backups"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/admin/backups/{id}/download":
+    get:
+      operationId: s_handleDownloadBackup
+      summary: "GET /api/v1/admin/backups/{id}/download"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/admin/backups/{id}/restore":
+    post:
+      operationId: s_handleRestoreBackup
+      summary: "POST /api/v1/admin/backups/{id}/restore"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/admin/cmd-policy:
+    get:
+      operationId: s_handleGetCmdPolicy
+      summary: "GET /api/v1/admin/cmd-policy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetCmdPolicy
+      summary: "POST /api/v1/admin/cmd-policy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/netflow/queue:
+    get:
+      operationId: s_handleNetflowQueueStats
+      summary: "GET /api/v1/admin/netflow/queue"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/pg/slow-queries:
+    get:
+      operationId: s_handlePGSlowQueries
+      summary: "GET /api/v1/admin/pg/slow-queries"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/retention:
+    get:
+      operationId: s_handleGetRetention
+      summary: "GET /api/v1/admin/retention"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetRetention
+      summary: "POST /api/v1/admin/retention"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/admin/status-page:
+    get:
+      operationId: s_handleGetStatusPageConfig
+      summary: "GET /api/v1/admin/status-page"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetStatusPageConfig
+      summary: "POST /api/v1/admin/status-page"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent-dist/manifest:
+    get:
+      operationId: s_handleAgentDistManifest
+      summary: "GET /api/v1/agent-dist/manifest"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/containers:
+    post:
+      operationId: s_handleAgentContainers
+      summary: "POST /api/v1/agent/containers"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/content-audit:
+    post:
+      operationId: s_handleAgentContentAudit
+      summary: "POST /api/v1/agent/content-audit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/desktop/rx:
+    get:
+      operationId: s_handleAgentDeskRx
+      summary: "GET /api/v1/agent/desktop/rx"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/desktop/tx:
+    post:
+      operationId: s_handleAgentDeskTx
+      summary: "POST /api/v1/agent/desktop/tx"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/desktop/wait:
+    get:
+      operationId: s_handleAgentDeskWait
+      summary: "GET /api/v1/agent/desktop/wait"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/dnsmap:
+    post:
+      operationId: s_handleAgentDNSMap
+      summary: "POST /api/v1/agent/dnsmap"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/forward/rx:
+    get:
+      operationId: s_handleAgentForwardRx
+      summary: "GET /api/v1/agent/forward/rx"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/forward/tx:
+    post:
+      operationId: s_handleAgentForwardTx
+      summary: "POST /api/v1/agent/forward/tx"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/forward/wait:
+    get:
+      operationId: s_handleAgentForwardWait
+      summary: "GET /api/v1/agent/forward/wait"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/hardware:
+    post:
+      operationId: s_handleAgentHardware
+      summary: "POST /api/v1/agent/hardware"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/hyperv:
+    post:
+      operationId: s_handleAgentHyperV
+      summary: "POST /api/v1/agent/hyperv"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/logs:
+    post:
+      operationId: s_handleAgentLogs
+      summary: "POST /api/v1/agent/logs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/netflow:
+    post:
+      operationId: s_handleAgentNetFlow
+      summary: "POST /api/v1/agent/netflow"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/probe-results:
+    post:
+      operationId: s_handleProbeResults
+      summary: "POST /api/v1/agent/probe-results"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/register:
+    post:
+      operationId: s_handleRegister
+      summary: "POST /api/v1/agent/register"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/report:
+    post:
+      operationId: s_handleReport
+      summary: "POST /api/v1/agent/report"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/snmp:
+    post:
+      operationId: s_handleAgentSNMP
+      summary: "POST /api/v1/agent/snmp"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/snmp/trap:
+    post:
+      operationId: s_handleAgentSNMPTrap
+      summary: "POST /api/v1/agent/snmp/trap"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/terminal/alive:
+    get:
+      operationId: s_handleAgentTermAlive
+      summary: "GET /api/v1/agent/terminal/alive"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/terminal/rx:
+    get:
+      operationId: s_handleAgentTermRx
+      summary: "GET /api/v1/agent/terminal/rx"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/terminal/tx:
+    post:
+      operationId: s_handleAgentTermTx
+      summary: "POST /api/v1/agent/terminal/tx"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agent/terminal/wait:
+    get:
+      operationId: s_handleAgentTermWait
+      summary: "GET /api/v1/agent/terminal/wait"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agents/auto-update-policy:
+    get:
+      operationId: s_handleAgentAutoUpdatePolicyGet
+      summary: "GET /api/v1/agents/auto-update-policy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleAgentAutoUpdatePolicySet
+      summary: "POST /api/v1/agents/auto-update-policy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agents/update:
+    post:
+      operationId: s_handleAgentUpdateStart
+      summary: "POST /api/v1/agents/update"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/agents/update/jobs:
+    get:
+      operationId: s_handleAgentUpdateJobs
+      summary: "GET /api/v1/agents/update/jobs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/agents/update/jobs/{id}":
+    get:
+      operationId: s_handleAgentUpdateJob
+      summary: "GET /api/v1/agents/update/jobs/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/ai/assist:
+    post:
+      operationId: s_handleAIAssist
+      summary: "POST /api/v1/ai/assist"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/assist/feedback:
+    post:
+      operationId: s_handleAIAssistFeedback
+      summary: "POST /api/v1/ai/assist/feedback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/chat:
+    post:
+      operationId: s_handleAIChat
+      summary: "POST /api/v1/ai/chat"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/config:
+    get:
+      operationId: s_handleGetAIConfig
+      summary: "GET /api/v1/ai/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetAIConfig
+      summary: "POST /api/v1/ai/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/copilot/context:
+    get:
+      operationId: s_handleAICopilotContext
+      summary: "GET /api/v1/ai/copilot/context"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/duty-context:
+    get:
+      operationId: s_handleDutyContext
+      summary: "GET /api/v1/ai/duty-context"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/experiments:
+    get:
+      operationId: s_handleListAIExperiments
+      summary: "GET /api/v1/ai/experiments"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertAIExperiment
+      summary: "POST /api/v1/ai/experiments"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/experiments/stats:
+    get:
+      operationId: s_handleAIExperimentStats
+      summary: "GET /api/v1/ai/experiments/stats"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/ai/experiments/{id}":
+    delete:
+      operationId: s_handleDeleteAIExperiment
+      summary: "DELETE /api/v1/ai/experiments/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleUpsertAIExperiment
+      summary: "PUT /api/v1/ai/experiments/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/ai/inspect:
+    post:
+      operationId: s_handleRunInspection
+      summary: "POST /api/v1/ai/inspect"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/inspections:
+    get:
+      operationId: s_handleListInspections
+      summary: "GET /api/v1/ai/inspections"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/list-weknora-kbs:
+    post:
+      operationId: s_handleListWeKnoraKBs
+      summary: "POST /api/v1/ai/list-weknora-kbs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/mcp-clients/sync:
+    post:
+      operationId: s_handleSyncMCPClient
+      summary: "POST /api/v1/ai/mcp-clients/sync"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/mcp-clients/test:
+    post:
+      operationId: s_handleTestMCPClient
+      summary: "POST /api/v1/ai/mcp-clients/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/memories:
+    get:
+      operationId: s_handleListMemories
+      summary: "GET /api/v1/ai/memories"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/ai/memories/{id}":
+    delete:
+      operationId: s_handleDeleteMemory
+      summary: "DELETE /api/v1/ai/memories/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/ai/models:
+    post:
+      operationId: s_handleAIModels
+      summary: "POST /api/v1/ai/models"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/runs:
+    get:
+      operationId: s_handleListAIRuns
+      summary: "GET /api/v1/ai/runs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/ai/runs/{id}":
+    get:
+      operationId: s_handleGetAIRun
+      summary: "GET /api/v1/ai/runs/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/ai/skill-packs:
+    get:
+      operationId: s_handleListSkillPacks
+      summary: "GET /api/v1/ai/skill-packs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/skill-packs/import:
+    post:
+      operationId: s_handleImportSkillPacks
+      summary: "POST /api/v1/ai/skill-packs/import"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/skills:
+    get:
+      operationId: s_handleListSkills
+      summary: "GET /api/v1/ai/skills"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/skills/distill:
+    post:
+      operationId: s_handleDistillSkills
+      summary: "POST /api/v1/ai/skills/distill"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/skills/export:
+    get:
+      operationId: s_handleExportCustomerSkillPack
+      summary: "GET /api/v1/ai/skills/export"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/skills/import:
+    post:
+      operationId: s_handleImportCustomerSkillPack
+      summary: "POST /api/v1/ai/skills/import"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/skills/merge:
+    post:
+      operationId: s_handleMergeSkills
+      summary: "POST /api/v1/ai/skills/merge"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/ai/skills/{id}":
+    delete:
+      operationId: s_handleDeleteSkill
+      summary: "DELETE /api/v1/ai/skills/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/ai/skills/{id}/archive":
+    post:
+      operationId: s_handleArchiveSkill
+      summary: "POST /api/v1/ai/skills/{id}/archive"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/ai/skills/{id}/scope":
+    post:
+      operationId: s_handleSetSkillScope
+      summary: "POST /api/v1/ai/skills/{id}/scope"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/ai/speech/status:
+    get:
+      operationId: s_handleAISpeechStatus
+      summary: "GET /api/v1/ai/speech/status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/speech/stt:
+    post:
+      operationId: s_handleAISpeechSTT
+      summary: "POST /api/v1/ai/speech/stt"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/speech/tts:
+    post:
+      operationId: s_handleAISpeechTTS
+      summary: "POST /api/v1/ai/speech/tts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/stats:
+    get:
+      operationId: s_handleAIStats
+      summary: "GET /api/v1/ai/stats"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/terminal-access:
+    post:
+      operationId: s_handleAITerminalAccess
+      summary: "POST /api/v1/ai/terminal-access"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/test:
+    post:
+      operationId: s_handleTestAIConfig
+      summary: "POST /api/v1/ai/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/test-embed:
+    post:
+      operationId: s_handleTestEmbedConfig
+      summary: "POST /api/v1/ai/test-embed"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/test-rerank:
+    post:
+      operationId: s_handleTestRerankConfig
+      summary: "POST /api/v1/ai/test-rerank"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/test-speech:
+    post:
+      operationId: s_handleTestSpeechConfig
+      summary: "POST /api/v1/ai/test-speech"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/test-weknora:
+    post:
+      operationId: s_handleTestWeKnoraConfig
+      summary: "POST /api/v1/ai/test-weknora"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/tool-audit:
+    get:
+      operationId: s_handleListAIToolAudit
+      summary: "GET /api/v1/ai/tool-audit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/usage/by-user:
+    get:
+      operationId: s_handleAIUsageByUser
+      summary: "GET /api/v1/ai/usage/by-user"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/usage/history:
+    get:
+      operationId: s_handleAIUsageHistory
+      summary: "GET /api/v1/ai/usage/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ai/write-approval:
+    post:
+      operationId: s_handleIssueAIWriteApproval
+      summary: "POST /api/v1/ai/write-approval"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/alerts:
+    get:
+      operationId: s_handleAlerts
+      summary: "GET /api/v1/alerts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/alerts/ack:
+    post:
+      operationId: s_handleAlertAck
+      summary: "POST /api/v1/alerts/ack"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/alerts/clear:
+    post:
+      operationId: s_handleAlertClear
+      summary: "POST /api/v1/alerts/clear"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/alerts/governance:
+    get:
+      operationId: s_handleGetGovernance
+      summary: "GET /api/v1/alerts/governance"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetGovernance
+      summary: "POST /api/v1/alerts/governance"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/alerts/history:
+    get:
+      operationId: s_handleAlertHistory
+      summary: "GET /api/v1/alerts/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/alerts/silence:
+    post:
+      operationId: s_handleAlertSilence
+      summary: "POST /api/v1/alerts/silence"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/apimon/distributed:
+    get:
+      operationId: s_handleDistStatus
+      summary: "GET /api/v1/apimon/distributed"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/apimon/endpoints/{id}/history":
+    get:
+      operationId: s_handleAPIEndpointHistory
+      summary: "GET /api/v1/apimon/endpoints/{id}/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/apimon/fetch-openapi:
+    post:
+      operationId: s_handleFetchOpenAPI
+      summary: "POST /api/v1/apimon/fetch-openapi"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/apimon/import-openapi:
+    post:
+      operationId: s_handleImportOpenAPI
+      summary: "POST /api/v1/apimon/import-openapi"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/apimon/sla:
+    get:
+      operationId: s_handleSLAReport
+      summary: "GET /api/v1/apimon/sla"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/apimon/systems:
+    get:
+      operationId: s_handleAPIMonOverview
+      summary: "GET /api/v1/apimon/systems"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertAPISystem
+      summary: "POST /api/v1/apimon/systems"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/apimon/systems/{id}":
+    delete:
+      operationId: s_handleDeleteAPISystem
+      summary: "DELETE /api/v1/apimon/systems/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/apimon/systems/{id}/hosts":
+    get:
+      operationId: s_handleAPISystemHosts
+      summary: "GET /api/v1/apimon/systems/{id}/hosts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/apimon/systems/{id}/maintenance":
+    post:
+      operationId: s_handleAPISystemMaint
+      summary: "POST /api/v1/apimon/systems/{id}/maintenance"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/apimon/systems/{id}/run":
+    post:
+      operationId: s_handleRunAPISystem
+      summary: "POST /api/v1/apimon/systems/{id}/run"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/apimon/transactions:
+    get:
+      operationId: s_handleAPITxnOverview
+      summary: "GET /api/v1/apimon/transactions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertAPITransaction
+      summary: "POST /api/v1/apimon/transactions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/apimon/transactions/{id}":
+    delete:
+      operationId: s_handleDeleteAPITransaction
+      summary: "DELETE /api/v1/apimon/transactions/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/apimon/transactions/{id}/run":
+    post:
+      operationId: s_handleRunAPITransaction
+      summary: "POST /api/v1/apimon/transactions/{id}/run"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/audit-export:
+    get:
+      operationId: s_handleGetAuditExport
+      summary: "GET /api/v1/audit-export"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetAuditExport
+      summary: "POST /api/v1/audit-export"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/audit/verify-chain:
+    get:
+      operationId: s_handleAuditVerifyChain
+      summary: "GET /api/v1/audit/verify-chain"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/dingtalk/callback:
+    get:
+      operationId: s_handleSSOCallback
+      summary: "GET /api/v1/auth/dingtalk/callback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/dingtalk/login:
+    get:
+      operationId: s_handleSSOLogin
+      summary: "GET /api/v1/auth/dingtalk/login"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/feishu/callback:
+    get:
+      operationId: s_handleSSOCallback
+      summary: "GET /api/v1/auth/feishu/callback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/feishu/login:
+    get:
+      operationId: s_handleSSOLogin
+      summary: "GET /api/v1/auth/feishu/login"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/oidc/callback:
+    get:
+      operationId: s_handleOIDCCallback
+      summary: "GET /api/v1/auth/oidc/callback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/oidc/config:
+    get:
+      operationId: s_handleGetOIDCConfig
+      summary: "GET /api/v1/auth/oidc/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetOIDCConfig
+      summary: "POST /api/v1/auth/oidc/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/oidc/info:
+    get:
+      operationId: s_handleOIDCLoginInfo
+      summary: "GET /api/v1/auth/oidc/info"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/oidc/login:
+    get:
+      operationId: s_handleOIDCLogin
+      summary: "GET /api/v1/auth/oidc/login"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/sso/config:
+    get:
+      operationId: s_handleGetSSOConfig
+      summary: "GET /api/v1/auth/sso/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetSSOConfig
+      summary: "POST /api/v1/auth/sso/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/sso/identities:
+    get:
+      operationId: s_handleListSSOIdentities
+      summary: "GET /api/v1/auth/sso/identities"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/auth/sso/identities/{provider}":
+    delete:
+      operationId: s_handleUnbindSSOIdentity
+      summary: "DELETE /api/v1/auth/sso/identities/{provider}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/auth/sso/info:
+    get:
+      operationId: s_handleSSOLoginInfo
+      summary: "GET /api/v1/auth/sso/info"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/wechat/callback:
+    get:
+      operationId: s_handleSSOCallback
+      summary: "GET /api/v1/auth/wechat/callback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/wechat/login:
+    get:
+      operationId: s_handleSSOLogin
+      summary: "GET /api/v1/auth/wechat/login"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/wecom/callback:
+    get:
+      operationId: s_handleSSOCallback
+      summary: "GET /api/v1/auth/wecom/callback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/auth/wecom/login:
+    get:
+      operationId: s_handleSSOLogin
+      summary: "GET /api/v1/auth/wecom/login"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/changes:
+    get:
+      operationId: s_handleListChanges
+      summary: "GET /api/v1/changes"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertChange
+      summary: "POST /api/v1/changes"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/changes/windows:
+    get:
+      operationId: s_handleListChangeWindows
+      summary: "GET /api/v1/changes/windows"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertChangeWindow
+      summary: "POST /api/v1/changes/windows"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/changes/windows/{id}":
+    delete:
+      operationId: s_handleDeleteChangeWindow
+      summary: "DELETE /api/v1/changes/windows/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}":
+    get:
+      operationId: s_handleGetChange
+      summary: "GET /api/v1/changes/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/approve":
+    post:
+      operationId: s_handleChangeApprove
+      summary: "POST /api/v1/changes/{id}/approve"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/blast-radius":
+    get:
+      operationId: s_handleChangeImpact
+      summary: "GET /api/v1/changes/{id}/blast-radius"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/cancel":
+    post:
+      operationId: s_handleChangeCancel
+      summary: "POST /api/v1/changes/{id}/cancel"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/complete":
+    post:
+      operationId: s_handleChangeComplete
+      summary: "POST /api/v1/changes/{id}/complete"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/impact":
+    get:
+      operationId: s_handleChangeImpact
+      summary: "GET /api/v1/changes/{id}/impact"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/link":
+    post:
+      operationId: s_handleChangeLink
+      summary: "POST /api/v1/changes/{id}/link"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/link-incident":
+    post:
+      operationId: s_handleLinkChangeIncident
+      summary: "POST /api/v1/changes/{id}/link-incident"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/reject":
+    post:
+      operationId: s_handleChangeReject
+      summary: "POST /api/v1/changes/{id}/reject"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/rollback":
+    post:
+      operationId: s_handleChangeRollback
+      summary: "POST /api/v1/changes/{id}/rollback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/schedule":
+    post:
+      operationId: s_handleChangeSchedule
+      summary: "POST /api/v1/changes/{id}/schedule"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/start":
+    post:
+      operationId: s_handleChangeStart
+      summary: "POST /api/v1/changes/{id}/start"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/changes/{id}/submit":
+    post:
+      operationId: s_handleChangeSubmit
+      summary: "POST /api/v1/changes/{id}/submit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/checks:
+    get:
+      operationId: s_handleGetChecks
+      summary: "GET /api/v1/checks"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertCheck
+      summary: "POST /api/v1/checks"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/checks/{id}":
+    delete:
+      operationId: s_handleDeleteCheck
+      summary: "DELETE /api/v1/checks/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/checks/{id}/history":
+    get:
+      operationId: s_handleCheckHistory
+      summary: "GET /api/v1/checks/{id}/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/checks/{id}/run":
+    post:
+      operationId: s_handleRunCheck
+      summary: "POST /api/v1/checks/{id}/run"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/config:
+    get:
+      operationId: s_handleGetConfig
+      summary: "GET /api/v1/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetConfig
+      summary: "POST /api/v1/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/config/test:
+    post:
+      operationId: s_handleTestConfig
+      summary: "POST /api/v1/config/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/config/threshold-presets:
+    get:
+      operationId: s_handleThresholdPresets
+      summary: "GET /api/v1/config/threshold-presets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/containers/compose:
+    get:
+      operationId: s_handleContainerComposeList
+      summary: "GET /api/v1/containers/compose"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/containers/compose/{hostID}/action":
+    post:
+      operationId: s_handleContainerComposeAction
+      summary: "POST /api/v1/containers/compose/{hostID}/action"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/containers/list:
+    get:
+      operationId: s_handleContainerList
+      summary: "GET /api/v1/containers/list"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/containers/{hostID}/{id}/action":
+    post:
+      operationId: s_handleContainerAction
+      summary: "POST /api/v1/containers/{hostID}/{id}/action"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/containers/{hostID}/{id}/exec":
+    post:
+      operationId: s_handleContainerExec
+      summary: "POST /api/v1/containers/{hostID}/{id}/exec"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/containers/{hostID}/{id}/logs":
+    get:
+      operationId: s_handleContainerLogs
+      summary: "GET /api/v1/containers/{hostID}/{id}/logs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/containers/{hostID}/{id}/terminal":
+    get:
+      operationId: s_handleContainerTerminal
+      summary: "GET /api/v1/containers/{hostID}/{id}/terminal"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/content-audit:
+    get:
+      operationId: s_handleContentAudit
+      summary: "GET /api/v1/content-audit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/content-audit/hosts:
+    get:
+      operationId: s_handleContentAuditHosts
+      summary: "GET /api/v1/content-audit/hosts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards:
+    get:
+      operationId: s_handleListDashboards
+      summary: "GET /api/v1/dashboards"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertDashboard
+      summary: "POST /api/v1/dashboards"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/ai-create:
+    post:
+      operationId: s_handleAICreateDashboard
+      summary: "POST /api/v1/dashboards/ai-create"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/ai-from-incident:
+    post:
+      operationId: s_handleAIDashboardFromIncident
+      summary: "POST /api/v1/dashboards/ai-from-incident"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/dashboards/ai/jobs/{id}":
+    get:
+      operationId: s_handleGetDashboardAIJob
+      summary: "GET /api/v1/dashboards/ai/jobs/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/dashboards/assets/{dashID}/{name}":
+    get:
+      operationId: s_handleGetDashboardAsset
+      summary: "GET /api/v1/dashboards/assets/{dashID}/{name}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: dashID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/dashboards/import-grafana:
+    post:
+      operationId: s_handleImportGrafana
+      summary: "POST /api/v1/dashboards/import-grafana"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/query:
+    post:
+      operationId: s_handleDashboardQuery
+      summary: "POST /api/v1/dashboards/query"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/query-forecast:
+    post:
+      operationId: s_handleDashboardQueryForecast
+      summary: "POST /api/v1/dashboards/query-forecast"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/query-instant:
+    post:
+      operationId: s_handleDashboardQueryInstant
+      summary: "POST /api/v1/dashboards/query-instant"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/query-logs:
+    post:
+      operationId: s_handleDashboardQueryLogs
+      summary: "POST /api/v1/dashboards/query-logs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/query-sql:
+    post:
+      operationId: s_handleDashboardQuerySQL
+      summary: "POST /api/v1/dashboards/query-sql"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/dashboards/var-values:
+    post:
+      operationId: s_handleDashboardVarValues
+      summary: "POST /api/v1/dashboards/var-values"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/dashboards/{id}":
+    delete:
+      operationId: s_handleDeleteDashboard
+      summary: "DELETE /api/v1/dashboards/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    get:
+      operationId: s_handleGetDashboard
+      summary: "GET /api/v1/dashboards/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/dashboards/{id}/ai-apply":
+    post:
+      operationId: s_handleApplyDashOptimize
+      summary: "POST /api/v1/dashboards/{id}/ai-apply"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/dashboards/{id}/ai-ticket":
+    post:
+      operationId: s_handleDashboardAITicket
+      summary: "POST /api/v1/dashboards/{id}/ai-ticket"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/dashboards/{id}/assets":
+    post:
+      operationId: s_handleUploadDashboardAsset
+      summary: "POST /api/v1/dashboards/{id}/assets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/dashboards/{id}/digest":
+    get:
+      operationId: s_handleDashboardDigest
+      summary: "GET /api/v1/dashboards/{id}/digest"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/datasources:
+    get:
+      operationId: s_handleDataSourceList
+      summary: "GET /api/v1/datasources"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleDataSourceCreate
+      summary: "POST /api/v1/datasources"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/datasources/test:
+    post:
+      operationId: s_handleDataSourceTest
+      summary: "POST /api/v1/datasources/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/datasources/{id}":
+    delete:
+      operationId: s_handleDataSourceDelete
+      summary: "DELETE /api/v1/datasources/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleDataSourceUpdate
+      summary: "PUT /api/v1/datasources/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/datasources/{id}/labels":
+    get:
+      operationId: s_handleDataSourceLabels
+      summary: "GET /api/v1/datasources/{id}/labels"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/datasources/{id}/query":
+    post:
+      operationId: s_handleDataSourceQuery
+      summary: "POST /api/v1/datasources/{id}/query"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/desktop/sessions:
+    get:
+      operationId: s_handleListDesktopSessions
+      summary: "GET /api/v1/desktop/sessions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/desktop/sessions/{id}/replay":
+    get:
+      operationId: s_handleDesktopReplay
+      summary: "GET /api/v1/desktop/sessions/{id}/replay"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/directory/users:
+    get:
+      operationId: s_handleDirectoryUsers
+      summary: "GET /api/v1/directory/users"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/events:
+    get:
+      operationId: s_handleEvents
+      summary: "GET /api/v1/events"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/experience-rules:
+    get:
+      operationId: s_handleListExperienceRules
+      summary: "GET /api/v1/experience-rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleCreateExperienceRule
+      summary: "POST /api/v1/experience-rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/experience-rules/{id}":
+    delete:
+      operationId: s_handleDeleteExperienceRule
+      summary: "DELETE /api/v1/experience-rules/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/forward:
+    get:
+      operationId: s_handleForwardList
+      summary: "GET /api/v1/forward"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleForwardCreate
+      summary: "POST /api/v1/forward"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/forward/group/{gid}":
+    delete:
+      operationId: s_handleForwardGroupDelete
+      summary: "DELETE /api/v1/forward/group/{gid}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: gid
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/forward/group/{gid}/copy":
+    post:
+      operationId: s_handleForwardGroupCopy
+      summary: "POST /api/v1/forward/group/{gid}/copy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: gid
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/forward/group/{gid}/edit":
+    put:
+      operationId: s_handleForwardGroupEdit
+      summary: "PUT /api/v1/forward/group/{gid}/edit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: gid
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/forward/group/{gid}/toggle":
+    put:
+      operationId: s_handleForwardGroupToggle
+      summary: "PUT /api/v1/forward/group/{gid}/toggle"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: gid
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/forward/health:
+    get:
+      operationId: s_handleForwardHealth
+      summary: "GET /api/v1/forward/health"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/forward/stats:
+    get:
+      operationId: s_handleForwardStats
+      summary: "GET /api/v1/forward/stats"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/forward/{id}":
+    delete:
+      operationId: s_handleForwardDelete
+      summary: "DELETE /api/v1/forward/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleForwardEdit
+      summary: "PUT /api/v1/forward/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/forward/{id}/copy":
+    post:
+      operationId: s_handleForwardCopy
+      summary: "POST /api/v1/forward/{id}/copy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/forward/{id}/toggle":
+    put:
+      operationId: s_handleForwardToggle
+      summary: "PUT /api/v1/forward/{id}/toggle"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/hardware/events:
+    get:
+      operationId: s_handleHardwareEvents
+      summary: "GET /api/v1/hardware/events"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hardware/health:
+    get:
+      operationId: s_handleHardwareHealth
+      summary: "GET /api/v1/hardware/health"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hardware/history:
+    get:
+      operationId: s_handleHardwareHistory
+      summary: "GET /api/v1/hardware/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/hardware/{hostID}":
+    delete:
+      operationId: s_handleDeleteHardware
+      summary: "DELETE /api/v1/hardware/{hostID}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/hermes/chat:
+    post:
+      operationId: s_handleSreyunChat
+      summary: "POST /api/v1/hermes/chat"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hermes/parse:
+    post:
+      operationId: s_handleSreyunParse
+      summary: "POST /api/v1/hermes/parse"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hermes/rules:
+    get:
+      operationId: s_handleSreyunListRules
+      summary: "GET /api/v1/hermes/rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSreyunUpsertRule
+      summary: "POST /api/v1/hermes/rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/hermes/rules/{id}":
+    delete:
+      operationId: s_handleSreyunDeleteRule
+      summary: "DELETE /api/v1/hermes/rules/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/hermes/sessions:
+    get:
+      operationId: s_handleSreyunSessions
+      summary: "GET /api/v1/hermes/sessions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/hermes/sessions/{id}":
+    get:
+      operationId: s_handleSreyunSession
+      summary: "GET /api/v1/hermes/sessions/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hermes/sessions/{id}/undo":
+    post:
+      operationId: s_handleSreyunSessionUndo
+      summary: "POST /api/v1/hermes/sessions/{id}/undo"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/hermes/status:
+    get:
+      operationId: s_handleSreyunStatus
+      summary: "GET /api/v1/hermes/status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hermes/suggestions:
+    get:
+      operationId: s_handleSreyunSuggestions
+      summary: "GET /api/v1/hermes/suggestions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hermes/templates:
+    get:
+      operationId: s_handleSreyunListTemplates
+      summary: "GET /api/v1/hermes/templates"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSreyunUpsertTemplate
+      summary: "POST /api/v1/hermes/templates"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/hermes/templates/{id}":
+    delete:
+      operationId: s_handleSreyunDeleteTemplate
+      summary: "DELETE /api/v1/hermes/templates/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/host-folders:
+    get:
+      operationId: s_handleGetHostFolders
+      summary: "GET /api/v1/host-folders"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handlePostHostFolder
+      summary: "POST /api/v1/host-folders"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    put:
+      operationId: s_handlePutHostFolders
+      summary: "PUT /api/v1/host-folders"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/host-folders/{id}":
+    delete:
+      operationId: s_handleDeleteHostFolder
+      summary: "DELETE /api/v1/host-folders/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    patch:
+      operationId: s_handlePatchHostFolder
+      summary: "PATCH /api/v1/host-folders/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/host-inspect:
+    get:
+      operationId: s_handleListHostInspect
+      summary: "GET /api/v1/host-inspect"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/host-inspect/compare:
+    get:
+      operationId: s_handleCompareHostInspect
+      summary: "GET /api/v1/host-inspect/compare"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/host-inspect/run:
+    post:
+      operationId: s_handleRunHostInspect
+      summary: "POST /api/v1/host-inspect/run"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/host-inspect/{id}":
+    get:
+      operationId: s_handleGetHostInspect
+      summary: "GET /api/v1/host-inspect/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/hosts:
+    get:
+      operationId: s_handleHosts
+      summary: "GET /api/v1/hosts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hosts/duplicates:
+    get:
+      operationId: s_handleHostDuplicates
+      summary: "GET /api/v1/hosts/duplicates"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hosts/duplicates/cleanup:
+    post:
+      operationId: s_handleCleanupDuplicates
+      summary: "POST /api/v1/hosts/duplicates/cleanup"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hosts/meta:
+    get:
+      operationId: s_handleHostsMeta
+      summary: "GET /api/v1/hosts/meta"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/hosts/{id}":
+    delete:
+      operationId: s_handleDeleteHost
+      summary: "DELETE /api/v1/hosts/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/category":
+    post:
+      operationId: s_handleSetCategory
+      summary: "POST /api/v1/hosts/{id}/category"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/desktop":
+    post:
+      operationId: s_handleOpenDesktop
+      summary: "POST /api/v1/hosts/{id}/desktop"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/desktop/ws":
+    get:
+      operationId: s_handleDesktopWS
+      summary: "GET /api/v1/hosts/{id}/desktop/ws"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/folder":
+    post:
+      operationId: s_handleSetHostFolder
+      summary: "POST /api/v1/hosts/{id}/folder"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/history":
+    get:
+      operationId: s_handleHostHistory
+      summary: "GET /api/v1/hosts/{id}/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/metrics":
+    get:
+      operationId: s_handleHostMetrics
+      summary: "GET /api/v1/hosts/{id}/metrics"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/remote-preflight":
+    get:
+      operationId: s_handleRemotePreflight
+      summary: "GET /api/v1/hosts/{id}/remote-preflight"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hosts/{id}/terminal":
+    get:
+      operationId: s_handleTerminal
+      summary: "GET /api/v1/hosts/{id}/terminal"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/http-proxy:
+    get:
+      operationId: s_handleHTTPProxyList
+      summary: "GET /api/v1/http-proxy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleHTTPProxyCreate
+      summary: "POST /api/v1/http-proxy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/http-proxy/{id}":
+    delete:
+      operationId: s_handleHTTPProxyDelete
+      summary: "DELETE /api/v1/http-proxy/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleHTTPProxyEdit
+      summary: "PUT /api/v1/http-proxy/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/http-proxy/{id}/copy":
+    post:
+      operationId: s_handleHTTPProxyCopy
+      summary: "POST /api/v1/http-proxy/{id}/copy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/http-proxy/{id}/toggle":
+    put:
+      operationId: s_handleHTTPProxyToggle
+      summary: "PUT /api/v1/http-proxy/{id}/toggle"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/hyperv/cleanup-duplicates:
+    post:
+      operationId: s_handleCleanupHyperVDuplicates
+      summary: "POST /api/v1/hyperv/cleanup-duplicates"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hyperv/events:
+    get:
+      operationId: s_handleHyperVEvents
+      summary: "GET /api/v1/hyperv/events"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/hyperv/list:
+    get:
+      operationId: s_handleHyperVList
+      summary: "GET /api/v1/hyperv/list"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/hyperv/{hostID}":
+    delete:
+      operationId: s_handleDeleteHyperV
+      summary: "DELETE /api/v1/hyperv/{hostID}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hyperv/{hostID}/guests/{vmID}/config":
+    post:
+      operationId: s_handleHyperVConfig
+      summary: "POST /api/v1/hyperv/{hostID}/guests/{vmID}/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vmID
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/hyperv/{hostID}/guests/{vmID}/power":
+    post:
+      operationId: s_handleHyperVPower
+      summary: "POST /api/v1/hyperv/{hostID}/guests/{vmID}/power"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: vmID
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/incidents:
+    get:
+      operationId: s_handleListIncidents
+      summary: "GET /api/v1/incidents"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleCreateIncident
+      summary: "POST /api/v1/incidents"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/incidents/{id}":
+    get:
+      operationId: s_handleGetIncident
+      summary: "GET /api/v1/incidents/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/ack":
+    post:
+      operationId: s_handleAckIncident
+      summary: "POST /api/v1/incidents/{id}/ack"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/assign":
+    post:
+      operationId: s_handleAssignIncident
+      summary: "POST /api/v1/incidents/{id}/assign"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/case-export":
+    get:
+      operationId: s_handleIncidentCaseExport
+      summary: "GET /api/v1/incidents/{id}/case-export"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/comment":
+    post:
+      operationId: s_handleCommentIncident
+      summary: "POST /api/v1/incidents/{id}/comment"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/diagnose":
+    post:
+      operationId: s_handleDiagnoseIncident
+      summary: "POST /api/v1/incidents/{id}/diagnose"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/diagnose-chat":
+    get:
+      operationId: s_handleGetDiagnosisChatHistory
+      summary: "GET /api/v1/incidents/{id}/diagnose-chat"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    post:
+      operationId: s_handleDiagnoseChatIncident
+      summary: "POST /api/v1/incidents/{id}/diagnose-chat"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/diagnosis-feedback":
+    post:
+      operationId: s_handleDiagnosisFeedback
+      summary: "POST /api/v1/incidents/{id}/diagnosis-feedback"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/emergency-change":
+    post:
+      operationId: s_handleIncidentEmergencyChange
+      summary: "POST /api/v1/incidents/{id}/emergency-change"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/link-ticket":
+    post:
+      operationId: s_handleIncidentLinkTicket
+      summary: "POST /api/v1/incidents/{id}/link-ticket"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/loop":
+    get:
+      operationId: s_handleGetIncidentLoop
+      summary: "GET /api/v1/incidents/{id}/loop"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/loop/{action}":
+    post:
+      operationId: s_handleIncidentLoopAction
+      summary: "POST /api/v1/incidents/{id}/loop/{action}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/related-changes":
+    get:
+      operationId: s_handleIncidentRelatedChanges
+      summary: "GET /api/v1/incidents/{id}/related-changes"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/remediation-propose":
+    post:
+      operationId: s_handleProposeRemediation
+      summary: "POST /api/v1/incidents/{id}/remediation-propose"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/resolve":
+    post:
+      operationId: s_handleResolveIncident
+      summary: "POST /api/v1/incidents/{id}/resolve"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/incidents/{id}/ticket":
+    post:
+      operationId: s_handleEscalateIncident
+      summary: "POST /api/v1/incidents/{id}/ticket"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/install/info:
+    get:
+      operationId: s_handleInstallInfo
+      summary: "GET /api/v1/install/info"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/install/reset-token:
+    post:
+      operationId: s_handleResetToken
+      summary: "POST /api/v1/install/reset-token"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/install/revoke-token:
+    post:
+      operationId: s_handleRevokeInstallToken
+      summary: "POST /api/v1/install/revoke-token"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/install/token-policy:
+    post:
+      operationId: s_handleSetInstallTokenPolicy
+      summary: "POST /api/v1/install/token-policy"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/integrations/content-audit:
+    post:
+      operationId: s_handleGatewayContentAudit
+      summary: "POST /api/v1/integrations/content-audit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/k8s/clusters:
+    get:
+      operationId: s_handleListK8sClusters
+      summary: "GET /api/v1/k8s/clusters"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertK8sCluster
+      summary: "POST /api/v1/k8s/clusters"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/k8s/clusters/{id}":
+    delete:
+      operationId: s_handleDeleteK8sCluster
+      summary: "DELETE /api/v1/k8s/clusters/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    get:
+      operationId: s_handleGetK8sCluster
+      summary: "GET /api/v1/k8s/clusters/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleUpsertK8sCluster
+      summary: "PUT /api/v1/k8s/clusters/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/apply":
+    post:
+      operationId: s_handleK8sApply
+      summary: "POST /api/v1/k8s/clusters/{id}/apply"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/deployments":
+    get:
+      operationId: s_handleK8sDeployments
+      summary: "GET /api/v1/k8s/clusters/{id}/deployments"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/restart":
+    post:
+      operationId: s_handleK8sRestartDeployment
+      summary: "POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/restart"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ns
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/scale":
+    post:
+      operationId: s_handleK8sScaleDeployment
+      summary: "POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/scale"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ns
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/undo":
+    post:
+      operationId: s_handleK8sUndoDeployment
+      summary: "POST /api/v1/k8s/clusters/{id}/deployments/{ns}/{name}/undo"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ns
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/events":
+    get:
+      operationId: s_handleK8sEvents
+      summary: "GET /api/v1/k8s/clusters/{id}/events"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/namespaces":
+    get:
+      operationId: s_handleK8sNamespaces
+      summary: "GET /api/v1/k8s/clusters/{id}/namespaces"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    post:
+      operationId: s_handleK8sCreateNamespace
+      summary: "POST /api/v1/k8s/clusters/{id}/namespaces"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/nodes":
+    get:
+      operationId: s_handleK8sNodes
+      summary: "GET /api/v1/k8s/clusters/{id}/nodes"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/overview":
+    get:
+      operationId: s_handleK8sOverview
+      summary: "GET /api/v1/k8s/clusters/{id}/overview"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/pods":
+    get:
+      operationId: s_handleK8sPods
+      summary: "GET /api/v1/k8s/clusters/{id}/pods"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/pods/{ns}/{name}":
+    delete:
+      operationId: s_handleK8sDeletePod
+      summary: "DELETE /api/v1/k8s/clusters/{id}/pods/{ns}/{name}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ns
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/pods/{ns}/{name}/exec":
+    post:
+      operationId: s_handleK8sPodExec
+      summary: "POST /api/v1/k8s/clusters/{id}/pods/{ns}/{name}/exec"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ns
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/pods/{ns}/{name}/log":
+    get:
+      operationId: s_handleK8sPodLog
+      summary: "GET /api/v1/k8s/clusters/{id}/pods/{ns}/{name}/log"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ns
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/k8s/clusters/{id}/test":
+    post:
+      operationId: s_handleTestK8sCluster
+      summary: "POST /api/v1/k8s/clusters/{id}/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/login:
+    post:
+      operationId: s_handleLogin
+      summary: "POST /api/v1/login"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/login/sms-code:
+    post:
+      operationId: s_handleLoginSMSCode
+      summary: "POST /api/v1/login/sms-code"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/logout:
+    post:
+      operationId: s_handleLogout
+      summary: "POST /api/v1/logout"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/logs:
+    get:
+      operationId: s_handleSearchLogs
+      summary: "GET /api/v1/logs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/logs/diagnose:
+    post:
+      operationId: s_handleLogDiagnose
+      summary: "POST /api/v1/logs/diagnose"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/mcp:
+    delete:
+      operationId: s_handleMCP
+      summary: "DELETE /api/v1/mcp"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    get:
+      operationId: s_handleMCP
+      summary: "GET /api/v1/mcp"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleMCP
+      summary: "POST /api/v1/mcp"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/me:
+    get:
+      operationId: s_handleMe
+      summary: "GET /api/v1/me"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/messages:
+    get:
+      operationId: s_handleListMessages
+      summary: "GET /api/v1/messages"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/messages/read:
+    post:
+      operationId: s_handleMarkMessagesRead
+      summary: "POST /api/v1/messages/read"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/messages/read-all:
+    post:
+      operationId: s_handleMarkAllMessagesRead
+      summary: "POST /api/v1/messages/read-all"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/metrics/forecast:
+    post:
+      operationId: s_handleMetricsForecast
+      summary: "POST /api/v1/metrics/forecast"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/mfa/disable:
+    post:
+      operationId: s_handleMFADisable
+      summary: "POST /api/v1/mfa/disable"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/mfa/enable:
+    post:
+      operationId: s_handleMFAEnable
+      summary: "POST /api/v1/mfa/enable"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/mfa/global:
+    get:
+      operationId: s_handleMFAGlobalGet
+      summary: "GET /api/v1/mfa/global"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleMFAGlobalSet
+      summary: "POST /api/v1/mfa/global"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/mfa/setup:
+    post:
+      operationId: s_handleMFASetup
+      summary: "POST /api/v1/mfa/setup"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/mfa/unbind-via-email:
+    post:
+      operationId: s_handleMFAUnbindViaEmail
+      summary: "POST /api/v1/mfa/unbind-via-email"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/netflow/flows:
+    get:
+      operationId: s_handleNetFlowFlows
+      summary: "GET /api/v1/netflow/flows"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/netflow/hosts:
+    get:
+      operationId: s_handleNetFlowHosts
+      summary: "GET /api/v1/netflow/hosts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/netflow/ip-history:
+    get:
+      operationId: s_handleNetFlowIPHistory
+      summary: "GET /api/v1/netflow/ip-history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/netflow/packets:
+    get:
+      operationId: s_handleNetFlowPackets
+      summary: "GET /api/v1/netflow/packets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/netflow/summary:
+    get:
+      operationId: s_handleNetFlowSummary
+      summary: "GET /api/v1/netflow/summary"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/oncall/pages:
+    get:
+      operationId: s_handleListOnCallPages
+      summary: "GET /api/v1/oncall/pages"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/oncall/policies:
+    get:
+      operationId: s_handleListEscalationPolicies
+      summary: "GET /api/v1/oncall/policies"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertEscalationPolicy
+      summary: "POST /api/v1/oncall/policies"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/oncall/policies/{id}":
+    delete:
+      operationId: s_handleDeleteEscalationPolicy
+      summary: "DELETE /api/v1/oncall/policies/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/oncall/schedules:
+    get:
+      operationId: s_handleListOnCallSchedules
+      summary: "GET /api/v1/oncall/schedules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertOnCallSchedule
+      summary: "POST /api/v1/oncall/schedules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/oncall/schedules/{id}":
+    delete:
+      operationId: s_handleDeleteOnCallSchedule
+      summary: "DELETE /api/v1/oncall/schedules/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/oncall/who:
+    get:
+      operationId: s_handleOnCallWho
+      summary: "GET /api/v1/oncall/who"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ops/actions/apply:
+    post:
+      operationId: s_handleOpsActionsApply
+      summary: "POST /api/v1/ops/actions/apply"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/ops/actions/validate:
+    post:
+      operationId: s_handleOpsActionsValidate
+      summary: "POST /api/v1/ops/actions/validate"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/password:
+    post:
+      operationId: s_handleSetPassword
+      summary: "POST /api/v1/password"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/playbooks:
+    get:
+      operationId: s_handleListPlaybooks
+      summary: "GET /api/v1/playbooks"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertPlaybook
+      summary: "POST /api/v1/playbooks"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/playbooks/executions:
+    get:
+      operationId: s_handleListExecutions
+      summary: "GET /api/v1/playbooks/executions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/playbooks/executions/by-id/{id}":
+    get:
+      operationId: s_handleGetExecution
+      summary: "GET /api/v1/playbooks/executions/by-id/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/executions/by-id/{id}/approve":
+    post:
+      operationId: s_handleApprovePlaybookExecution
+      summary: "POST /api/v1/playbooks/executions/by-id/{id}/approve"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/executions/by-id/{id}/cancel":
+    post:
+      operationId: s_handleCancelPlaybookExecution
+      summary: "POST /api/v1/playbooks/executions/by-id/{id}/cancel"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/executions/by-id/{id}/reject":
+    post:
+      operationId: s_handleRejectPlaybookExecution
+      summary: "POST /api/v1/playbooks/executions/by-id/{id}/reject"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/playbooks/packs:
+    get:
+      operationId: s_handleListPlaybookPacks
+      summary: "GET /api/v1/playbooks/packs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/playbooks/packs/import:
+    post:
+      operationId: s_handleImportPlaybookPacks
+      summary: "POST /api/v1/playbooks/packs/import"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/playbooks/{id}":
+    delete:
+      operationId: s_handleDeletePlaybook
+      summary: "DELETE /api/v1/playbooks/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/{id}/execute":
+    post:
+      operationId: s_handleExecutePlaybook
+      summary: "POST /api/v1/playbooks/{id}/execute"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/{id}/preflight":
+    get:
+      operationId: s_handlePlaybookPreflight
+      summary: "GET /api/v1/playbooks/{id}/preflight"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/{id}/revisions":
+    get:
+      operationId: s_handleListPlaybookRevisions
+      summary: "GET /api/v1/playbooks/{id}/revisions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/{id}/revisions/diff":
+    get:
+      operationId: s_handleDiffPlaybookRevisions
+      summary: "GET /api/v1/playbooks/{id}/revisions/diff"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/playbooks/{id}/revisions/{rev}/restore":
+    post:
+      operationId: s_handleRestorePlaybookRevision
+      summary: "POST /api/v1/playbooks/{id}/revisions/{rev}/restore"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: rev
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/profile:
+    post:
+      operationId: s_handleSetProfile
+      summary: "POST /api/v1/profile"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/prom-rules:
+    get:
+      operationId: s_handleListPromRules
+      summary: "GET /api/v1/prom-rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertPromRule
+      summary: "POST /api/v1/prom-rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/prom-rules/test:
+    post:
+      operationId: s_handleTestPromRule
+      summary: "POST /api/v1/prom-rules/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/prom-rules/{id}":
+    delete:
+      operationId: s_handleDeletePromRule
+      summary: "DELETE /api/v1/prom-rules/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/prom/write:
+    post:
+      operationId: s_handlePromRemoteWrite
+      summary: "POST /api/v1/prom/write"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/prom/write-config:
+    get:
+      operationId: s_handleGetPromWrite
+      summary: "GET /api/v1/prom/write-config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetPromWriteToken
+      summary: "POST /api/v1/prom/write-config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/proxy-token:
+    get:
+      operationId: s_handleProxyToken
+      summary: "GET /api/v1/proxy-token"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/public/status:
+    get:
+      operationId: s_handlePublicStatusJSON
+      summary: "GET /api/v1/public/status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/remediation/rules:
+    get:
+      operationId: s_handleListRemediationRules
+      summary: "GET /api/v1/remediation/rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertRemediationRule
+      summary: "POST /api/v1/remediation/rules"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/remediation/rules/{id}":
+    delete:
+      operationId: s_handleDeleteRemediationRule
+      summary: "DELETE /api/v1/remediation/rules/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/remediation/runs:
+    get:
+      operationId: s_handleListRemediationRuns
+      summary: "GET /api/v1/remediation/runs"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/remediation/runs/{id}/approve":
+    post:
+      operationId: s_handleApproveRemediation
+      summary: "POST /api/v1/remediation/runs/{id}/approve"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/remediation/runs/{id}/reject":
+    post:
+      operationId: s_handleRejectRemediation
+      summary: "POST /api/v1/remediation/runs/{id}/reject"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/resources/search:
+    get:
+      operationId: s_handleResourceSearch
+      summary: "GET /api/v1/resources/search"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/scrape-targets:
+    get:
+      operationId: s_handleScrapeTargets
+      summary: "GET /api/v1/scrape-targets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertScrapeTarget
+      summary: "POST /api/v1/scrape-targets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/scrape-targets/{id}":
+    delete:
+      operationId: s_handleDeleteScrapeTarget
+      summary: "DELETE /api/v1/scrape-targets/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/scrape-targets/{id}/run":
+    post:
+      operationId: s_handleRunScrapeTarget
+      summary: "POST /api/v1/scrape-targets/{id}/run"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/security/feeds:
+    get:
+      operationId: s_handleSecurityFeedStatus
+      summary: "GET /api/v1/security/feeds"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/feeds/cancel:
+    post:
+      operationId: s_handleSecurityFeedCancel
+      summary: "POST /api/v1/security/feeds/cancel"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/feeds/config:
+    post:
+      operationId: s_handleSetSecurityFeedConfig
+      summary: "POST /api/v1/security/feeds/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/feeds/test:
+    post:
+      operationId: s_handleSecurityFeedTest
+      summary: "POST /api/v1/security/feeds/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/feeds/update:
+    post:
+      operationId: s_handleSecurityFeedUpdate
+      summary: "POST /api/v1/security/feeds/update"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/findings/status:
+    get:
+      operationId: s_handleListSecurityFindingStates
+      summary: "GET /api/v1/security/findings/status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpdateSecurityFindingState
+      summary: "POST /api/v1/security/findings/status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/host/config:
+    get:
+      operationId: s_handleGetHostSecurityConfig
+      summary: "GET /api/v1/security/host/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetHostSecurityConfig
+      summary: "POST /api/v1/security/host/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/host/scan:
+    post:
+      operationId: s_handleHostSecurityScan
+      summary: "POST /api/v1/security/host/scan"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/host/scans:
+    get:
+      operationId: s_handleHostSecurityScans
+      summary: "GET /api/v1/security/host/scans"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/security/host/scans/{id}":
+    get:
+      operationId: s_handleHostSecurityScanGet
+      summary: "GET /api/v1/security/host/scans/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/security/host/scans/{id}/cancel":
+    post:
+      operationId: s_handleHostSecurityScanCancel
+      summary: "POST /api/v1/security/host/scans/{id}/cancel"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/security/host/summary:
+    get:
+      operationId: s_handleHostSecuritySummary
+      summary: "GET /api/v1/security/host/summary"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/key-status:
+    get:
+      operationId: s_handleSecurityKeyStatus
+      summary: "GET /api/v1/security/key-status"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/overview:
+    get:
+      operationId: s_handleSecurityOverview
+      summary: "GET /api/v1/security/overview"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/rewrap-secrets:
+    post:
+      operationId: s_handleSecurityRewrap
+      summary: "POST /api/v1/security/rewrap-secrets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/secret-rotate:
+    get:
+      operationId: s_handleSecretRotateStatus
+      summary: "GET /api/v1/security/secret-rotate"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleRotateSecretKey
+      summary: "POST /api/v1/security/secret-rotate"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/web/config:
+    get:
+      operationId: s_handleGetWebSecurityConfig
+      summary: "GET /api/v1/security/web/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetWebSecurityConfig
+      summary: "POST /api/v1/security/web/config"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/web/engine:
+    get:
+      operationId: s_handleWebEngineStatus
+      summary: "GET /api/v1/security/web/engine"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/web/engine/refresh:
+    post:
+      operationId: s_handleWebEngineRefresh
+      summary: "POST /api/v1/security/web/engine/refresh"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/web/scans:
+    get:
+      operationId: s_handleWebScans
+      summary: "GET /api/v1/security/web/scans"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/security/web/scans/{id}":
+    get:
+      operationId: s_handleWebScanGet
+      summary: "GET /api/v1/security/web/scans/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/security/web/scans/{id}/cancel":
+    post:
+      operationId: s_handleWebScanCancel
+      summary: "POST /api/v1/security/web/scans/{id}/cancel"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/security/web/targets:
+    get:
+      operationId: s_handleListWebTargets
+      summary: "GET /api/v1/security/web/targets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertWebTarget
+      summary: "POST /api/v1/security/web/targets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/security/web/targets/import-openapi:
+    post:
+      operationId: s_handleImportWebOpenAPIScope
+      summary: "POST /api/v1/security/web/targets/import-openapi"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/security/web/targets/{id}":
+    delete:
+      operationId: s_handleDeleteWebTarget
+      summary: "DELETE /api/v1/security/web/targets/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleUpsertWebTarget
+      summary: "PUT /api/v1/security/web/targets/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/security/web/targets/{id}/scan":
+    post:
+      operationId: s_handleWebTargetScan
+      summary: "POST /api/v1/security/web/targets/{id}/scan"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/service-request/catalog:
+    get:
+      operationId: s_handleServiceRequestCatalog
+      summary: "GET /api/v1/service-request/catalog"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/services:
+    get:
+      operationId: s_handleListBusinessServices
+      summary: "GET /api/v1/services"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertBusinessService
+      summary: "POST /api/v1/services"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/services/{id}":
+    delete:
+      operationId: s_handleDeleteBusinessService
+      summary: "DELETE /api/v1/services/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/services/{id}/impact":
+    get:
+      operationId: s_handleBusinessServiceImpact
+      summary: "GET /api/v1/services/{id}/impact"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/slos:
+    get:
+      operationId: s_handleListSLOs
+      summary: "GET /api/v1/slos"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertSLO
+      summary: "POST /api/v1/slos"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/slos/{id}":
+    delete:
+      operationId: s_handleDeleteSLO
+      summary: "DELETE /api/v1/slos/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/slos/{id}/trend":
+    get:
+      operationId: s_handleSLOTrend
+      summary: "GET /api/v1/slos/{id}/trend"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/snmp/hosts:
+    get:
+      operationId: s_handleSNMPHosts
+      summary: "GET /api/v1/snmp/hosts"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/snmp/interface-history:
+    get:
+      operationId: s_handleSNMPInterfaceHistory
+      summary: "GET /api/v1/snmp/interface-history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/snmp/list:
+    get:
+      operationId: s_handleSNMPList
+      summary: "GET /api/v1/snmp/list"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/snmp/traps:
+    get:
+      operationId: s_handleSNMPTraps
+      summary: "GET /api/v1/snmp/traps"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/snmp/{hostID}":
+    delete:
+      operationId: s_handleDeleteSNMP
+      summary: "DELETE /api/v1/snmp/{hostID}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: hostID
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/sql/analyze:
+    post:
+      operationId: s_handleSQLAnalyze
+      summary: "POST /api/v1/sql/analyze"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sql/audit:
+    post:
+      operationId: s_handleSQLAudit
+      summary: "POST /api/v1/sql/audit"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sql/beautify:
+    post:
+      operationId: s_handleSQLBeautify
+      summary: "POST /api/v1/sql/beautify"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sql/change-requests:
+    get:
+      operationId: s_handleListSQLChangeRequests
+      summary: "GET /api/v1/sql/change-requests"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleCreateSQLChangeRequest
+      summary: "POST /api/v1/sql/change-requests"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/sql/change-requests/{id}/approve":
+    post:
+      operationId: s_handleApproveSQLChangeRequest
+      summary: "POST /api/v1/sql/change-requests/{id}/approve"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/change-requests/{id}/execute":
+    post:
+      operationId: s_handleExecuteSQLChangeRequest
+      summary: "POST /api/v1/sql/change-requests/{id}/execute"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/change-requests/{id}/reject":
+    post:
+      operationId: s_handleRejectSQLChangeRequest
+      summary: "POST /api/v1/sql/change-requests/{id}/reject"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/sql/connections:
+    get:
+      operationId: s_handleListMySQLConnections
+      summary: "GET /api/v1/sql/connections"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertMySQLConnection
+      summary: "POST /api/v1/sql/connections"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/sql/connections/{id}":
+    delete:
+      operationId: s_handleDeleteMySQLConnection
+      summary: "DELETE /api/v1/sql/connections/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    get:
+      operationId: s_handleGetMySQLConnection
+      summary: "GET /api/v1/sql/connections/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    put:
+      operationId: s_handleUpsertMySQLConnection
+      summary: "PUT /api/v1/sql/connections/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/exec-ddl":
+    post:
+      operationId: s_handleMySQLExecDDL
+      summary: "POST /api/v1/sql/connections/{id}/exec-ddl"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/explain":
+    post:
+      operationId: s_handleMySQLExplain
+      summary: "POST /api/v1/sql/connections/{id}/explain"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/locks":
+    get:
+      operationId: s_handleMySQLLocks
+      summary: "GET /api/v1/sql/connections/{id}/locks"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/processlist":
+    get:
+      operationId: s_handleMySQLProcesslist
+      summary: "GET /api/v1/sql/connections/{id}/processlist"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/query":
+    post:
+      operationId: s_handleSQLWorkbenchQuery
+      summary: "POST /api/v1/sql/connections/{id}/query"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/schema":
+    get:
+      operationId: s_handleMySQLSchema
+      summary: "GET /api/v1/sql/connections/{id}/schema"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/schema/health":
+    get:
+      operationId: s_handleMySQLSchemaHealth
+      summary: "GET /api/v1/sql/connections/{id}/schema/health"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/slow-sql/latest":
+    get:
+      operationId: s_handleSlowSQLLatest
+      summary: "GET /api/v1/sql/connections/{id}/slow-sql/latest"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/slow-sql/ps-limits":
+    get:
+      operationId: s_handleSlowSQLPSLimits
+      summary: "GET /api/v1/sql/connections/{id}/slow-sql/ps-limits"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/slow-sql/ps-limits/apply":
+    post:
+      operationId: s_handleSlowSQLApplyPSLimits
+      summary: "POST /api/v1/sql/connections/{id}/slow-sql/ps-limits/apply"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/slow-sql/run":
+    post:
+      operationId: s_handleSlowSQLRun
+      summary: "POST /api/v1/sql/connections/{id}/slow-sql/run"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/sql/connections/{id}/test":
+    post:
+      operationId: s_handleTestMySQLConnection
+      summary: "POST /api/v1/sql/connections/{id}/test"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/sql/history:
+    get:
+      operationId: s_handleSQLQueryHistory
+      summary: "GET /api/v1/sql/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleAppendSQLQueryHistory
+      summary: "POST /api/v1/sql/history"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sql/optimize:
+    post:
+      operationId: s_handleSQLOptimize
+      summary: "POST /api/v1/sql/optimize"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sql/slow-sql/reports:
+    get:
+      operationId: s_handleSlowSQLReports
+      summary: "GET /api/v1/sql/slow-sql/reports"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sre/effect:
+    get:
+      operationId: s_handleSREEffect
+      summary: "GET /api/v1/sre/effect"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/sre/overview:
+    get:
+      operationId: s_handleSREOverview
+      summary: "GET /api/v1/sre/overview"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/summary:
+    get:
+      operationId: s_handleSummary
+      summary: "GET /api/v1/summary"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/terminal/commands:
+    get:
+      operationId: s_handleTerminalCommands
+      summary: "GET /api/v1/terminal/commands"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/terminal/sessions:
+    get:
+      operationId: s_handleListTerminalSessions
+      summary: "GET /api/v1/terminal/sessions"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/terminal/sessions/{id}/observe":
+    get:
+      operationId: s_handleTerminalObserve
+      summary: "GET /api/v1/terminal/sessions/{id}/observe"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/terminal/sessions/{id}/replay":
+    get:
+      operationId: s_handleTerminalReplay
+      summary: "GET /api/v1/terminal/sessions/{id}/replay"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/tickets:
+    get:
+      operationId: s_handleListTickets
+      summary: "GET /api/v1/tickets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleCreateTicket
+      summary: "POST /api/v1/tickets"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/tickets/sla:
+    get:
+      operationId: s_handleGetTicketSLA
+      summary: "GET /api/v1/tickets/sla"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleSetTicketSLA
+      summary: "POST /api/v1/tickets/sla"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/tickets/sla/breaches:
+    get:
+      operationId: s_handleTicketSLABreaches
+      summary: "GET /api/v1/tickets/sla/breaches"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/tickets/{id}":
+    delete:
+      operationId: s_handleDeleteTicket
+      summary: "DELETE /api/v1/tickets/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    get:
+      operationId: s_handleGetTicket
+      summary: "GET /api/v1/tickets/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+    post:
+      operationId: s_handleUpdateTicket
+      summary: "POST /api/v1/tickets/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/tickets/{id}/comment":
+    post:
+      operationId: s_handleCommentTicket
+      summary: "POST /api/v1/tickets/{id}/comment"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/tickets/{id}/link":
+    post:
+      operationId: s_handleTicketLink
+      summary: "POST /api/v1/tickets/{id}/link"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/topology/auto-discover:
+    get:
+      operationId: s_handleDiscoverAutoTopology
+      summary: "GET /api/v1/topology/auto-discover"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleDiscoverAutoTopology
+      summary: "POST /api/v1/topology/auto-discover"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/topology/edges:
+    get:
+      operationId: s_handleListTopologyEdges
+      summary: "GET /api/v1/topology/edges"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleUpsertTopologyEdge
+      summary: "POST /api/v1/topology/edges"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/topology/edges/{id}":
+    delete:
+      operationId: s_handleDeleteTopologyEdge
+      summary: "DELETE /api/v1/topology/edges/{id}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/topology/rca:
+    get:
+      operationId: s_handleTopologyRCA
+      summary: "GET /api/v1/topology/rca"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/v1/users:
+    get:
+      operationId: s_handleListUsers
+      summary: "GET /api/v1/users"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      operationId: s_handleCreateUser
+      summary: "POST /api/v1/users"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  "/api/v1/users/{username}":
+    delete:
+      operationId: s_handleDeleteUser
+      summary: "DELETE /api/v1/users/{username}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+    post:
+      operationId: s_handleUpdateUser
+      summary: "POST /api/v1/users/{username}"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/users/{username}/reset-mfa":
+    post:
+      operationId: s_handleResetUserMFA
+      summary: "POST /api/v1/users/{username}/reset-mfa"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+  "/api/v1/users/{username}/reset-password":
+    post:
+      operationId: s_handleResetUserPassword
+      summary: "POST /api/v1/users/{username}/reset-password"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+  /api/v1/weather:
+    get:
+      operationId: s_handleWeather
+      summary: "GET /api/v1/weather"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true

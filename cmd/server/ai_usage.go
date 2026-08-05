@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
@@ -11,34 +12,45 @@ import (
 )
 
 // insertAICallEvent appends one AI call observation permanently (survives restart).
+// The base table and its partitioned twin are written in one transaction so a
+// partial failure never leaves the two copies divergent (this is a billing-
+// adjacent write path).
 func (p *pgStore) insertAICallEvent(st aiCallStat) {
 	if p == nil || p.db == nil {
 		return
 	}
-	_, err := p.db.Exec(`
+	_ = p.withPgTx(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
 INSERT INTO ai_call_events(
   ts, task, model, actor, latency_ms, ok, error,
   memory_hits, skill_hits, reply_chars, approx_tokens,
-  prompt_tokens, completion_tokens, cost_estimate
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		st.Ts, nullStr(st.Task), nullStr(st.Model), nullStr(st.Actor),
-		st.LatencyMs, st.OK, nullStr(st.Error),
-		st.MemHits, st.SkillHits, st.ReplyChars, st.ApproxTokens,
-		st.PromptTokens, st.CompletionTokens, st.CostEstimate)
-	if err != nil {
-		slog.Warn("PG ? AI ??????", "err", err)
-	}
-	// Dual-track partitioned table (best-effort).
-	_, _ = p.db.Exec(`
+  prompt_tokens, completion_tokens, cost_estimate, usage_source, prompt_version, route_reason
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			st.Ts, nullStr(st.Task), nullStr(st.Model), nullStr(st.Actor),
+			st.LatencyMs, st.OK, nullStr(st.Error),
+			st.MemHits, st.SkillHits, st.ReplyChars, st.ApproxTokens,
+			st.PromptTokens, st.CompletionTokens, st.CostEstimate, nullStr(st.UsageSource), nullStr(st.PromptVersion), nullStr(st.RouteReason))
+		if err != nil {
+			slog.Warn("PG ? AI ??????", "err", err)
+			return nil // non-fatal: keep observability best-effort
+		}
+		// Dual-track partitioned table (best-effort, same txn).
+		_, err = tx.Exec(`
 INSERT INTO ai_call_events_p(
   ts, task, model, actor, latency_ms, ok, error,
   memory_hits, skill_hits, reply_chars, approx_tokens,
-  prompt_tokens, completion_tokens, cost_estimate
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		st.Ts, nullStr(st.Task), nullStr(st.Model), nullStr(st.Actor),
-		st.LatencyMs, st.OK, nullStr(st.Error),
-		st.MemHits, st.SkillHits, st.ReplyChars, st.ApproxTokens,
-		st.PromptTokens, st.CompletionTokens, st.CostEstimate)
+  prompt_tokens, completion_tokens, cost_estimate, usage_source, prompt_version, route_reason
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			st.Ts, nullStr(st.Task), nullStr(st.Model), nullStr(st.Actor),
+			st.LatencyMs, st.OK, nullStr(st.Error),
+			st.MemHits, st.SkillHits, st.ReplyChars, st.ApproxTokens,
+			st.PromptTokens, st.CompletionTokens, st.CostEstimate, nullStr(st.UsageSource), nullStr(st.PromptVersion), nullStr(st.RouteReason))
+		if err != nil {
+			slog.Warn("PG ? AI ????p", "err", err)
+			return nil
+		}
+		return nil
+	})
 }
 
 // insertAIFeedbackEvent persists a privacy-minimized quality signal. sourceHash
@@ -72,15 +84,16 @@ func (p *pgStore) aiCallStatsFromPG(sinceTs int64, recentLimit int) map[string]a
 		out["persisted"] = false
 		return out
 	}
-	var total, fail, sumLat, sumTok sql.NullInt64
+	var total, fail, sumLat, sumTok, sumExactTok sql.NullInt64
 	var sumCost sql.NullFloat64
 	err := p.db.QueryRow(`
 SELECT COUNT(*),
        COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
        COALESCE(SUM(latency_ms),0),
-       COALESCE(SUM(approx_tokens),0),
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN approx_tokens ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN prompt_tokens+completion_tokens ELSE 0 END),0),
        COALESCE(SUM(cost_estimate),0)
-FROM ai_call_events_p WHERE ts >= $1`, sinceTs).Scan(&total, &fail, &sumLat, &sumTok, &sumCost)
+FROM ai_call_events_p WHERE ts >= $1`, sinceTs).Scan(&total, &fail, &sumLat, &sumTok, &sumExactTok, &sumCost)
 	if err != nil {
 		slog.Warn("PG ?? AI ????", "err", err)
 		out["persisted"] = false
@@ -91,6 +104,7 @@ FROM ai_call_events_p WHERE ts >= $1`, sinceTs).Scan(&total, &fail, &sumLat, &su
 	out["total"] = t
 	out["fail"] = f
 	out["approx_tokens_total"] = sumTok.Int64
+	out["exact_tokens_total"] = sumExactTok.Int64
 	out["cost_total"] = sumCost.Float64
 	if t > 0 {
 		out["avg_latency_ms"] = sumLat.Int64 / t
@@ -210,7 +224,8 @@ type aiUsageHistoryPoint struct {
 	Timestamp    int64   `json:"timestamp"`
 	Calls        int64   `json:"calls"`
 	Fail         int64   `json:"fail"`
-	Tokens       int64   `json:"tokens"`
+	Tokens       int64   `json:"tokens"`        // 精确 token
+	ApproxTokens int64   `json:"approx_tokens"` // 估算 token
 	Cost         float64 `json:"cost"`
 	AvgLatencyMs int64   `json:"avg_latency_ms"`
 }
@@ -235,7 +250,8 @@ func (p *pgStore) queryAIUsageHistory(fromTs, toTs int64, bucket string) []aiUsa
 SELECT EXTRACT(EPOCH FROM date_trunc('` + trunc + `', to_timestamp(ts)))::bigint AS bucket,
        COUNT(*),
        COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
-       COALESCE(SUM(approx_tokens),0),
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN prompt_tokens+completion_tokens ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN approx_tokens ELSE 0 END),0),
        COALESCE(SUM(cost_estimate),0),
        COALESCE(AVG(latency_ms),0)::bigint
 FROM ai_call_events_p
@@ -250,7 +266,7 @@ GROUP BY 1 ORDER BY 1`
 	var out []aiUsageHistoryPoint
 	for rows.Next() {
 		var pt aiUsageHistoryPoint
-		if rows.Scan(&pt.Timestamp, &pt.Calls, &pt.Fail, &pt.Tokens, &pt.Cost, &pt.AvgLatencyMs) != nil {
+		if rows.Scan(&pt.Timestamp, &pt.Calls, &pt.Fail, &pt.Tokens, &pt.ApproxTokens, &pt.Cost, &pt.AvgLatencyMs) != nil {
 			continue
 		}
 		out = append(out, pt)
@@ -259,12 +275,13 @@ GROUP BY 1 ORDER BY 1`
 }
 
 type aiUserUsageRow struct {
-	Actor  string  `json:"actor"`
-	Calls  int64   `json:"calls"`
-	Fail   int64   `json:"fail"`
-	Tokens int64   `json:"tokens"`
-	Cost   float64 `json:"cost"`
-	AvgMs  int64   `json:"avg_latency_ms"`
+	Actor        string  `json:"actor"`
+	Calls        int64   `json:"calls"`
+	Fail         int64   `json:"fail"`
+	Tokens       int64   `json:"tokens"`        // 精确 token
+	ApproxTokens int64   `json:"approx_tokens"` // 估算 token
+	Cost         float64 `json:"cost"`
+	AvgMs        int64   `json:"avg_latency_ms"`
 }
 
 func (p *pgStore) queryAIUsageByUser(fromTs, toTs int64, limit int) []aiUserUsageRow {
@@ -278,7 +295,8 @@ func (p *pgStore) queryAIUsageByUser(fromTs, toTs int64, limit int) []aiUserUsag
 SELECT COALESCE(NULLIF(TRIM(actor),''),'(system)') AS actor,
        COUNT(*),
        COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END),0),
-       COALESCE(SUM(approx_tokens),0),
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN prompt_tokens+completion_tokens ELSE 0 END),0),
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN approx_tokens ELSE 0 END),0),
        COALESCE(SUM(cost_estimate),0),
        COALESCE(AVG(latency_ms),0)::bigint
 FROM ai_call_events_p
@@ -292,7 +310,7 @@ GROUP BY 1 ORDER BY SUM(approx_tokens) DESC NULLS LAST LIMIT $3`, fromTs, toTs, 
 	var out []aiUserUsageRow
 	for rows.Next() {
 		var r aiUserUsageRow
-		if rows.Scan(&r.Actor, &r.Calls, &r.Fail, &r.Tokens, &r.Cost, &r.AvgMs) != nil {
+		if rows.Scan(&r.Actor, &r.Calls, &r.Fail, &r.Tokens, &r.ApproxTokens, &r.Cost, &r.AvgMs) != nil {
 			continue
 		}
 		out = append(out, r)
@@ -338,6 +356,95 @@ func estimateAICost(cfg AIConfig, promptTok, completionTok, approxTok int) float
 	return cost
 }
 
+// aiBillingReconcileRow is one day of exact-vs-estimated cost/token comparison.
+type aiBillingReconcileRow struct {
+	Day          string  `json:"day"`
+	ExactTokens  int64   `json:"exact_tokens"`
+	ApproxTokens int64   `json:"approx_tokens"`
+	ExactCost    float64 `json:"exact_cost"`
+	ApproxCost   float64 `json:"approx_cost"`
+	// DiffRate is (approx-exact)/exact; negative when exact exceeds estimate.
+	DiffRate float64 `json:"diff_rate"`
+}
+
+// billingReconcileFromPG returns per-day exact vs estimated token/cost so a
+// customer can verify our ledger reconciles with the provider's bill. This is
+// the "可审计账本" surface for paid deployments.
+func (p *pgStore) billingReconcileFromPG(fromTs, toTs int64) []aiBillingReconcileRow {
+	if p == nil || p.db == nil {
+		return nil
+	}
+	rows, err := p.db.Query(`
+SELECT to_char(to_timestamp(ts), 'YYYY-MM-DD') AS day,
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN prompt_tokens+completion_tokens ELSE 0 END),0) AS exact_tok,
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN approx_tokens ELSE 0 END),0) AS approx_tok,
+       COALESCE(SUM(CASE WHEN usage_source='exact' THEN cost_estimate ELSE 0 END),0) AS exact_cost,
+       COALESCE(SUM(CASE WHEN usage_source<>'exact' THEN cost_estimate ELSE 0 END),0) AS approx_cost
+FROM ai_call_events_p
+WHERE ts >= $1 AND ts <= $2
+GROUP BY 1 ORDER BY 1`, fromTs, toTs)
+	if err != nil {
+		slog.Warn("PG ?? AI billing reconcile", "err", err)
+		return nil
+	}
+	defer rows.Close()
+	var out []aiBillingReconcileRow
+	for rows.Next() {
+		var r aiBillingReconcileRow
+		if rows.Scan(&r.Day, &r.ExactTokens, &r.ApproxTokens, &r.ExactCost, &r.ApproxCost) != nil {
+			continue
+		}
+		if r.ExactCost != 0 {
+			r.DiffRate = (r.ApproxCost - r.ExactCost) / r.ExactCost
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// handleAIBillingReconcile GET /api/v1/admin/ai/billing-reconcile?from=&to=
+// Admin-only via routeAllowed prefix (see auth.go routeAllowed /api/v1/admin/).
+func (s *Server) handleAIBillingReconcile(w http.ResponseWriter, r *http.Request) {
+	fromTs, toTs := parseTimeRangeQuery(r, 30*24*time.Hour)
+	var rows []aiBillingReconcileRow
+	if s.pg != nil {
+		rows = s.pg.billingReconcileFromPG(fromTs, toTs)
+	}
+	if rows == nil {
+		rows = []aiBillingReconcileRow{}
+	}
+	var sumExactTok, sumApproxTok int64
+	var sumExactCost, sumApproxCost float64
+	for _, r := range rows {
+		sumExactTok += r.ExactTokens
+		sumApproxTok += r.ApproxTokens
+		sumExactCost += r.ExactCost
+		sumApproxCost += r.ApproxCost
+	}
+	diffRate := 0.0
+	if sumExactCost != 0 {
+		diffRate = (sumApproxCost - sumExactCost) / sumExactCost
+	}
+	cfg := s.cfg.AIConfig()
+	cur := cfg.CostCurrency
+	if cur == "" {
+		cur = "CNY"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"from": fromTs, "to": toTs,
+		"cost_currency": cur,
+		"persisted":     s.pg != nil,
+		"days":          rows,
+		"total": map[string]any{
+			"exact_tokens":  sumExactTok,
+			"approx_tokens": sumApproxTok,
+			"exact_cost":    sumExactCost,
+			"approx_cost":   sumApproxCost,
+			"diff_rate":     diffRate,
+		},
+	})
+}
+
 // handleAIStats returns durable AI observability aggregates (PG) when available.
 // Query: days (default 30). Falls back to process-local hub if PG unavailable.
 func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
@@ -357,6 +464,7 @@ func (s *Server) handleAIStats(w http.ResponseWriter, r *http.Request) {
 		out["days"] = days
 		out["by_model"] = s.pg.aiCallByModelFromPG(since)
 		out["by_task_cost"] = s.pg.aiCallByTaskCostFromPG(since)
+		out["by_route_reason"] = s.pg.aiCallByRouteReasonFromPG(since)
 		cfg := s.cfg.AIConfig()
 		out["cost_currency"] = cfg.CostCurrency
 		if out["cost_currency"] == "" {

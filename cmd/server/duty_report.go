@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -115,6 +116,11 @@ func (s *Server) buildWeeklyEffectReport() (string, bool) {
 		eff.IncidentCount, eff.ResolvedCount, humanSec(eff.MTTRP50Sec), humanSec(eff.MTTRP75Sec), humanSec(eff.MTTAP50Sec))
 	fmt.Fprintf(&b, "- 闭环 %d 次（闭环率 %.1f%%），AI 验证通过率 %.1f%%（样本 %d）\n",
 		eff.ClosedLoopCount, eff.ClosedLoopRate*100, eff.VerifyPassRate*100, eff.VerifySampleSize)
+	// 评测通过率（他证）：对照 ground truth 的黄金集通过率，比自证的 VerifyPassRate 更可审计。
+	if eff.EvalRunCount > 0 {
+		fmt.Fprintf(&b, "- 黄金集评测通过率 %.1f%%（%d/%d 样本，评测集 %s，模型 %s）\n",
+			eff.EvalPassRate*100, eff.EvalPassedCount, eff.EvalRunCount, eff.EvalSetVersion, eff.EvalModel)
+	}
 	fmt.Fprintf(&b, "- AI 运行 %d 次，采纳率 %.1f%%，Skill 命中 %d 次，记忆命中 %d 次\n",
 		eff.AIRunCount, eff.AIAdoptionRate*100, eff.SkillHitRuns, eff.MemoryHitRuns)
 	fmt.Fprintf(&b, "- 变更 %d 次，失败率 %.1f%%，告警噪音比 %.1f%%\n",
@@ -174,6 +180,12 @@ func (s *Server) runDutyReportLoop() {
 				if s.shouldRememberUnverifiedAIOutput() {
 					go s.rememberAI("weekly_effect", "effect:weekly", weekly)
 				}
+			}
+			// 周一同步跑一次在线评测黄金集，把「验证通过率」从自证变成对照 ground truth 的他证。
+			if evalSum, err := s.runWeeklyEval(); err != nil {
+				slog.Warn("ai.eval weekly failed", "err", err)
+			} else if evalSum.CaseCount > 0 {
+				slog.Info("ai.eval weekly", "run", evalSum.RunID, "pass_rate", evalSum.PassRate, "cases", evalSum.CaseCount)
 			}
 		}
 	}

@@ -48,6 +48,14 @@ type SREEffectReport struct {
 	AIFallbackCount  int     `json:"ai_fallback_count"`
 	AIToolTurnRuns   int     `json:"ai_tool_turn_runs"`
 
+	// Golden-set eval (他证): from ai_eval_runs, not self-verification.
+	EvalRunCount    int     `json:"eval_run_count"`
+	EvalPassedCount int     `json:"eval_passed_count"`
+	EvalPassRate    float64 `json:"eval_pass_rate"`
+	EvalSetVersion  string  `json:"eval_set_version"`
+	EvalModel       string  `json:"eval_model"`
+	EvalMode        string  `json:"eval_mode"`
+
 	// Learning assets (private Skills / memory compounding)
 	SkillHitRuns            int     `json:"skill_hit_runs"`
 	MemoryHitRuns           int     `json:"memory_hit_runs"`
@@ -302,6 +310,17 @@ func (s *Server) computeSREEffect(windowDays int) SREEffectReport {
 	rep.VerifySampleSize = verifyN
 	if verifyN > 0 {
 		rep.VerifyPassRate = float64(verifyOK) / float64(verifyN)
+	}
+	// 黄金集评测通过率（他证）：来自最近一次 ai_eval_runs，供周报引用可审计数字。
+	if s.pg != nil {
+		if ev, err := s.pg.latestEvalRun(); err == nil && ev.RunID != "" {
+			rep.EvalRunCount = ev.CaseCount
+			rep.EvalPassedCount = ev.PassedCount
+			rep.EvalPassRate = ev.PassRate
+			rep.EvalSetVersion = ev.EvalSetVersion
+			rep.EvalModel = ev.Model
+			rep.EvalMode = ev.Mode
+		}
 	}
 	return rep
 }

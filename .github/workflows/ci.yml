@@ -37,8 +37,14 @@ jobs:
       - name: Generate agent embed assets
         run: go generate ./cmd/agent
 
+      - name: OpenAPI contract gate
+        run: go run ./cmd/server/genapi --check
+
       - name: Go test (server)
         run: go test ./cmd/server/ -count=1 -timeout 15m
+
+      - name: AI eval golden set
+        run: go test ./cmd/server/ -count=1 -run 'TestEvalCasesLoad|TestEvalRunSetOffline|TestPersistAndLatestEvalRun|TestLatestEvalRunEmpty' -timeout 3m
 
       - name: Agent update / unit heal gate
         run: |
