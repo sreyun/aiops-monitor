@@ -94,6 +94,10 @@ AIOps 把高频路径收敛为 **一个可自托管的平台**：
 
 ```bash
 # 推荐：Docker Compose 一键拉起 server + VictoriaMetrics + Postgres(pgvector)
+bash scripts/secure-compose.sh
+#    Windows：powershell -ExecutionPolicy Bypass -File scripts/secure-compose.ps1
+
+# 1) 一键拉起 server + VictoriaMetrics + Postgres(pgvector)
 docker compose up -d
 
 # 浏览器打开 http://localhost:8529

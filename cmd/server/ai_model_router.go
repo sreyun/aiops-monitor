@@ -60,3 +60,79 @@ func applyRoutedModel(cfg AIConfig, task string) AIConfig {
 	}
 	return cfg
 }
+
+// ModelPrice 是单个模型每百万 token 的价格（成本估算护栏用）。
+type ModelPrice struct {
+	InputPer1M  float64 `json:"input_per_1m"`
+	OutputPer1M float64 `json:"output_per_1m"`
+}
+
+// ModelRouteDecision 是一次任务级模型路由决策的结果，附带成本单价。
+type ModelRouteDecision struct {
+	Task        string
+	Model       string
+	Routed      bool
+	InputPer1M  float64
+	OutputPer1M float64
+	Reason      string
+}
+
+// resolveModelRoute 基于任务解析模型路由决策，并附带成本单价。
+// 价格来源：ModelPricingJSON 命中的模型取配置单价，未配置时回退主配置单价。
+func resolveModelRoute(cfg AIConfig, task string) ModelRouteDecision {
+	model, routed := resolveModelForTask(cfg, task)
+	d := ModelRouteDecision{Task: task, Model: model, Routed: routed}
+	if price := modelPriceFromJSON(cfg.ModelPricingJSON, model); price != nil {
+		d.InputPer1M, d.OutputPer1M = price.InputPer1M, price.OutputPer1M
+	} else {
+		d.InputPer1M, d.OutputPer1M = cfg.InputPricePer1M, cfg.OutputPricePer1M
+	}
+	switch {
+	case model == "":
+		d.Reason = "no_model"
+	case routed && taskModelFromJSON(cfg.TaskModelsJSON, task) != "":
+		d.Reason = "task_models"
+	case routed:
+		d.Reason = "cheap_model"
+	default:
+		d.Reason = "primary"
+	}
+	return d
+}
+
+// modelPriceFromJSON 读取 ModelPricingJSON 中指定模型的单价；未配置返回 nil。
+func modelPriceFromJSON(raw, model string) *ModelPrice {
+	raw = strings.TrimSpace(raw)
+	model = strings.TrimSpace(model)
+	if raw == "" || model == "" {
+		return nil
+	}
+	var m map[string]ModelPrice
+	if json.Unmarshal([]byte(raw), &m) != nil {
+		return nil
+	}
+	if p, ok := m[model]; ok {
+		return &p
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, model) {
+			p := v
+			return &p
+		}
+	}
+	return nil
+}
+
+// EstimateQueryCost 按输入/输出 token 估算一次调用的成本（元）。
+func (d ModelRouteDecision) EstimateQueryCost(inTokens, outTokens int) float64 {
+	return (float64(inTokens)/1e6)*d.InputPer1M + (float64(outTokens)/1e6)*d.OutputPer1M
+}
+
+// costGuardrailOK 判断单次调用估算成本是否超过护栏上限（MaxCostPerQueryCNY<=0 表示不限制）。
+func costGuardrailOK(cfg AIConfig, task string, inTokens, outTokens int) bool {
+	if cfg.MaxCostPerQueryCNY <= 0 {
+		return true
+	}
+	d := resolveModelRoute(cfg, task)
+	return d.EstimateQueryCost(inTokens, outTokens) <= cfg.MaxCostPerQueryCNY
+}

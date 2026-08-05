@@ -13,6 +13,24 @@
 
 ## [Unreleased]
 
+### 安全加固（P0）
+- **SQL 工作台只读校验升级为 AST 白名单**：MySQL 走 Vitess AST（拒绝 DML/DDL 节点、`FOR UPDATE`、`INTO OUTFILE`、`pg_sleep/set_config/lo_export/load_file` 等危险函数）；PostgreSQL 走 fail-closed 词法校验；两种驱动均追加数据库会话级 READ ONLY 兜底（写操作即使绕过上层校验也会被数据库拒绝），并修复 PG `search_path` 事务级失效问题。
+- **AI 语音出站加固**：TTS/STT 由裸 `http.DefaultClient` 改为带 120s 超时 + SSRF 出站守卫的客户端。
+- **Agent Windows unsafe 修复**：`collector_windows.go` 改用 `unsafe.Slice`；`desktop_clipboard_windows.go` 增加 `handleToPointer` 安全转换；`go vet ./cmd/agent` 清零。
+- **发布流水线**：release 构建 Go 版本改为跟随 `go.mod`；Release 附带 `SHA256SUMS.txt` 校验和。
+
+### ⚠️ 升级注意（Breaking Change）
+- **docker-compose 不再内置默认口令**：`POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY` 缺失时启动直接失败（`${VAR:?}`）。
+  - 升级方式：在仓库目录执行 `bash scripts/secure-compose.sh`（Linux/macOS）或 `powershell -ExecutionPolicy Bypass -File scripts/secure-compose.ps1`（Windows）生成/补写强随机密钥到 `.env`，再 `docker compose up -d`。
+  - 已在使用默认口令的存量部署：务必在升级前改密，并同步 `AIOPS_POSTGRES_DSN` 与 PostgreSQL 实例密码。
+
+### AI 闭环与模型路由
+- **SRE 效果周报**：每周一 08:00 自动推送近 7 天闭环率 / AI 验证通过率 / 采纳率 / MTTR / 变更失败率 / 告警噪音 / Skill 与记忆命中（`duty_report.go`），并沉淀 RAG 记忆（`effect:weekly`）。
+- **模型路由与成本护栏**：新增 `resolveModelRoute`（任务映射 / cheap_model 路由 + 每模型单价）、`EstimateQueryCost` 与 `costGuardrailOK`；`AIConfig` 新增 `ModelPricingJSON`、`MaxCostPerQueryCNY`。
+
+### 文档
+- 新增 `docs/engineering/scale-1000-hosts.md`（千台部署手册）、`docs/aiops-ai/closed-loop-weekly-report.md`（AI 闭环周报）、`docs/commercial/pricing-model.md`（定价模型）、`docs/compliance/china-sovereignty.md`（信创合规）、`docs/enterprise/edition-roadmap.md`（企业版路线图）；`docs/README.md` 已建立索引。
+
 ---
 
 ## [v0.19.65] — 2026-08-05

@@ -30,13 +30,19 @@
 **正式环境**
 
 ```bash
-# 推荐：自动下载编排并生成强随机密钥到 .env
+# 推荐：自动下载编排并生成强随机密钥到 .env（Linux/macOS）
 bash <(curl -fsSL https://raw.githubusercontent.com/sreyun/aiops-monitor/master/scripts/secure-compose.sh)
 docker compose up -d
 
-# 或在已克隆仓库内：
-cp .env.example .env          # 修改 POSTGRES_PASSWORD / AIOPS_SECRET_KEY
+# 或在已克隆仓库内使用本地脚本（无需联网）：
+#   Linux/macOS：bash scripts/secure-compose.sh
+#   Windows：    powershell -ExecutionPolicy Bypass -File scripts/secure-compose.ps1
+# 脚本会确保 POSTGRES_PASSWORD / AIOPS_SECRET_KEY / AIOPS_INSTALL_TOKEN 为强随机值
 docker compose up -d
+
+# 手动方式（不推荐）：v0.19.66 起 .env.example 的密钥已置空，compose 缺失密钥会拒绝启动，
+# 必须自行填写强随机 POSTGRES_PASSWORD / AIOPS_SECRET_KEY 后再启动
+# cp .env.example .env && vi .env && docker compose up -d
 # 可选本机 Agent：docker compose --profile agent up -d
 ```
 

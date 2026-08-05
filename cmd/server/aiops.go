@@ -87,6 +87,10 @@ type AIConfig struct {
 	InputPricePer1M  float64 `json:"input_price_per_1m,omitempty"`
 	OutputPricePer1M float64 `json:"output_price_per_1m,omitempty"`
 	CostCurrency     string  `json:"cost_currency,omitempty"` // CNY | USD …
+	// ModelPricingJSON：按模型覆盖成本单价，{"gpt-4o-mini":{"input_per_1m":0.15,"output_per_1m":0.6}}
+	ModelPricingJSON string `json:"model_pricing_json,omitempty"`
+	// MaxCostPerQueryCNY：单次 AI 调用成本护栏（元）；0=不限制
+	MaxCostPerQueryCNY float64 `json:"max_cost_per_query_cny,omitempty"`
 	// ---- AI 治理（商业级最小集）----
 	// DailyQuotaPerUser：每用户每日 AI 调用上限（Assist/Chat/Sreyun/Diagnose 等）；0=不限制。
 	DailyQuotaPerUser int `json:"daily_quota_per_user,omitempty"`
@@ -103,7 +107,7 @@ type AIConfig struct {
 	// ---- AI 语音（可选云端 STT/TTS；留空则客户端继续用系统/浏览器语音）----
 	// SpeechEndpoint：OpenAI 兼容音频根路径（如 https://api.openai.com/v1）；留空=复用主 Endpoint 的 /v1 根。
 	SpeechEndpoint string `json:"speech_endpoint,omitempty"`
-	SpeechAPIKey   string `json:"speech_api_key,omitempty"` // 留空=复用主 API Key
+	SpeechAPIKey   string `json:"speech_api_key,omitempty"`   // 留空=复用主 API Key
 	SpeechSTTModel string `json:"speech_stt_model,omitempty"` // 如 whisper-1 / gpt-4o-mini-transcribe
 	SpeechTTSModel string `json:"speech_tts_model,omitempty"` // 如 tts-1 / gpt-4o-mini-tts
 	SpeechTTSVoice string `json:"speech_tts_voice,omitempty"` // alloy / nova / shimmer …
@@ -114,7 +118,6 @@ type AIConfig struct {
 	// SelfEvolveEnabled：每日维护循环额外执行技能提炼后的成长日记与自我优化总结。
 	SelfEvolveEnabled bool `json:"self_evolve_enabled,omitempty"`
 }
-
 
 // UnmarshalJSON accepts both ai_* (preferred) and legacy hermes_* keys so upgrades
 // do not drop Agent settings; marshaling always emits ai_* only.

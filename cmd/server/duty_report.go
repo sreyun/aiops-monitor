@@ -102,6 +102,34 @@ func (s *Server) buildDutyReportContext() (string, bool) {
 	return b.String(), notable
 }
 
+// buildWeeklyEffectReport 汇总近 7 天 SRE 闭环效果指标，供每周一早报使用。
+// 无任何事件 / AI / 变更数据时返回 notable=false（跳过推送，避免空报告打扰）。
+func (s *Server) buildWeeklyEffectReport() (string, bool) {
+	eff := s.computeSREEffect(7)
+	if eff.IncidentCount == 0 && eff.AIRunCount == 0 && eff.ChangeCount == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "【近 7 天 SRE 效果】\n")
+	fmt.Fprintf(&b, "- 事件 %d 起（已解决 %d），MTTR P50 %s / P75 %s，MTTA P50 %s\n",
+		eff.IncidentCount, eff.ResolvedCount, humanSec(eff.MTTRP50Sec), humanSec(eff.MTTRP75Sec), humanSec(eff.MTTAP50Sec))
+	fmt.Fprintf(&b, "- 闭环 %d 次（闭环率 %.1f%%），AI 验证通过率 %.1f%%（样本 %d）\n",
+		eff.ClosedLoopCount, eff.ClosedLoopRate*100, eff.VerifyPassRate*100, eff.VerifySampleSize)
+	fmt.Fprintf(&b, "- AI 运行 %d 次，采纳率 %.1f%%，Skill 命中 %d 次，记忆命中 %d 次\n",
+		eff.AIRunCount, eff.AIAdoptionRate*100, eff.SkillHitRuns, eff.MemoryHitRuns)
+	fmt.Fprintf(&b, "- 变更 %d 次，失败率 %.1f%%，告警噪音比 %.1f%%\n",
+		eff.ChangeCount, eff.ChangeFailureRate*100, eff.AlertNoiseRatio*100)
+	return b.String(), true
+}
+
+// humanSec 将秒数格式化为可读时长（<=0 显示为 -）。
+func humanSec(sec int64) string {
+	if sec <= 0 {
+		return "-"
+	}
+	return (time.Duration(sec) * time.Second).Truncate(time.Second).String()
+}
+
 // generateDutyReport 汇总态势并调用 AI 生成晨报文本。返回 (晨报, 是否有值得关注的态势, error)。
 func (s *Server) generateDutyReport() (string, bool, error) {
 	ctx, notable := s.buildDutyReportContext()
@@ -135,9 +163,18 @@ func (s *Server) runDutyReportLoop() {
 		if err != nil || !notable || strings.TrimSpace(report) == "" {
 			continue // 平静或失败：不推送
 		}
-		s.messages.push("ai", "info", "🌅 值班晨报", trimLine(report, 400), "sre", "")
+		s.messages.push("ai", "info", "☕ 值班早报", trimLine(report, 400), "sre", "")
 		if s.shouldRememberUnverifiedAIOutput() {
 			go s.rememberAI("duty_report", "duty:daily", report)
+		}
+		// 每周一追加一份 SRE 效果周报，量化“AI 闭环 / 采纳 / 验证”等可证明价值。
+		if time.Now().Weekday() == time.Monday {
+			if weekly, ok := s.buildWeeklyEffectReport(); ok {
+				s.messages.push("ai", "info", "📊 本周 SRE 效果周报", trimLine(weekly, 400), "sre", "")
+				if s.shouldRememberUnverifiedAIOutput() {
+					go s.rememberAI("weekly_effect", "effect:weekly", weekly)
+				}
+			}
 		}
 	}
 }

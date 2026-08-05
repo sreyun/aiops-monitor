@@ -50,6 +50,10 @@
 - **PostgreSQL**：定期 `pg_dump` 或流复制；备份包含审计、事件、工单与 RAG 向量。Web 管理员可在「个人信息 → 数据与备份」启用每日自动备份、下载与二次确认还原（需服务端 PATH 含 `pg_dump` / `pg_restore`，目录默认 `./backups` 或环境变量 `AIOPS_BACKUP_DIR`）。还原后建议重启服务端以刷新内存态。
 - **VictoriaMetrics**：按保留策略与存储容量规划；如需长期归档，配置远端对象存储。本迭代 Web 备份**不包含** VM / `./data` 录音目录，请继续用外部方案。
 - **配置**：`AIOPS_SECRET_KEY`、`AIOPS_RELAY_SECRET` 等密钥请纳入密钥管理，升级时保持不变以避免数据不可解密。
+
+> ⚠️ **v0.19.66 起（Breaking Change）**：docker-compose 不再内置默认口令，`POSTGRES_PASSWORD` / `AIOPS_SECRET_KEY` 缺失时 compose 拒绝启动。
+> 升级前请在仓库目录运行 `bash scripts/secure-compose.sh`（Linux/macOS）或 `powershell -ExecutionPolicy Bypass -File scripts/secure-compose.ps1`（Windows）生成 `.env`；
+> 使用旧默认口令的部署请同步修改 PostgreSQL 密码与 `AIOPS_POSTGRES_DSN`。
 - **升级**：建议先在预发环境验证，再滚动升级服务端；采集端可分批灰度。
 
 ---
