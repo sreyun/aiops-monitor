@@ -1107,31 +1107,137 @@ safeAddEventListener("forgotUserLink", "click", openRecoverUser);
 safeAddEventListener("forgotPassLink", "click", openRecoverPass);
 
 // 登录
-let LOGIN_TYPE = "username"; // "username" | "phone"
-safeAddEventListener("loginSwitchType", "click", (e) => {
-  e.preventDefault();
+let LOGIN_TYPE = "username"; // "username" | "phone" | "sms"
+let _loginSmsCooldownTimer = null;
+
+function applyLoginType(type) {
+  LOGIN_TYPE = type === "phone" || type === "sms" ? type : "username";
   const phoneHint = $("loginPhoneHint");
-  if (LOGIN_TYPE === "username") {
-    LOGIN_TYPE = "phone";
-    $("loginUserLabel").textContent = I18N.t("profile.phone") || "手机号";
-    $("loginUser").placeholder = I18N.t("login.phone_placeholder") || "输入手机号";
-    $("loginUser").type = "tel";
-    $("loginUser").maxLength = 11;
-    $("loginSwitchType").textContent = I18N.t("login.switch_username") || "用户名登录";
-    if (phoneHint) phoneHint.style.display = "";
+  const passField = $("loginPassField");
+  const smsField = $("loginSmsField");
+  const switchType = $("loginSwitchType");
+  const switchSms = $("loginSwitchSms");
+  const userEl = $("loginUser");
+  const labelEl = $("loginUserLabel");
+  if (LOGIN_TYPE === "sms") {
+    if (labelEl) labelEl.textContent = I18N.t("profile.phone") || "手机号";
+    if (userEl) {
+      userEl.placeholder = I18N.t("login.phone_placeholder") || "输入手机号";
+      userEl.type = "tel";
+      userEl.maxLength = 11;
+    }
+    if (passField) passField.style.display = "none";
+    if (smsField) smsField.style.display = "";
+    if (phoneHint) {
+      phoneHint.style.display = "";
+      phoneHint.removeAttribute("data-i18n");
+      phoneHint.textContent = I18N.t("login.sms_hint") || "使用已绑定手机号与短信验证码登录";
+    }
+    if (switchType) switchType.textContent = I18N.t("login.switch_username") || "用户名登录";
+    if (switchSms) switchSms.textContent = I18N.t("login.switch_phone") || "手机号登录";
+  } else if (LOGIN_TYPE === "phone") {
+    if (labelEl) labelEl.textContent = I18N.t("profile.phone") || "手机号";
+    if (userEl) {
+      userEl.placeholder = I18N.t("login.phone_placeholder") || "输入手机号";
+      userEl.type = "tel";
+      userEl.maxLength = 11;
+    }
+    if (passField) passField.style.display = "";
+    if (smsField) smsField.style.display = "none";
+    if (phoneHint) {
+      phoneHint.style.display = "";
+      phoneHint.setAttribute("data-i18n", "login.phone_password_hint");
+      phoneHint.textContent = I18N.t("login.phone_password_hint") || "使用已绑定手机号与登录密码（非短信验证码）。";
+    }
+    if (switchType) switchType.textContent = I18N.t("login.switch_username") || "用户名登录";
+    if (switchSms) switchSms.textContent = I18N.t("login.sms_login_btn") || "短信验证码登录";
   } else {
-    LOGIN_TYPE = "username";
-    $("loginUserLabel").textContent = I18N.t("login.username") || "用户名";
-    $("loginUser").placeholder = I18N.t("form.login_account") || I18N.t("login.username_placeholder") || "管理员账号";
-    $("loginUser").type = "text";
-    $("loginUser").maxLength = 524288;
-    $("loginSwitchType").textContent = I18N.t("login.switch_phone") || "手机号登录";
-    if (phoneHint) phoneHint.style.display = "none";
+    if (labelEl) labelEl.textContent = I18N.t("login.username") || "用户名";
+    if (userEl) {
+      userEl.placeholder = I18N.t("form.login_account") || I18N.t("login.username_placeholder") || "管理员账号";
+      userEl.type = "text";
+      userEl.maxLength = 524288;
+    }
+    if (passField) passField.style.display = "";
+    if (smsField) smsField.style.display = "none";
+    if (phoneHint) {
+      phoneHint.style.display = "none";
+      phoneHint.setAttribute("data-i18n", "login.phone_password_hint");
+      phoneHint.textContent = I18N.t("login.phone_password_hint") || "使用已绑定手机号与登录密码（非短信验证码）。";
+    }
+    if (switchType) switchType.textContent = I18N.t("login.switch_phone") || "手机号登录";
+    if (switchSms) switchSms.textContent = I18N.t("login.sms_login_btn") || "短信验证码登录";
   }
-  $("loginUser").value = "";
-  $("loginPass").value = "";
+  if (userEl) userEl.value = "";
+  const passEl = $("loginPass"); if (passEl) passEl.value = "";
+  const smsCodeEl = $("loginSmsCode"); if (smsCodeEl) smsCodeEl.value = "";
   const loginErrEl = $("loginErr"); if (loginErrEl) loginErrEl.textContent = "";
   const codeField = $("loginCodeField"); if (codeField) codeField.style.display = "none";
+}
+
+safeAddEventListener("loginSwitchType", "click", (e) => {
+  e.preventDefault();
+  if (LOGIN_TYPE === "username") applyLoginType("phone");
+  else applyLoginType("username");
+});
+safeAddEventListener("loginSwitchSms", "click", (e) => {
+  e.preventDefault();
+  if (LOGIN_TYPE === "sms") applyLoginType("phone");
+  else applyLoginType("sms");
+});
+
+safeAddEventListener("loginSendSmsBtn", "click", async () => {
+  const btn = $("loginSendSmsBtn");
+  const phone = ($("loginUser") && $("loginUser").value || "").trim();
+  const loginErrEl = $("loginErr");
+  if (!phone) {
+    if (loginErrEl) loginErrEl.textContent = I18N.t("login.phone_required") || "请输入手机号";
+    else if (typeof toast === "function") toast(I18N.t("login.phone_required") || "请输入手机号", "err");
+    return;
+  }
+  if (btn && btn.disabled) return;
+  try {
+    const r = await fetchWithTimeout(`${API}/login/sms-code`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone })
+    }, 15000);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = j.error || j.message || I18N.t("login.sms_send_failed") || "短信发送失败";
+      if (loginErrEl) loginErrEl.textContent = msg;
+      else if (typeof toast === "function") toast(msg, "err");
+      return;
+    }
+    const okMsg = j.message || I18N.t("login.sms_sent") || "验证码已发送，请检查手机短信";
+    if (typeof toast === "function") toast(okMsg, "ok");
+    else if (loginErrEl) loginErrEl.textContent = okMsg;
+    if (btn) {
+      let left = 60;
+      const label = I18N.t("login.send_sms") || "发送验证码";
+      btn.disabled = true;
+      btn.textContent = `${left}s`;
+      if (_loginSmsCooldownTimer) clearInterval(_loginSmsCooldownTimer);
+      _loginSmsCooldownTimer = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(_loginSmsCooldownTimer);
+          _loginSmsCooldownTimer = null;
+          btn.disabled = false;
+          btn.textContent = label;
+        } else {
+          btn.textContent = `${left}s`;
+        }
+      }, 1000);
+    }
+    const smsCodeEl = $("loginSmsCode");
+    if (smsCodeEl) setTimeout(() => smsCodeEl.focus(), 30);
+  } catch (err) {
+    const msg = err.name === "AbortError"
+      ? (I18N.t("toast.login_timeout_mfa") || "请求超时")
+      : (I18N.t("login.sms_send_failed") || "短信发送失败");
+    if (loginErrEl) loginErrEl.textContent = msg;
+    else if (typeof toast === "function") toast(msg, "err");
+  }
 });
 
 safeAddEventListener("loginForm", "submit", async e => {
@@ -1146,14 +1252,24 @@ safeAddEventListener("loginForm", "submit", async e => {
       // 去掉自动填充可能带入的空格/短横线，只提交 6 位数字
       const totpCode = codeEl ? String(codeEl.value || "").replace(/\D/g, "").slice(0, 6) : "";
       if (codeEl && totpCode) codeEl.value = totpCode;
+      const payload = {
+        username: $("loginUser").value.trim(),
+        login_type: LOGIN_TYPE,
+        code: totpCode
+      };
+      if (LOGIN_TYPE === "sms") {
+        const smsEl = $("loginSmsCode");
+        payload.sms_code = smsEl ? String(smsEl.value || "").replace(/\D/g, "").slice(0, 8) : "";
+        if (!payload.sms_code) {
+          if (loginErrEl) loginErrEl.textContent = I18N.t("login.sms_code_required") || "请输入短信验证码";
+          return;
+        }
+      } else {
+        payload.password = $("loginPass").value;
+      }
       const r = await fetchWithTimeout(`${API}/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: $("loginUser").value.trim(),
-          password: $("loginPass").value,
-          login_type: LOGIN_TYPE,
-          code: totpCode
-        })
+        body: JSON.stringify(payload)
       }, 15000);
       fetched = true; // 请求已成功返回——之后任何错误都不是"网络连接失败"
       const j = await r.json().catch(() => ({}));

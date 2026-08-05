@@ -59,7 +59,7 @@ if [ "$RESTARTED" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ "$(id -u)
     grep -q "^ProtectSystem=false" "$f" || echo "ProtectSystem=false" >> "$f"
     grep -q "^User=root" "$f" || echo "User=root" >> "$f"
   done; systemctl daemon-reload' 2>/dev/null || true
-  if systemctl restart aiops-monitor-agent 2>/dev/null || systemctl restart aiops-agent 2>/dev/null; then
+	if systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null; then
     RESTARTED=1
   fi
 fi

@@ -64,6 +64,19 @@ Wave 2/3（已落地骨架）：
 | Fallback | `fallback_models` 主模型失败时切换 |
 | Eval | `go test` 内 `TestEval*` 黄金用例（离线） |
 
+## Agent 热更新门禁
+
+| 检查 | 命令 / 文档 |
+|------|-------------|
+| 脚本偏好 `aiops-agent` | `go test ./cmd/server/ -run 'Legacy.*AgentUpdate\|CanonicalUnit\|AgentUpdatePending'` |
+| Agent 更新/自愈 | `go test ./cmd/agent/ -run 'AgentUpdate\|UnitHeal\|CanonicalUnit'` |
+| 手工浸泡 | [agent-update-soak.md](./agent-update-soak.md) |
+| Linux 终端权限边缘 | [terminal-linux-privileges.md](./terminal-linux-privileges.md) |
+| 内置剧本包 | `POST /api/v1/playbooks/packs/import`；列表 `GET /api/v1/playbooks/packs` |
+| Year-1 Demo | `scripts/demo-year1-loop.sh` |
+
+CI workflow `.github/workflows/ci.yml` 在 server 全量测试外增加上述 agent_update / unit heal 子集。
+
 ## Year-1 闭环 / 效果 / 服务树（MVP）
 
 | 能力 | 门禁要点 |

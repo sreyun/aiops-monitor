@@ -50,8 +50,8 @@ services:
       - AIOPS_FORWARD_LISTEN=0.0.0.0
       - AIOPS_VM_URL=${AIOPS_VM_URL:-http://victoriametrics:8428}
       # ⚠️ 生产请改 POSTGRES_PASSWORD / AIOPS_SECRET_KEY（见 .env.example）
-      - AIOPS_POSTGRES_DSN=postgres://aiops:${POSTGRES_PASSWORD:-h3Y7Vmb1CZBOApZM86D}@postgres:5432/aiops?sslmode=disable
-      - AIOPS_SECRET_KEY=${AIOPS_SECRET_KEY:-aiops-K7p2mQ9vR4xN8wZ3bY6dF1hJ5sL0tGc-CHANGE-ME-2026}
+      - AIOPS_POSTGRES_DSN=postgres://aiops:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run scripts/secure-compose.sh)}@postgres:5432/aiops?sslmode=disable
+      - AIOPS_SECRET_KEY=${AIOPS_SECRET_KEY:?AIOPS_SECRET_KEY must be set in .env (run scripts/secure-compose.sh)}
       - AIOPS_CONTENT_AUDIT_INGEST_TOKEN=${AIOPS_CONTENT_AUDIT_INGEST_TOKEN:-}
       # 可选：固定安装 Token（与 aiops-agent 的 AIOPS_TOKEN 同步；留空则服务端首次启动自动生成，并写入 ./data/.install_token）
       - AIOPS_INSTALL_TOKEN=${AIOPS_INSTALL_TOKEN:-}
@@ -94,7 +94,7 @@ services:
       - "shared_buffers=256MB"
     environment:
       - POSTGRES_USER=aiops
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-h3Y7Vmb1CZBOApZM86D}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (run scripts/secure-compose.sh)}
       - POSTGRES_DB=aiops
       - TZ=${TZ:-Asia/Shanghai}
     volumes:

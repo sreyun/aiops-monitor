@@ -1,0 +1,48 @@
+name: CI · Go tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "cmd/server/**"
+      - "cmd/agent/**"
+      - "shared/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "cmd/server/**"
+      - "cmd/agent/**"
+      - "shared/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go test (server)
+        run: go test ./cmd/server/ -count=1 -timeout 15m
+
+      - name: Agent update / unit heal gate
+        run: |
+          go test ./cmd/agent/ -count=1 -timeout 10m \
+            -run 'AgentUpdate|UnitHeal|ResolveAgentConfig|LegacyUnix|CanonicalUnit'
+          go test ./cmd/server/ -count=1 -timeout 5m \
+            -run 'Legacy.*AgentUpdate|AgentUpdate|PlaybookPack|CanonicalUnit'
+
+      - name: AI golden subset (explicit)
+        run: go test ./cmd/server/ -count=1 -run 'TestAssistTaskPolicy_Golden|TestAIStatsHub|TestAIGolden' -timeout 2m

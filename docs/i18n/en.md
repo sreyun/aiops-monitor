@@ -1,11 +1,11 @@
-<div align="center">
+﻿<div align="center">
 
 # AIOps
 
 **Open-source, self-hosted host monitoring & SRE platform**  
 Observe · Alert · Remediate · Remote ops · AI diagnosis — one binary you fully control.
 
-[![Version](https://img.shields.io/badge/Version-v0.19.61-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.61)
+[![Version](https://img.shields.io/badge/Version-v0.19.64-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.64)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -57,7 +57,7 @@ Six pillars — not a laundry list:
 5. **Remote ops** — Web terminal (replay, observe, audit, secondary password), remote desktop (JPEG/H.264), port-forward / HTTP proxy with SSRF guards.  
 6. **Secure delivery** — RBAC, MFA, agent fingerprint, AES-256-GCM config crypto; Web console; Android / HarmonyOS apps distributed separately.
 
-Current release **[v0.19.61](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.61)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+Current release **[v0.19.64](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.64)** · Mirrors: [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 

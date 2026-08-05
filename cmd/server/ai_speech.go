@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// speechHTTP 是语音合成/识别共用的带超时 + SSRF 出站守卫客户端。
+// 语音 Endpoint 由用户在 AI 设置中填写，属于可影响 URL 的出站调用，禁止裸 http.DefaultClient。
+
+var speechHTTP = newGuardedHTTPClient(120 * time.Second)
+
 // speechAudioRoot derives OpenAI-compatible /v1 root for audio APIs.
 // Accepts: full chat endpoint, /v1 root, or host-only URL.
 func speechAudioRoot(cfg AIConfig) string {
@@ -105,7 +110,7 @@ func synthesizeSpeechTTS(ctx context.Context, cfg AIConfig, text, voice string) 
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := speechHTTP.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("语音合成上游不可达：%s", err.Error())
 	}
@@ -157,7 +162,7 @@ func transcribeSpeechSTT(ctx context.Context, cfg AIConfig, raw []byte, filename
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := speechHTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("语音识别上游不可达：%s", err.Error())
 	}

@@ -40,7 +40,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
 
       - name: Resolve version
         id: meta
@@ -95,6 +95,12 @@ jobs:
           echo "构建完成:"
           ls -lh dist/
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Build Windows Server 2012 Agent (Go 1.20)
         run: |
           VERSION=${{ steps.meta.outputs.version }}
@@ -120,6 +126,7 @@ jobs:
             dist/aiops-agent-windows-arm64.exe
             dist/aiops-agent-darwin-amd64.tar.gz
             dist/aiops-agent-darwin-arm64.tar.gz
+            dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

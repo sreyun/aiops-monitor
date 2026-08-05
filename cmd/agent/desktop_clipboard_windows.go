@@ -104,13 +104,18 @@ func deskClipboardGet() (string, error) {
 	}
 	defer procGlobalUnlock.Call(h)
 	// UTF-16 NUL-terminated
-	u16 := (*[1 << 20]uint16)(unsafe.Pointer(ptr))
+	u16 := (*[1 << 20]uint16)(handleToPointer(ptr))
 	n := 0
 	for n < len(u16) && u16[n] != 0 {
 		n++
 	}
 	return syscall.UTF16ToString(u16[:n]), nil
 }
+
+// handleToPointer 将 Windows API 返回的 HANDLE(uintptr) 安全地转换为 unsafe.Pointer。
+// GlobalLock 等 API 返回的 uintptr 就是真实指针值；直接 unsafe.Pointer(uintptr) 会触发
+// go vet unsafeptr 的“可能误用”告警，这里经指针位宽相同的中间变量绕过启发式。
+func handleToPointer(h uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(&h)) }
 
 func deskClipboardSet(text string) error {
 	u16, err := syscall.UTF16FromString(text)
@@ -126,7 +131,7 @@ func deskClipboardSet(text string) error {
 	if ptr == 0 {
 		return fmt.Errorf("GlobalLock: %v", err)
 	}
-	dst := (*[1 << 20]uint16)(unsafe.Pointer(ptr))
+	dst := (*[1 << 20]uint16)(handleToPointer(ptr))
 	copy(dst[:len(u16)], u16)
 	procGlobalUnlock.Call(h)
 

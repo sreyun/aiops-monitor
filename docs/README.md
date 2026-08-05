@@ -53,7 +53,9 @@
 | 文档 | 说明 |
 |------|------|
 | [engineering/ci-gate.md](./engineering/ci-gate.md) | CI / SQL 变更 / 安全扫描门禁 |
-| [engineering/year1-acceptance.md](./engineering/year1-acceptance.md) | 年度验收 / POC 清单（可选） |
+| [engineering/agent-update-soak.md](./engineering/agent-update-soak.md) | Agent 热更新 / 终端权限浸泡清单 |
+| [engineering/terminal-linux-privileges.md](./engineering/terminal-linux-privileges.md) | Linux 终端只读边缘（nsenter / allow-nonroot / 容器） |
+| [engineering/year1-acceptance.md](./engineering/year1-acceptance.md) | 年度验收 / POC 清单（可选）；演示脚本 `scripts/demo-year1-loop.sh` |
 
 ## 文档约定
 

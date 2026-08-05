@@ -1,11 +1,11 @@
-<div align="center">
+﻿<div align="center">
 
 # AIOps
 
 **オープンソースのセルフホスト型ホスト監視 & SRE プラットフォーム**  
 観測 · アラート · 自動修復 · リモート運用 · AI 診断 — 完全に自分で制御できる 1 バイナリへ。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.61-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.61)
+[![Version](https://img.shields.io/badge/Version-v0.19.64-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.64)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -57,7 +57,7 @@ AIOps はよく使う経路を **1 つのセルフホスト基盤** にまとめ
 5. **リモート運用** — Web 端末（再生／観戦／監査／二次パスワード）、リモートデスクトップ（JPEG／H.264）、ポート転送／HTTP プロキシと SSRF 防御。
 6. **セキュアな提供** — RBAC、MFA、Agent 指紋、AES-256-GCM；Android／HarmonyOS は別配布。
 
-現行リリース **[v0.19.61](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.61)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+現行リリース **[v0.19.64](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.64)** · [GitHub](https://github.com/sreyun/aiops-monitor)／[Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 

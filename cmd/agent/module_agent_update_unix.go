@@ -205,19 +205,20 @@ func startDetachedShell(script string) error {
 }
 
 func detectLinuxAgentUnit() string {
-	for _, u := range []string{"aiops-monitor-agent", "aiops-agent"} {
+	// Prefer the canonical one-liner / current --install-service name.
+	for _, u := range []string{"aiops-agent", "aiops-monitor-agent"} {
 		out, err := exec.Command("systemctl", "is-active", u).CombinedOutput()
 		if err == nil && strings.TrimSpace(string(out)) == "active" {
 			return u
 		}
 	}
-	if _, err := os.Stat("/etc/systemd/system/aiops-monitor-agent.service"); err == nil {
-		return "aiops-monitor-agent"
-	}
 	if _, err := os.Stat("/etc/systemd/system/aiops-agent.service"); err == nil {
 		return "aiops-agent"
 	}
-	return "aiops-monitor-agent"
+	if _, err := os.Stat("/etc/systemd/system/aiops-monitor-agent.service"); err == nil {
+		return "aiops-monitor-agent"
+	}
+	return "aiops-agent"
 }
 
 func shellQuote(s string) string {

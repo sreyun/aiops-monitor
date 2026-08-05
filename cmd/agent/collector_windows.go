@@ -363,15 +363,14 @@ func readIfTable2() (rx, tx uint64, ok bool) {
 	if n <= 0 || n > 4096 {
 		return 0, 0, false
 	}
-	rowSize := unsafe.Sizeof(mibIfRow2{})
-	base := uintptr(unsafe.Pointer(&table.Table[0]))
+	// unsafe.Slice 直接基于 C 堆内存首元素构造切片，避免 uintptr 指针运算往返（go vet unsafeptr 告警）。
+	rows := unsafe.Slice(&table.Table[0], n)
 	for i := 0; i < n; i++ {
-		row := (*mibIfRow2)(unsafe.Pointer(base + uintptr(i)*rowSize))
-		if row.Type == ifTypeLoopback {
+		if rows[i].Type == ifTypeLoopback {
 			continue
 		}
-		rx += row.InOctets
-		tx += row.OutOctets
+		rx += rows[i].InOctets
+		tx += rows[i].OutOctets
 	}
 	return rx, tx, true
 }

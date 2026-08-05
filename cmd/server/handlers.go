@@ -254,8 +254,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/config/test", s.handleTestConfig)
 	mux.HandleFunc("GET /api/v1/config/threshold-presets", s.handleThresholdPresets)
 	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
-	// NOTE: POST /api/v1/login/sms-code removed — SMS login is not yet implemented.
-	// Re-register when the SMS sending backend is wired.
+	mux.HandleFunc("POST /api/v1/login/sms-code", s.handleLoginSMSCode)
 	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/me", s.handleMe)
 	mux.HandleFunc("POST /api/v1/profile", s.handleSetProfile)
@@ -344,6 +343,8 @@ func (s *Server) Routes() http.Handler {
 	// Playbooks (automation)
 	mux.HandleFunc("GET /api/v1/playbooks", s.handleListPlaybooks)
 	mux.HandleFunc("POST /api/v1/playbooks", s.handleUpsertPlaybook)
+	mux.HandleFunc("GET /api/v1/playbooks/packs", s.handleListPlaybookPacks)
+	mux.HandleFunc("POST /api/v1/playbooks/packs/import", s.handleImportPlaybookPacks)
 	mux.HandleFunc("DELETE /api/v1/playbooks/{id}", s.handleDeletePlaybook)
 	mux.HandleFunc("GET /api/v1/playbooks/{id}/revisions", s.handleListPlaybookRevisions)
 	mux.HandleFunc("GET /api/v1/playbooks/{id}/revisions/diff", s.handleDiffPlaybookRevisions)

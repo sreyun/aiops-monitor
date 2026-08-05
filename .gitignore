@@ -83,11 +83,12 @@ website/
 # 已废弃的独立前端工程（勿再纳入主仓；控制台仅经典版 cmd/server/web）
 frontend/
 
-# CI/CD 配置（仅保留 release.yml 自动构建，其他 .github/ 内容不提交）
+# CI/CD 配置（默认仅提交 release.yml；ci.yml 为 PR/推送测试门禁）
 .github/*
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/release.yml
+!.github/workflows/ci.yml
 Makefile
 
 # 运行时数据目录（不提交）

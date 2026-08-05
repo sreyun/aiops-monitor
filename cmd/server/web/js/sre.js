@@ -943,7 +943,10 @@ async function executePlaybook(id) {
         pf.auto_rollback ? "失败自动回滚：已启用（仅执行显式回滚命令）。" : "失败自动回滚：未启用。",
         ...(pf.warnings || [])
       ].filter(Boolean).join("\n");
-      if (!confirm(detail + "\n\n确认继续执行？")) return;
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({ title: I18N.t("ui.execute", "执行"), message: detail + "\n\n确认继续执行？", tone: "danger" })
+        : confirm(detail + "\n\n确认继续执行？");
+      if (!ok) return;
       riskAccepted = !!(pf.requires_approval || pf.freeze_active);
     }
     const headers = riskAccepted ? {"X-AIOps-Risk-Accepted": "true"} : {};
@@ -1097,7 +1100,14 @@ function renderExecResult(exec, opts) {
 
 async function cancelPlaybookExecution(execId) {
   if (!execId) return;
-  if (!confirm(I18N.t("exec.confirm_cancel", "确认彻底停止该剧本执行？未开始的主机将不再下发任务；进行中的会话会中止（不会向主机下发 kill 脚本）。"))) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("exec.stop", "停止"),
+        message: I18N.t("exec.confirm_cancel", "确认彻底停止该剧本执行？未开始的主机将不再下发任务；进行中的会话会中止（不会向主机下发 kill 脚本）。"),
+        tone: "danger"
+      })
+    : confirm(I18N.t("exec.confirm_cancel", "确认彻底停止该剧本执行？未开始的主机将不再下发任务；进行中的会话会中止（不会向主机下发 kill 脚本）。"));
+  if (!ok) return;
   const btn = $("execCancelBtn");
   if (btn) btn.disabled = true;
   try {
@@ -1267,10 +1277,17 @@ const PB_READONLY_TEMPLATES = {
   }
 };
 
-function applyPbTemplate(key) {
+async function applyPbTemplate(key) {
   const tpl = PB_READONLY_TEMPLATES[key];
   if (!tpl) return;
-  if (!confirm(`将用「${tpl.name}」替换当前步骤列表，是否继续？`)) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("ui.apply", "应用"),
+        message: `将用「${tpl.name}」替换当前步骤列表，是否继续？`,
+        tone: "danger"
+      })
+    : confirm(`将用「${tpl.name}」替换当前步骤列表，是否继续？`);
+  if (!ok) return;
   $("pbName").value = tpl.name;
   $("pbDesc").value = tpl.description;
   renderPbSteps(tpl.steps.map(s => Object.assign({
@@ -1282,6 +1299,20 @@ function applyPbTemplate(key) {
 safeAddEventListener("pbTemplateBar", "click", e => {
   const b = e.target.closest("[data-pb-tpl]");
   if (b) applyPbTemplate(b.dataset.pbTpl);
+});
+safeAddEventListener("pbImportPacksBtn", "click", async () => {
+  const btn = $("pbImportPacksBtn");
+  await withLoading(btn || "pbImportPacksBtn", async () => {
+    try {
+      const r = await fetch(`${API}/playbooks/packs/import`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(j.error || "导入失败", "err"); return; }
+      toast(`内置剧本包导入完成：新增 ${j.imported || 0}，跳过 ${j.skipped || 0}`, "ok");
+      loadPlaybooks();
+    } catch (e) { toast("导入失败：" + e, "err"); }
+  });
 });
 
 // 把编辑器中的剧本对象整理为可读文本，供 AI 预检
@@ -1361,7 +1392,7 @@ safeAddEventListener("pbSaveBtn", "click", savePlaybook);
 safeAddEventListener("pbSchedEnabled", "change", pbSchedRefresh);
 safeAddEventListener("pbSchedKind", "change", pbSchedRefresh);
 safeAddEventListener("pbHistoryBtn", "click", loadExecHistory);
-safeAddEventListener("playbookList", "click", e => {
+safeAddEventListener("playbookList", "click", async e => {
   const card = e.target.closest(".pb-card"); if (!card) return;
   const act = e.target.closest("[data-pbact]"); if (!act) return;
   const id = card.dataset.id;
@@ -1371,7 +1402,14 @@ safeAddEventListener("playbookList", "click", e => {
       const pb = pbs.find(p=>p.id===id); if (pb) openPlaybookModal(pb);
     });
   } else if (act.dataset.pbact === "del") {
-    if (!confirm(I18N.t("valid.confirm_delete_playbook"))) return;
+    const ok = typeof uiConfirm === "function"
+      ? await uiConfirm({
+          title: I18N.t("ui.delete", "删除"),
+          message: I18N.t("valid.confirm_delete_playbook"),
+          tone: "danger"
+        })
+      : confirm(I18N.t("valid.confirm_delete_playbook"));
+    if (!ok) return;
     fetch(`${API}/playbooks/${encodeURIComponent(id)}`, {method:"DELETE"}).then(()=>{toast(I18N.t("toast.deleted"),"ok");loadPlaybooks();});
   }
 });
@@ -1617,11 +1655,17 @@ async function incidentLoopAct(id, action, gate){
     }
     let body={};
     if(action==="propose" && gate && gate.ok===false){
-      if(!confirm((gate.reason||"诊断闸门未通过")+"\n仍要强制提案？（需管理员）")) return;
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({ title: I18N.t("ui.confirm","确认"), message: (gate.reason||"诊断闸门未通过")+"\n仍要强制提案？（需管理员）", tone: "danger" })
+        : confirm((gate.reason||"诊断闸门未通过")+"\n仍要强制提案？（需管理员）");
+      if(!ok) return;
       body.force=true;
     }
     if(action==="promote"){
-      if(!confirm("将回验通过的诊断沉淀为 Skill？")) return;
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({ title: I18N.t("ui.confirm","确认"), message: "将回验通过的诊断沉淀为 Skill？", tone: "danger" })
+        : confirm("将回验通过的诊断沉淀为 Skill？");
+      if(!ok) return;
     }
     const r=await fetch(`${API}/incidents/${id}/loop/${action}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json().catch(()=>({}));
@@ -1666,7 +1710,14 @@ async function incidentAction(id, act){
     else if (act==="close-ticket"){
       const tid=(window._curIncident&&window._curIncident.ticket_id)||0;
       if(!tid){ toast(I18N.t("sre.ticket_none","尚未升级工单"),"err"); return; }
-      if(!confirm(I18N.t("sre.confirm_close_ticket","关闭工单并回写事件为已解决？"))) return;
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({
+            title: I18N.t("ui.close","关闭"),
+            message: I18N.t("sre.confirm_close_ticket","关闭工单并回写事件为已解决？"),
+            tone: "danger"
+          })
+        : confirm(I18N.t("sre.confirm_close_ticket","关闭工单并回写事件为已解决？"));
+      if(!ok) return;
       const cur=await fetch(`${API}/tickets/${tid}`).then(r=>r.json());
       const body={title:cur.title,priority:cur.priority||"p3",status:"closed",assignee:cur.assignee||"",description:cur.description||""};
       const r=await fetch(`${API}/tickets/${tid}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -2256,10 +2307,15 @@ function renderRules(rules){
       <div class="pb-card-foot"><div class="pb-pills">${g.map(x=>`<span class="badge">${esc(x)}</span>`).join("")}</div>
         <div class="fwd-actions"><button class="btn sm" data-rract="edit">${I18N.t("ui.edit","编辑")}</button><button class="btn danger sm" data-rract="del">${I18N.t("ui.delete","删除")}</button></div></div></div>`;
   }).join("");
-  el.querySelectorAll("[data-rule]").forEach(card=>card.querySelectorAll("[data-rract]").forEach(b=>b.onclick=e=>{ e.stopPropagation();
+  el.querySelectorAll("[data-rule]").forEach(card=>card.querySelectorAll("[data-rract]").forEach(b=>b.onclick=async e=>{ e.stopPropagation();
     const id=card.dataset.rule;
     if(b.dataset.rract==="edit") openRuleModal(SRE_RULES.find(x=>x.id===id));
-    else if(confirm(I18N.t("sre.confirm_del_rule","确认删除该规则？"))) fetch(`${API}/remediation/rules/${id}`,{method:"DELETE"}).then(()=>loadRemediation());
+    else {
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({ title: I18N.t("ui.delete","删除"), message: I18N.t("sre.confirm_del_rule","确认删除该规则？"), tone: "danger" })
+        : confirm(I18N.t("sre.confirm_del_rule","确认删除该规则？"));
+      if(ok) fetch(`${API}/remediation/rules/${id}`,{method:"DELETE"}).then(()=>loadRemediation());
+    }
   }));
 }
 function renderRuns(runs){
@@ -3131,7 +3187,14 @@ function openChangeRecModal(c){
     let r=await fetch(url,{method:"POST"});
     let j=await r.json().catch(()=>({}));
     if(!r.ok && action==="approve" && /职责分离|自批|作者/.test(String(j.error||""))){
-      if(confirm((j.error||"职责分离拦截")+"\n\n管理员可 break-glass 强制批准（记入审计）。是否继续？")){
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({
+            title: I18N.t("ui.confirm","确认"),
+            message: (j.error||"职责分离拦截")+"\n\n管理员可 break-glass 强制批准（记入审计）。是否继续？",
+            tone: "danger"
+          })
+        : confirm((j.error||"职责分离拦截")+"\n\n管理员可 break-glass 强制批准（记入审计）。是否继续？");
+      if(ok){
         r=await fetch(url+(url.includes("?")?"&":"?")+"break_glass=1",{method:"POST"});
         j=await r.json().catch(()=>({}));
       } else return;

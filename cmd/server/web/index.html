@@ -693,6 +693,7 @@
               <button class="vt-btn" title="列表" data-act="pb-view" data-view="list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
             </div>
             <button class="btn" id="pbHistoryBtn" data-i18n-title="ui.exec_history_title" data-i18n="ui.exec_history" title="查看执行历史">执行历史</button>
+            <button class="btn" id="pbImportPacksBtn" type="button">导入内置剧本包</button>
             <button class="btn primary" id="addPlaybookBtn" data-i18n="ui.new_playbook">+ 新建剧本</button>
           </div>
           <div id="playbookList"></div>
@@ -1875,6 +1876,14 @@
       <!-- 自定义 Webhook 面板 -->
       <div class="tab-panel" id="tab-webhook">
         <label class="switch mb"><input type="checkbox" id="customWebhookEnabled" data-i18n-label="settings.enable_custom_webhook"> 启用自定义 Webhook</label>
+        <div class="field" id="webhookPresetRow">
+          <label data-i18n="settings.webhook_presets">快速模板</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button type="button" class="btn" id="webhookPresetSlack">Slack</button>
+            <button type="button" class="btn" id="webhookPresetTeams">Microsoft Teams</button>
+          </div>
+          <div class="hint" data-i18n="settings.webhook_presets_hint">填入 Incoming Webhook URL 后点模板即可写入推荐 Body；仍走自定义 Webhook 通道。</div>
+        </div>
         <div class="field">
           <label data-i18n="settings.webhook_url">Webhook URL</label>
           <input type="text" id="customWebhookURL" placeholder="https://your-api.example.com/alert">
@@ -4014,12 +4023,21 @@
     <div class="field" id="loginUserField"><label id="loginUserLabel" data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="管理员账号"></div>
     <div class="field" id="loginPassField"><label data-i18n="login.password">密码</label><input type="password" id="loginPass" autocomplete="current-password" data-i18n-placeholder="form.password" placeholder="登录密码"></div>
     <p class="login-mode-hint" id="loginPhoneHint" style="display:none" data-i18n="login.phone_password_hint">使用已绑定手机号与登录密码（非短信验证码）。</p>
+    <div class="field" id="loginSmsField" style="display:none">
+      <label data-i18n="login.sms_code">短信验证码</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="loginSmsCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" style="flex:1" data-i18n-placeholder="login.sms_code_placeholder" placeholder="6 位短信验证码">
+        <button type="button" class="btn" id="loginSendSmsBtn" data-i18n="login.send_sms">发送验证码</button>
+      </div>
+    </div>
     <div class="field" id="loginCodeField" style="display:none"><label data-i18n="login.totp_code">动态验证码</label><input type="text" id="loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" data-i18n-placeholder="login.totp_placeholder" placeholder="Authenticator 6 位口令"></div>
     <button class="btn primary block" type="submit" data-i18n="ui.login">登 录</button>
     <div class="login-divider" id="ssoLoginDivider" hidden><span data-i18n="login.or_continue">或使用以下方式继续</span></div>
     <div id="ssoLoginBtns" class="sso-login-btns" hidden></div>
     <div class="login-links">
       <a href="#" id="loginSwitchType" data-i18n="login.switch_phone">手机号登录</a>
+      <span class="sep">·</span>
+      <a href="#" id="loginSwitchSms" data-i18n="login.sms_login_btn">短信验证码登录</a>
       <span class="sep">·</span>
       <a href="#" id="forgotUserLink" data-i18n="login.forgot_user">忘记用户名</a>
       <span class="sep">·</span>

@@ -1234,7 +1234,14 @@ async function deskSendUnlockCredentials() {
     toast(I18N.t("desktop.unlock_empty", "请输入密码（或用户名）"), "err");
     return;
   }
-  if (!confirm(I18N.t("desktop.unlock_confirm", "确认向远程主机发送解锁凭据？内容不会写入日志。"))) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("desktop.unlock", "解锁"),
+        message: I18N.t("desktop.unlock_confirm", "确认向远程主机发送解锁凭据？内容不会写入日志。"),
+        tone: "danger"
+      })
+    : confirm(I18N.t("desktop.unlock_confirm", "确认向远程主机发送解锁凭据？内容不会写入日志。"));
+  if (!ok) return;
   // One agent-side unlock sequence (wake + type) — avoids multi-RTT pacing that
   // made lock-screen passwords appear one character at a time.
   if (DESK_META.features && DESK_META.features.unlock) {

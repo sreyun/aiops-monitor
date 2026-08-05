@@ -2283,3 +2283,17 @@ safeAddEventListener("ticketSlaSaveBtn", "click", saveTicketSlaCfg);
 safeAddEventListener("ticketSlaBreachBtn", "click", showTicketSlaBreaches);
 safeAddEventListener("secretRotateRefreshBtn", "click", loadSecretRotateStatus);
 safeAddEventListener("secretRotateBtn", "click", rotateSecretKeyNow);
+safeAddEventListener("webhookPresetSlack", "click", () => {
+  const ct = $("customWebhookContentType");
+  const body = $("customWebhookBodyTemplate");
+  if (ct) ct.value = "application/json";
+  if (body) body.value = '{"text":"{{.Text}}"}';
+  toast(I18N.t("settings.webhook_presets", "快速模板") + ": Slack", "ok");
+});
+safeAddEventListener("webhookPresetTeams", "click", () => {
+  const ct = $("customWebhookContentType");
+  const body = $("customWebhookBodyTemplate");
+  if (ct) ct.value = "application/json";
+  if (body) body.value = '{"@type":"MessageCard","@context":"https://schema.org/extensions","summary":"AIOps","title":"[{{.Level}}] {{.Hostname}}","text":"{{.Text}}"}';
+  toast(I18N.t("settings.webhook_presets", "快速模板") + ": Microsoft Teams", "ok");
+});

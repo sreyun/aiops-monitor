@@ -7,7 +7,7 @@ import "fmt"
 // Other Unix platforms have no packaged daemon integration yet; run the agent
 // directly (e.g. under your own init/rc script).
 
-const agentServiceName = "aiops-monitor-agent"
+const agentServiceName = "aiops-agent"
 
 func installAgentService(exePath, cfgPath string) error {
 	return fmt.Errorf("--install-service 暂不支持当前平台")

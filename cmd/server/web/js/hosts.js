@@ -702,7 +702,14 @@ function promptFolderName(opts) {
 async function hostFolderDelete(id) {
   const flat = flattenHostFolders(HOST_FOLDERS.folders || []);
   const cur = flat.find(x => x.id === id);
-  if (!confirm(I18N.t("section.folder_delete_confirm") + (cur ? cur.path : id))) return;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("ui.delete", "删除"),
+        message: I18N.t("section.folder_delete_confirm") + (cur ? cur.path : id),
+        tone: "danger"
+      })
+    : confirm(I18N.t("section.folder_delete_confirm") + (cur ? cur.path : id));
+  if (!ok) return;
   try {
     const r = await fetch(`${API}/host-folders/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!r.ok) {
@@ -973,7 +980,15 @@ function renderPager(pages, total) {
 
 /* ---------- 主机操作 ---------- */
 async function delHost(id, name) {
-  if (!confirm(`${I18N.t("valid.confirm_delete_host_prefix")}${I18N.t("ui.delete")}「${name}」？\n若该主机 Agent 仍在运行，约 60 ${I18N.t("time.sec")}后会重新出现。`)) return;
+  const msg = `${I18N.t("valid.confirm_delete_host_prefix")}${I18N.t("ui.delete")}「${name}」？\n若该主机 Agent 仍在运行，约 60 ${I18N.t("time.sec")}后会重新出现。`;
+  const ok = typeof uiConfirm === "function"
+    ? await uiConfirm({
+        title: I18N.t("ui.delete", "删除"),
+        message: msg,
+        tone: "danger"
+      })
+    : confirm(msg);
+  if (!ok) return;
   try {
     const r = await fetch(`${API}/hosts/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (r.ok) { toast(I18N.t("toast.host_deleted"), "ok"); refresh(); } else { toast(I18N.t("toast.delete_failed"), "err"); }

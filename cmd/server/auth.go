@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -23,7 +24,7 @@ func isPublicPath(r *http.Request) bool {
 		"/sw.js", "/manifest.json", "/icon.svg", // PWA shell: SW must register on the pre-login page too
 		"/install.sh", "/install.ps1", "/uninstall.sh", "/uninstall.ps1",
 		"/install-relay.sh", "/install-relay.ps1",
-		"/api/v1/login", "/api/v1/me",
+		"/api/v1/login", "/api/v1/login/sms-code", "/api/v1/me",
 		"/api/v1/auth/oidc/info", "/api/v1/auth/oidc/login", "/api/v1/auth/oidc/callback",
 		"/api/v1/auth/sso/info",
 		"/api/v1/auth/feishu/login", "/api/v1/auth/feishu/callback",
@@ -330,8 +331,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username  string `json:"username"`
 		Password  string `json:"password"`
-		LoginType string `json:"login_type"` // "username" (default), "phone"
+		LoginType string `json:"login_type"` // "username" (default), "phone", "sms"
 		Code      string `json:"code"`       // TOTP second factor (only when MFA is enabled)
+		SMSCode   string `json:"sms_code"`   // OTP for login_type=sms
 	}
 	ip := s.clientIP(r)
 	if !s.auth.loginAllowed(ip) {
@@ -348,6 +350,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	switch req.LoginType {
 	case "phone":
 		acc, authenticated = s.authenticatePhoneLogin(w, r, req.Username, req.Password, ip)
+	case "sms":
+		acc, authenticated = s.authenticateSMSLogin(w, r, req.Username, req.SMSCode, ip)
 	default:
 		acc, authenticated = s.authenticateUsernameLogin(w, r, req.Username, req.Password, ip)
 	}
@@ -355,7 +359,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return // error response already written by the authenticate* helper
 	}
 	// Credentials verified — proceed to MFA + session issuance.
-	s.completeLogin(w, r, acc, req.Password, req.Code, ip)
+	// SMS OTP replaces password; pass empty password into completeLogin.
+	pass := req.Password
+	if req.LoginType == "sms" {
+		pass = ""
+	}
+	s.completeLogin(w, r, acc, pass, req.Code, ip)
 }
 
 // authenticateUsernameLogin verifies username+password via CheckPassword (which
@@ -400,6 +409,45 @@ func (s *Server) authenticatePhoneLogin(w http.ResponseWriter, r *http.Request, 
 			s.autoDefendOnLoginLockout(ip, acc.Username)
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
+		return acc, false
+	}
+	if !s.auth.loginAccountAllowed(acc.Username) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
+		return acc, false
+	}
+	return acc, true
+}
+
+// authenticateSMSLogin verifies a one-time SMS code previously issued by
+// handleLoginSMSCode. On failure, writes the error response and returns false.
+func (s *Server) authenticateSMSLogin(w http.ResponseWriter, r *http.Request, phone, smsCode, ip string) (AccountConfig, bool) {
+	phone = strings.TrimSpace(phone)
+	smsCode = strings.TrimSpace(smsCode)
+	var acc AccountConfig
+	if phone == "" || smsCode == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "login.sms_code_required")})
+		return acc, false
+	}
+	acc, found := s.cfg.UserByPhone(phone)
+	if !found {
+		s.auth.loginFailed(ip)
+		s.auth.loginAccountFailed(phone)
+		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: ip, IP: ip, Message: Tz("log.login_failed", "sms:"+maskPhone(phone))})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
+		return acc, false
+	}
+	smsCodeMu.Lock()
+	entry, ok := smsCodes[phone]
+	valid := ok && time.Now().Before(entry.ExpireAt) && subtle.ConstantTimeCompare([]byte(entry.Code), []byte(smsCode)) == 1
+	if valid {
+		delete(smsCodes, phone)
+	}
+	smsCodeMu.Unlock()
+	if !valid {
+		s.auth.loginFailed(ip)
+		s.auth.loginAccountFailed(acc.Username)
+		s.store.AddLog(LogEntry{Kind: KindSystem, Level: "warning", Actor: acc.Username, Username: acc.Username, IP: ip, Message: Tz("log.login_failed", "sms:"+acc.Username)})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "login.sms_code_invalid")})
 		return acc, false
 	}
 	if !s.auth.loginAccountAllowed(acc.Username) {
@@ -558,7 +606,7 @@ func (s *Server) handleSetProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": name})
 }
 
-// ---- SMS verification code (reserved for future phone login) ----
+// ---- SMS verification code (login OTP) ----
 
 // smsCodeEntry is a temporary in-memory store for SMS verification codes.
 type smsCodeEntry struct {
@@ -573,8 +621,9 @@ var (
 	smsLast   = map[string]time.Time{} // phone -> last send time (rate limit)
 )
 
-// handleLoginSMSCode sends a 6-digit verification code to the given phone number.
-// This is a reserved endpoint — SMS sending is not yet implemented.
+// handleLoginSMSCode sends a 6-digit verification code to the given phone number
+// via the configured cloud SMS channel (same as alert SMS).
+// TemplateParam should use ${code} (e.g. {"code":"${code}"}) for OTP templates.
 func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Phone string `json:"phone"`
@@ -588,17 +637,25 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "login.phone_required")})
 		return
 	}
-	// Check if phone is registered
+	cfgSnap := s.cfg.Get()
+	if !cfgSnap.SMS.Enabled {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "sms_disabled", Tr(r, "login.sms_disabled"))
+		return
+	}
+	if s.notifier == nil {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "sms_unavailable", Tr(r, "login.sms_unavailable"))
+		return
+	}
+	// Check if phone is registered — do not reveal existence.
 	_, found := s.cfg.UserByPhone(phone)
 	if !found {
-		// Don't reveal whether phone exists — use the same delay
+		time.Sleep(80 * time.Millisecond)
 		writeJSON(w, http.StatusOK, map[string]any{"message": Tr(r, "login.sms_sent")})
 		return
 	}
 	// Rate limit: 60s between sends
 	smsLastMu.Lock()
 	pruneExpiredTimeMap(smsLast, time.Now(), maxSMSLast, func(t time.Time) time.Time {
-		// Keep rate-limit entries for 1h after last send.
 		return t.Add(time.Hour)
 	})
 	last, exists := smsLast[phone]
@@ -609,7 +666,6 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	}
 	smsLast[phone] = time.Now()
 	smsLastMu.Unlock()
-	// Generate 6-digit code using crypto/rand
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		writeAPIError(w, r, http.StatusInternalServerError, "sms_gen_failed", "failed to generate code")
@@ -620,9 +676,17 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	pruneExpiredTimeMap(smsCodes, time.Now(), maxSMSCodes, func(e smsCodeEntry) time.Time { return e.ExpireAt })
 	smsCodes[phone] = smsCodeEntry{Code: code, ExpireAt: time.Now().Add(5 * time.Minute)}
 	smsCodeMu.Unlock()
-	// TODO: Call actual SMS sending service here
-	// sendSMS(phone, code)
-	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: fmt.Sprintf("SMS code sent to %s (placeholder)", phone)})
+	smsCfg := cfgSnap.SMS
+	smsCfg.Phones = []string{phone}
+	if err := s.notifier.sendSMS(smsCfg, code); err != nil {
+		smsCodeMu.Lock()
+		delete(smsCodes, phone)
+		smsCodeMu.Unlock()
+		slog.Warn("login SMS send failed", "err", err, "phone_suffix", maskPhone(phone))
+		writeAPIError(w, r, http.StatusBadGateway, "sms_send_failed", Tr(r, "login.sms_send_failed"))
+		return
+	}
+	s.store.AddLog(LogEntry{Kind: KindSystem, Level: "info", Actor: s.actorName(r), IP: s.clientIP(r), Message: fmt.Sprintf("SMS login code sent to %s", maskPhone(phone))})
 	writeJSON(w, http.StatusOK, map[string]any{"message": Tr(r, "login.sms_sent")})
 }
 

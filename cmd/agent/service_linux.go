@@ -25,16 +25,16 @@ import (
 // XAUTHORITY) and keeps the persisted host_id readable, so the browser's session
 // (keyed by the root agent's host_id) matches the worker's desktop/wait.
 
-const agentServiceName = "aiops-monitor-agent"
+const agentServiceName = "aiops-agent"
 
-const systemdUnitPath = "/etc/systemd/system/aiops-monitor-agent.service"
+const systemdUnitPath = "/etc/systemd/system/aiops-agent.service"
 
-// legacyAgentServiceNames are older one-liner / alternate agent unit names that may
-// still be present after partial uninstalls. Do NOT include aiops-relay — that is a
-// separate gateway service and must survive agent reinstall/uninstall.
+// legacyAgentServiceNames includes the historical --install-service name
+// (aiops-monitor-agent). Install/upgrade always writes aiops-agent; heal/update
+// still detect and purge both. Do NOT include aiops-relay.
 var legacyAgentServiceNames = []string{
-	"aiops-monitor-agent",
 	"aiops-agent",
+	"aiops-monitor-agent",
 }
 
 func installAgentService(exePath, cfgPath string) error {

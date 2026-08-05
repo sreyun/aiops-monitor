@@ -1,0 +1,98 @@
+{
+  "id": "selfheal",
+  "name": "内置自愈剧本包",
+  "version": "1.0.0",
+  "playbooks": [
+    {
+      "id": "restart-systemd-service",
+      "name": "重启 systemd 服务（需审批）",
+      "description": "在目标 Linux 主机上重启指定 systemd 服务；默认服务名 nginx，可通过步骤参数修改。执行前请确认变更窗与审批。",
+      "steps": [
+        {
+          "name": "重启服务",
+          "module": "service",
+          "target": "all",
+          "timeout_sec": 60,
+          "args": { "name": "nginx", "state": "restarted" },
+          "when": "{{os}} != windows"
+        }
+      ],
+      "strategy": { "max_parallel": 5, "auto_rollback": false }
+    },
+    {
+      "id": "disk-cleanup-tmp",
+      "name": "清理临时目录大文件（需审批）",
+      "description": "清理 /tmp 与 /var/tmp 中超过 7 天的临时文件（Linux）。生产请先 dry-run 核对路径。",
+      "steps": [
+        {
+          "name": "清理 /tmp",
+          "command": "find /tmp -xdev -type f -mtime +7 -size +50M -print -delete 2>/dev/null | head -n 200",
+          "command_win": "Write-Output 'skip on Windows'",
+          "target": "all",
+          "timeout_sec": 120,
+          "continue_on_error": true,
+          "when": "{{os}} != windows"
+        },
+        {
+          "name": "清理 /var/tmp",
+          "command": "find /var/tmp -xdev -type f -mtime +7 -size +50M -print -delete 2>/dev/null | head -n 200",
+          "command_win": "Write-Output 'skip on Windows'",
+          "target": "all",
+          "timeout_sec": 120,
+          "continue_on_error": true,
+          "when": "{{os}} != windows"
+        },
+        {
+          "name": "磁盘用量复核",
+          "module": "disk_usage",
+          "target": "all",
+          "timeout_sec": 30
+        }
+      ],
+      "strategy": { "max_parallel": 10 }
+    },
+    {
+      "id": "k8s-restart-deploy",
+      "name": "K8s Deployment 滚动重启（需审批）",
+      "description": "对指定 Deployment 执行 kubectl rollout restart（节点需已配置 kubeconfig）。请把 CHANGE_ME / default 改成真实资源。",
+      "steps": [
+        {
+          "name": "滚动重启",
+          "command": "kubectl -n default rollout restart deployment/CHANGE_ME",
+          "command_win": "kubectl -n default rollout restart deployment/CHANGE_ME",
+          "target": "all",
+          "timeout_sec": 90,
+          "continue_on_error": true,
+          "ignore_exit": true
+        },
+        {
+          "name": "Pods 复核",
+          "module": "kube_get",
+          "target": "all",
+          "timeout_sec": 60,
+          "args": { "resource": "pods" },
+          "continue_on_error": true,
+          "ignore_exit": true
+        }
+      ],
+      "strategy": { "max_parallel": 3 }
+    },
+    {
+      "id": "readonly-host-inspect",
+      "name": "深度主机巡检（只读）",
+      "description": "内置只读巡检：host_inspect standard 档，适合日常例行与告警后取证。",
+      "steps": [
+        {
+          "name": "深度主机巡检",
+          "module": "host_inspect",
+          "target": "all",
+          "timeout_sec": 150,
+          "register": "inspect",
+          "ignore_exit": true,
+          "args": { "profile": "standard" }
+        }
+      ],
+      "strategy": { "max_parallel": 30 }
+    }
+  ]
+}

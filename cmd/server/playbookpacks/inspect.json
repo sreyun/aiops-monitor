@@ -1,0 +1,68 @@
+{
+  "id": "inspect",
+  "name": "内置只读巡检包",
+  "version": "1.0.0",
+  "playbooks": [
+    {
+      "id": "sys-quick",
+      "name": "系统巡检（只读·quick）",
+      "description": "host_inspect quick：磁盘/内存/CPU/进程一次采集。",
+      "steps": [
+        {
+          "name": "系统巡检",
+          "module": "host_inspect",
+          "target": "all",
+          "timeout_sec": 90,
+          "register": "inspect",
+          "ignore_exit": true,
+          "continue_on_error": true,
+          "args": { "profile": "quick" }
+        }
+      ]
+    },
+    {
+      "id": "net-readonly",
+      "name": "网络巡检（只读）",
+      "description": "网卡、监听、路由、连接与 DNS 探测。",
+      "steps": [
+        { "name": "网卡地址", "module": "net_ifaces", "target": "all", "timeout_sec": 20 },
+        { "name": "监听端口", "module": "net_listen", "target": "all", "timeout_sec": 25 },
+        { "name": "路由表", "module": "net_routes", "target": "all", "timeout_sec": 15 },
+        { "name": "连接摘要", "module": "net_sockets", "target": "all", "timeout_sec": 25 },
+        {
+          "name": "DNS 解析探测",
+          "module": "dns_resolve",
+          "target": "all",
+          "timeout_sec": 15,
+          "args": { "host": "www.baidu.com" },
+          "continue_on_error": true
+        }
+      ]
+    },
+    {
+      "id": "sec-readonly",
+      "name": "安全巡检（只读）",
+      "description": "登录会话、对外监听、认证失败与主机安全扫描。",
+      "steps": [
+        { "name": "登录会话", "module": "users_logged", "target": "all", "timeout_sec": 20 },
+        { "name": "对外监听", "module": "security_listen", "target": "all", "timeout_sec": 25 },
+        {
+          "name": "认证失败",
+          "module": "auth_failures",
+          "target": "all",
+          "timeout_sec": 35,
+          "continue_on_error": true,
+          "ignore_exit": true
+        },
+        {
+          "name": "主机安全扫描",
+          "module": "host_security_scan",
+          "target": "all",
+          "timeout_sec": 120,
+          "continue_on_error": true,
+          "ignore_exit": true
+        }
+      ]
+    }
+  ]
+}
