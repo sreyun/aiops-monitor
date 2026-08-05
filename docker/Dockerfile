@@ -110,7 +110,9 @@ CMD ["-addr", ":8529", "-config", "/app/data/server_config.json", "-dist", "/app
 FROM ${BASE_REGISTRY}/alpine:3.20 AS agent
 RUN apk add --no-cache ca-certificates tzdata python3 py3-pip su-exec \
  && addgroup -S -g 10001 aiops \
- && adduser -S -u 10001 -G aiops -H -s /sbin/nologin aiops
+ && adduser -S -u 10001 -G aiops -h /home/aiops -s /bin/sh aiops \
+ && mkdir -p /home/aiops \
+ && chown -R aiops:aiops /home/aiops
 WORKDIR /app
 
 COPY --from=builder /out/aiops-agent /app/aiops-agent

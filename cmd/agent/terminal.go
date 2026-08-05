@@ -438,10 +438,15 @@ func (a *Agent) runContainerTerminalSession(server, sid, command, lang string) {
 		return
 	}
 	slog.Info("容器终端会话开始", "session", sid, "container", cid, "cli", cli)
-	a.streamInteractiveShell(server, sid, sh, lang)
+	a.streamInteractiveShell(server, sid, sh, lang, "")
 }
 
-// termSendPlain posts a short framed PTY output message (container_exec startup errors).
+// termSendPlain posts a short one-shot framed PTY output and ends the server
+// TX handler (which closes the session). Use ONLY for fatal startup errors
+// where no long-lived interactive stream will follow. Privilege warnings must
+// go through streamInteractiveShell's banner instead — a one-shot TX would
+// call handleAgentTermTx's defer sess.close() and kill the session before the
+// real rx/tx streams attach (non-root Docker agents hit this every open).
 func (a *Agent) termSendPlain(server, sid, msg string) {
 	payload := []byte(msg)
 	frame := make([]byte, 5+len(payload))
@@ -479,25 +484,24 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 		a.termSendPlain(server, sid, "\r\n\x1b[31m无法启动交互 Shell（"+shell+"）。请确认主机已安装 bash/sh。\x1b[0m\r\n")
 		return
 	}
+	var banner string
 	if runtime.GOOS == "linux" {
 		diag := termPrivilegeDiag()
 		if os.Geteuid() != 0 {
-			a.termSendPlain(server, sid,
-				"\r\n\x1b[33m[AIOps] Agent 非 root（"+diag+"）。编辑 /etc 会只读；请用 root 重装：curl … | sudo bash\x1b[0m\r\n")
+			banner = "\r\n\x1b[33m[AIOps] Agent 非 root（" + diag + "）。编辑 /etc 会只读；请用 root 重装：curl … | sudo bash\x1b[0m\r\n"
 		} else if !etcWritable() {
 			// Agent process may still be sandboxed; interactive shell tries nsenter.
 			// Do not claim escape succeeded — operator should check vim/touch /etc.
-			a.termSendPlain(server, sid,
-				"\r\n\x1b[33m[AIOps] Agent 进程命名空间内 /etc 只读（"+diag+"）。交互 Shell 会尝试 nsenter 进入宿主机挂载命名空间；若 vim 仍报 E45：检查 nsenter 是否可用，或改编辑 /etc/systemd/resolved.conf（resolv.conf 可能是只读 symlink）。\x1b[0m\r\n")
+			banner = "\r\n\x1b[33m[AIOps] Agent 进程命名空间内 /etc 只读（" + diag + "）。交互 Shell 会尝试 nsenter 进入宿主机挂载命名空间；若 vim 仍报 E45：检查 nsenter 是否可用，或改编辑 /etc/systemd/resolved.conf（resolv.conf 可能是只读 symlink）。\x1b[0m\r\n"
 		}
 		slog.Info("远程终端会话开始", "session", sid, "shell", shell, "diag", diag)
 	} else {
 		slog.Info("远程终端会话开始", "session", sid, "shell", shell, "uid", os.Geteuid())
 	}
-	a.streamInteractiveShell(server, sid, sh, lang)
+	a.streamInteractiveShell(server, sid, sh, lang, banner)
 }
 
-func (a *Agent) streamInteractiveShell(server, sid string, sh termShell, lang string) {
+func (a *Agent) streamInteractiveShell(server, sid string, sh termShell, lang, banner string) {
 	var once sync.Once
 	closeAll := func() { once.Do(func() { _ = sh.Close() }) }
 
@@ -548,6 +552,11 @@ func (a *Agent) streamInteractiveShell(server, sid string, sh termShell, lang st
 			reqDone <- doErr
 		}()
 
+		// Privilege / sandbox notices must ride this long-lived TX — never a
+		// separate termSendPlain POST (that closes the server session).
+		if banner != "" {
+			_ = writeFrame(pw, 'O', []byte(banner))
+		}
 		// Write framed PTY output to pw, with ZMODEM interception and file operations.
 		streamPTYFramed(sh, pw, zmChan, fileTxChan)
 		pw.Close()
@@ -562,6 +571,7 @@ func (a *Agent) streamInteractiveShell(server, sid string, sh termShell, lang st
 		defer closeAll()
 		resp, err := agentGet(termHTTP, server+"/api/v1/agent/terminal/rx?session="+sid, a.identity.Fingerprint)
 		if err != nil {
+			slog.Warn("终端 rx 连接失败", "session", sid, "err", err)
 			return
 		}
 		defer resp.Body.Close()
@@ -1260,6 +1270,26 @@ func dirUsableForShell(dir string) bool {
 	return true
 }
 
+// resolveWritableHome returns a home directory the interactive shell can use.
+// Prefer the passwd/UserHomeDir home when it exists and is writable; otherwise
+// fall back to cwd / temp so login shells and ~ expansion still work in
+// read-only Docker agents (passwd home /home/aiops is often missing).
+func resolveWritableHome() string {
+	if h := userHomeDir(); h != "" && dirUsableForShell(h) && pathWritable(h) {
+		return h
+	}
+	if dir := interactiveShellDir(); dir != "" && pathWritable(dir) {
+		return dir
+	}
+	if t := os.TempDir(); dirUsableForShell(t) && pathWritable(t) {
+		return t
+	}
+	if h := userHomeDir(); h != "" {
+		return h
+	}
+	return ""
+}
+
 // interactiveShellDir is the cwd for a remote interactive shell. Avoid starting
 // in LocalSystem's systemprofile (confusing and often PATH-poor context).
 // When $HOME is blocked (ProtectHome), fall back to the process cwd, agent
@@ -1310,7 +1340,7 @@ func buildShellEnv() []string {
 	if runtime.GOOS == "windows" {
 		env = enrichWindowsShellEnv(env)
 	} else {
-		if h := userHomeDir(); h != "" {
+		if h := resolveWritableHome(); h != "" {
 			env = setEnvKey(env, "HOME", h)
 		}
 		// Also force USER / LOGNAME to match.

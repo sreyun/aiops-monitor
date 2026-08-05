@@ -76,7 +76,8 @@ func newPTY(cols, rows int) termShell {
 		if !viaNs {
 			c.Dir = dir
 		}
-		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+		// Ctty=0: slave is cmd.Stdin — required on Linux when Setctty is set.
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 		if err := c.Start(); err != nil {
 			slog.Warn("PTY shell 启动失败，尝试降级参数", "err", err, "bin", name, "args", args, "dir", dir, "nsenter", viaNs)
 			continue
@@ -95,7 +96,7 @@ func newPTY(cols, rows int) termShell {
 			c.Stdin, c.Stdout, c.Stderr = slave, slave, slave
 			c.Env = env
 			c.Dir = dir
-			c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+			c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 			if err := c.Start(); err != nil {
 				slog.Warn("PTY plain shell 启动失败", "err", err, "bin", name, "args", args)
 				continue

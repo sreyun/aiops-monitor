@@ -145,6 +145,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64M,mode=1777
+      # Writable HOME for interactive remote terminal (login shell / history)
+      - /home/aiops:size=32M,mode=1777,uid=10001,gid=10001
     restart: unless-stopped
 
 volumes:

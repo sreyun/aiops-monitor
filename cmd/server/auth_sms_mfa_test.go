@@ -9,6 +9,26 @@ import (
 	"time"
 )
 
+func TestLooksLikePhone(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"13800138000", true},
+		{"138-0013-8000", true},
+		{" 13900139000 ", true},
+		{"admin", false},
+		{"12345", false},
+		{"23800138000", false},
+		{"1380013800a", false},
+	}
+	for _, c := range cases {
+		if got := looksLikePhone(c.in); got != c.want {
+			t.Fatalf("looksLikePhone(%q)=%v want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestSMSOTPNotConsumedOnMFARequired(t *testing.T) {
 	phone := "13800138000"
 	smsCodeMu.Lock()

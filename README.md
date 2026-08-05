@@ -5,7 +5,7 @@
 **一个开源、可私有化的主机监控与 SRE 运维平台**  
 观测 · 告警 · 自愈 · 远程运维 · AI 诊断 —— 收敛进一个你完全掌控的二进制。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.65-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.65)
+[![Version](https://img.shields.io/badge/Version-v0.19.66-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.66)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
@@ -84,7 +84,7 @@ AIOps 把高频路径收敛为 **一个可自托管的平台**：
 - 主机/Web 安全扫描、FIM、内容审计（合规可控）。
 - Web 控制台与 **Android / HarmonyOS** 客户端独立分发。
 
-当前版本 **[v0.19.65](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.65)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
+当前版本 **[v0.19.66](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.66)** · 镜像 [GitHub](https://github.com/sreyun/aiops-monitor) / [Gitee](https://gitee.com/bigdatasafe/aiops-monitor)
 
 ---
 

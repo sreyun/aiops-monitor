@@ -344,16 +344,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": Tr(r, "common.invalid_json")})
 		return
 	}
-	// Resolve and authenticate by login type
+	// Resolve and authenticate by login type.
+	// Default account login accepts username OR bound phone + password.
 	var acc AccountConfig
 	var authenticated bool
 	switch req.LoginType {
-	case "phone":
-		acc, authenticated = s.authenticatePhoneLogin(w, r, req.Username, req.Password, ip)
 	case "sms":
 		acc, authenticated = s.authenticateSMSLogin(w, r, req.Username, req.SMSCode, ip)
+	case "phone":
+		// Legacy client: same as unified account login.
+		fallthrough
 	default:
-		acc, authenticated = s.authenticateUsernameLogin(w, r, req.Username, req.Password, ip)
+		acc, authenticated = s.authenticateAccountLogin(w, r, req.Username, req.Password, ip)
 	}
 	if !authenticated {
 		return // error response already written by the authenticate* helper
@@ -365,6 +367,37 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		pass = ""
 	}
 	s.completeLogin(w, r, acc, pass, req.Code, ip)
+}
+
+// looksLikePhone reports whether id is shaped like a mainland mobile number
+// (11 digits starting with 1), after stripping spaces/dashes.
+func looksLikePhone(id string) bool {
+	s := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(id))
+	if len(s) != 11 || s[0] != '1' {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// authenticateAccountLogin accepts username or bound phone + password.
+func (s *Server) authenticateAccountLogin(w http.ResponseWriter, r *http.Request, id, password, ip string) (AccountConfig, bool) {
+	id = strings.TrimSpace(id)
+	if looksLikePhone(id) {
+		if _, found := s.cfg.UserByPhone(id); found {
+			return s.authenticatePhoneLogin(w, r, id, password, ip)
+		}
+	}
+	return s.authenticateUsernameLogin(w, r, id, password, ip)
 }
 
 // authenticateUsernameLogin verifies username+password via CheckPassword (which

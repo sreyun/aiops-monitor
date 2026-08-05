@@ -1103,19 +1103,17 @@ safeAddEventListener("mfaToggleChk", "change", () => {
 });
 safeAddEventListener("logoutBtn", "click", logout);
 // 登录页找回入口
-safeAddEventListener("forgotUserLink", "click", openRecoverUser);
 safeAddEventListener("forgotPassLink", "click", openRecoverPass);
 
-// 登录
-let LOGIN_TYPE = "username"; // "username" | "phone" | "sms"
+// 登录：账号框同时支持用户名或已绑定手机号；可选切到短信验证码模式
+let LOGIN_TYPE = "username"; // "username" | "sms"
 let _loginSmsCooldownTimer = null;
 
 function applyLoginType(type) {
-  LOGIN_TYPE = type === "phone" || type === "sms" ? type : "username";
+  LOGIN_TYPE = type === "sms" ? "sms" : "username";
   const phoneHint = $("loginPhoneHint");
   const passField = $("loginPassField");
   const smsField = $("loginSmsField");
-  const switchType = $("loginSwitchType");
   const switchSms = $("loginSwitchSms");
   const userEl = $("loginUser");
   const labelEl = $("loginUserLabel");
@@ -1130,42 +1128,20 @@ function applyLoginType(type) {
     if (smsField) smsField.style.display = "";
     if (phoneHint) {
       phoneHint.style.display = "";
-      phoneHint.removeAttribute("data-i18n");
+      phoneHint.setAttribute("data-i18n", "login.sms_hint");
       phoneHint.textContent = I18N.t("login.sms_hint") || "使用已绑定手机号与短信验证码登录";
     }
-    if (switchType) switchType.textContent = I18N.t("login.switch_username") || "用户名登录";
-    if (switchSms) switchSms.textContent = I18N.t("login.switch_phone") || "手机号登录";
-  } else if (LOGIN_TYPE === "phone") {
-    if (labelEl) labelEl.textContent = I18N.t("profile.phone") || "手机号";
-    if (userEl) {
-      userEl.placeholder = I18N.t("login.phone_placeholder") || "输入手机号";
-      userEl.type = "tel";
-      userEl.maxLength = 11;
-    }
-    if (passField) passField.style.display = "";
-    if (smsField) smsField.style.display = "none";
-    if (phoneHint) {
-      phoneHint.style.display = "";
-      phoneHint.setAttribute("data-i18n", "login.phone_password_hint");
-      phoneHint.textContent = I18N.t("login.phone_password_hint") || "使用已绑定手机号与登录密码（非短信验证码）。";
-    }
-    if (switchType) switchType.textContent = I18N.t("login.switch_username") || "用户名登录";
-    if (switchSms) switchSms.textContent = I18N.t("login.sms_login_btn") || "短信验证码登录";
+    if (switchSms) switchSms.textContent = I18N.t("login.switch_account") || "账号密码登录";
   } else {
-    if (labelEl) labelEl.textContent = I18N.t("login.username") || "用户名";
+    if (labelEl) labelEl.textContent = I18N.t("login.account") || "账号";
     if (userEl) {
-      userEl.placeholder = I18N.t("form.login_account") || I18N.t("login.username_placeholder") || "管理员账号";
+      userEl.placeholder = I18N.t("login.account_placeholder") || "用户名或手机号";
       userEl.type = "text";
       userEl.maxLength = 524288;
     }
     if (passField) passField.style.display = "";
     if (smsField) smsField.style.display = "none";
-    if (phoneHint) {
-      phoneHint.style.display = "none";
-      phoneHint.setAttribute("data-i18n", "login.phone_password_hint");
-      phoneHint.textContent = I18N.t("login.phone_password_hint") || "使用已绑定手机号与登录密码（非短信验证码）。";
-    }
-    if (switchType) switchType.textContent = I18N.t("login.switch_phone") || "手机号登录";
+    if (phoneHint) phoneHint.style.display = "none";
     if (switchSms) switchSms.textContent = I18N.t("login.sms_login_btn") || "短信验证码登录";
   }
   if (userEl) userEl.value = "";
@@ -1175,15 +1151,9 @@ function applyLoginType(type) {
   const codeField = $("loginCodeField"); if (codeField) codeField.style.display = "none";
 }
 
-safeAddEventListener("loginSwitchType", "click", (e) => {
-  e.preventDefault();
-  if (LOGIN_TYPE === "username") applyLoginType("phone");
-  else applyLoginType("username");
-});
 safeAddEventListener("loginSwitchSms", "click", (e) => {
   e.preventDefault();
-  if (LOGIN_TYPE === "sms") applyLoginType("phone");
-  else applyLoginType("sms");
+  applyLoginType(LOGIN_TYPE === "sms" ? "username" : "sms");
 });
 
 safeAddEventListener("loginSendSmsBtn", "click", async () => {

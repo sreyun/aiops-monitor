@@ -43,7 +43,7 @@ func newContainerExecPTY(cli, containerID, shell string, cols, rows int) termShe
 	cmd := exec.Command(cli, "exec", "-it", containerID, shell)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.Env = buildShellEnv()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := cmd.Start(); err != nil {
 		slog.Warn("container exec PTY 启动失败", "err", err, "cli", cli, "id", containerID)
 		master.Close()

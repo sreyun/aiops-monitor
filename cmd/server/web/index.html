@@ -4020,9 +4020,9 @@
       <div><h1>AIOps</h1><div class="sub" data-i18n="brand.sub">主机监控运维平台</div></div>
     </div>
     <div class="login-err" id="loginErr" role="alert" aria-live="assertive"></div>
-    <div class="field" id="loginUserField"><label id="loginUserLabel" data-i18n="login.username">用户名</label><input type="text" id="loginUser" autocomplete="username" data-i18n-placeholder="form.login_account" placeholder="管理员账号"></div>
+    <div class="field" id="loginUserField"><label id="loginUserLabel" data-i18n="login.account">账号</label><input type="text" id="loginUser" autocomplete="username" data-i18n-placeholder="login.account_placeholder" placeholder="用户名或手机号"></div>
     <div class="field" id="loginPassField"><label data-i18n="login.password">密码</label><input type="password" id="loginPass" autocomplete="current-password" data-i18n-placeholder="form.password" placeholder="登录密码"></div>
-    <p class="login-mode-hint" id="loginPhoneHint" style="display:none" data-i18n="login.phone_password_hint">使用已绑定手机号与登录密码（非短信验证码）。</p>
+    <p class="login-mode-hint" id="loginPhoneHint" style="display:none" data-i18n="login.sms_hint">使用已绑定手机号与短信验证码登录</p>
     <div class="field" id="loginSmsField" style="display:none">
       <label data-i18n="login.sms_code">短信验证码</label>
       <div style="display:flex;gap:8px;align-items:center">
@@ -4035,15 +4035,11 @@
     <div class="login-divider" id="ssoLoginDivider" hidden><span data-i18n="login.or_continue">或使用以下方式继续</span></div>
     <div id="ssoLoginBtns" class="sso-login-btns" hidden></div>
     <div class="login-links">
-      <a href="#" id="loginSwitchType" data-i18n="login.switch_phone">手机号登录</a>
-      <span class="sep">·</span>
       <a href="#" id="loginSwitchSms" data-i18n="login.sms_login_btn">短信验证码登录</a>
-      <span class="sep">·</span>
-      <a href="#" id="forgotUserLink" data-i18n="login.forgot_user">忘记用户名</a>
       <span class="sep">·</span>
       <a href="#" id="forgotPassLink" data-i18n="login.forgot_pass">忘记密码</a>
     </div>
-    <div class="hint" id="loginHint" data-i18n="login.hint">首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。</div>
+    <div class="hint" id="loginHint" data-i18n="login.hint">首次登录请使用部署时设置的管理员账号（默认凭据见部署文档），登录后请及时修改用户名与密码。账号框支持用户名或已绑定手机号。</div>
   </form>
 </div>
 
