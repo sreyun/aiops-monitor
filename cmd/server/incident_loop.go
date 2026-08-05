@@ -121,6 +121,8 @@ func (s *Server) handleIncidentLoopAction(w http.ResponseWriter, r *http.Request
 		s.loopVerify(w, r, inc, actor)
 	case "promote":
 		s.loopPromote(w, r, inc, actor, force)
+	case "demo", "run-demo":
+		s.loopRunDemo(w, r, inc, actor)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未知动作: " + action})
 	}
@@ -516,6 +518,85 @@ func (s *Server) loopPromote(w http.ResponseWriter, r *http.Request, inc Inciden
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "created": created, "updated": updated, "status": status, "loop": inc.Loop})
 }
+
+// loopRunDemo is a one-click Year-1 sales/acceptance demo:
+// seed diagnosis evidence if missing → dry-run → propose → approve → verify → promote.
+// Admin-only; uses force where gates would otherwise block a greenfield incident.
+func (s *Server) loopRunDemo(w http.ResponseWriter, r *http.Request, inc Incident, actor string) {
+	if !s.actorIsAdmin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "一键闭环 Demo 仅管理员可用"})
+		return
+	}
+	if strings.TrimSpace(inc.HostID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "事件未关联主机：请先编辑事件绑定主机，或新建带 host_id 的演示事件"})
+		return
+	}
+
+	results := map[string]any{}
+	gate := latestDiagnosisGate(inc)
+	if !gate.OK {
+		s.incidents.AddEventWithCitations(inc.ID, "ai_diagnosis", "demo",
+			"【Demo】主机负载偏高，建议检查热点进程并确认变更窗。置信度：高",
+			[]RAGCitation{
+				{Kind: "metric", Source: "metrics", Title: "CPU", Summary: "cpu_percent=92"},
+				{Kind: "alert", Source: "alert", Title: "CPU 告警", Summary: "cpu_high firing"},
+			})
+		inc, _ = s.incidents.Get(inc.ID)
+		results["seed_diagnosis"] = true
+	}
+
+	runStep := func(name string, fn func(http.ResponseWriter)) map[string]any {
+		rec := newDemoRecorder()
+		fn(rec)
+		out := map[string]any{"status": rec.code}
+		var payload any
+		if json.Unmarshal(rec.body, &payload) == nil {
+			out["body"] = payload
+		} else {
+			out["raw"] = string(rec.body)
+		}
+		results[name] = out
+		inc, _ = s.incidents.Get(inc.ID)
+		return out
+	}
+
+	runStep("dry-run", func(rw http.ResponseWriter) { s.loopDryRun(rw, r, inc, actor, true) })
+	runStep("propose", func(rw http.ResponseWriter) {
+		s.loopPropose(rw, r, inc, actor, true, map[string]any{
+			"title": "Demo 闭环修复提案 · " + trimLine(inc.Title, 40),
+		})
+	})
+	runStep("approve", func(rw http.ResponseWriter) { s.loopApprove(rw, r, inc, actor) })
+	runStep("verify", func(rw http.ResponseWriter) { s.loopVerify(rw, r, inc, actor) })
+	runStep("promote", func(rw http.ResponseWriter) { s.loopPromote(rw, r, inc, actor, true) })
+
+	s.incidents.AddEvent(inc.ID, "note", actor, "一键闭环 Demo 已执行（dry-run→propose→approve→verify→promote）")
+	if s.store != nil {
+		s.store.MarkDirty()
+	}
+	inc, _ = s.incidents.Get(inc.ID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "loop": inc.Loop, "results": results,
+		"hint": "销售/验收一键演示完成；详见 docs/engineering/year1-acceptance.md 与 scripts/demo-year1-loop.sh",
+	})
+}
+
+// demoRecorder is a minimal ResponseWriter for composing loop steps without httptest.
+type demoRecorder struct {
+	code int
+	hdr  http.Header
+	body []byte
+}
+
+func newDemoRecorder() *demoRecorder {
+	return &demoRecorder{code: http.StatusOK, hdr: make(http.Header)}
+}
+func (d *demoRecorder) Header() http.Header { return d.hdr }
+func (d *demoRecorder) Write(b []byte) (int, error) {
+	d.body = append(d.body, b...)
+	return len(b), nil
+}
+func (d *demoRecorder) WriteHeader(statusCode int) { d.code = statusCode }
 
 func (s *Server) patchAIRunVerify(runID string, verify json.RawMessage, ok bool) {
 	if s == nil || strings.TrimSpace(runID) == "" {

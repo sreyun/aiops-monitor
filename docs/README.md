@@ -62,3 +62,13 @@
 - **根目录**仅保留：`README.md`、`CHANGELOG.md`（外加代码 / 配置 / 许可证等非文档文件）。
 - **多语言简介**统一放在 `docs/i18n/`；长文放在 `getting-started/` · `guides/` · `engineering/`。
 - 不再保留旧路径跳转页，避免仓库文件列表被 stub 淹没。
+
+## AI 闭环 / 规模 / 商业化 路 AI, Scale & Commercial
+
+| 文档 | 说明 |
+|------|------|
+| [engineering/scale-1000-hosts.md](./engineering/scale-1000-hosts.md) | 千台主机部署手册（参数基线 / 分区 / 压测 / 路线图） |
+| [aiops-ai/closed-loop-weekly-report.md](./aiops-ai/closed-loop-weekly-report.md) | AI 闭环效果周报（KPI 定义与开启方式） |
+| [commercial/pricing-model.md](./commercial/pricing-model.md) | 节点数 + AI 用量双轨定价模型 |
+| [compliance/china-sovereignty.md](./compliance/china-sovereignty.md) | 信创与数据主权合规（等保映射 / 待办） |
+| [enterprise/edition-roadmap.md](./enterprise/edition-roadmap.md) | 企业版路线图（MIT 开源 + 企业订阅边界） |

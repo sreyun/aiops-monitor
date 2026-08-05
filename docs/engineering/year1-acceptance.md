@@ -2,6 +2,17 @@
 
 POC **只认有回验数据的闭环次数**，不认功能勾选清单。
 
+## 一键 Demo（销售 / 验收）
+
+事件需已绑定 `host_id`。管理员在事件详情点 **「一键 Demo」**，或：
+
+```bash
+# 默认 ONE_CLICK=1，调用 POST /api/v1/incidents/{id}/loop/demo
+BASE=http://127.0.0.1:8529 AIOPS_USER=admin PASS='...' INCIDENT_ID=42 ./scripts/demo-year1-loop.sh
+```
+
+Demo 会在缺少诊断证据时自动写入带 citations 的演示诊断，再依次执行 dry-run → 提案 → 批准 → 回验 → 沉淀 Skill。生产排障请用逐步按钮，勿一键覆盖真实研判。
+
 ## 旗舰场景 A：数据库救援
 
 1. 触发慢 SQL / 连接类 critical 告警并生成事件  

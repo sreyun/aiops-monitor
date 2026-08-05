@@ -70,6 +70,7 @@ Wave 2/3（已落地骨架）：
 |------|-------------|
 | 脚本偏好 `aiops-agent` | `go test ./cmd/server/ -run 'Legacy.*AgentUpdate\|CanonicalUnit\|AgentUpdatePending'` |
 | Agent 更新/自愈 | `go test ./cmd/agent/ -run 'AgentUpdate\|UnitHeal\|CanonicalUnit'` |
+| 闭环一键 Demo | `POST /api/v1/incidents/{id}/loop/demo`；`scripts/demo-year1-loop.sh` |
 | 手工浸泡 | [agent-update-soak.md](./agent-update-soak.md) |
 | Linux 终端权限边缘 | [terminal-linux-privileges.md](./terminal-linux-privileges.md) |
 | 内置剧本包 | `POST /api/v1/playbooks/packs/import`；列表 `GET /api/v1/playbooks/packs` |

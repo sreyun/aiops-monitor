@@ -3,6 +3,9 @@ let PB_HOSTS = []; // cached full host list for target selection
 let PB_CATS = []; // cached unique categories
 
 async function loadPlaybooks() {
+  const list = $("playbookList"), empty = $("playbookEmpty");
+  if (list) list.innerHTML = `<div class="empty-line">${I18N.t("common.loading","加载中…")}</div>`;
+  if (empty) empty.style.display = "none";
   try {
     if (typeof loadHostFolders === "function") {
       try { await loadHostFolders(); } catch (_) {}
@@ -22,7 +25,10 @@ async function loadPlaybooks() {
     // (runtime.GOOS: "linux"/"windows"/"darwin") for matching.
     LAST_PLAYBOOKS = pbs || [];
     renderPlaybooks(LAST_PLAYBOOKS);
-  } catch (e) { console.warn("load playbooks:", e); }
+  } catch (e) {
+    console.warn("load playbooks:", e);
+    if (list) list.innerHTML = `<div class="empty-line">${I18N.t("sre.load_failed","加载失败")}</div>`;
+  }
 }
 
 function switchAutomationView(mode) {
@@ -115,7 +121,10 @@ async function loadPlaybookRevisions(id) {
     ).join("");
     list.querySelectorAll("[data-pb-restore]").forEach(btn => {
       btn.onclick = async () => {
-        if (!confirm(`确认还原到 rev ${btn.dataset.pbRestore}？当前内容将被覆盖并生成新版本。`)) return;
+        const ok = typeof uiConfirm === "function"
+          ? await uiConfirm({ title: "还原版本", message: `确认还原到 rev ${btn.dataset.pbRestore}？当前内容将被覆盖并生成新版本。`, tone: "warn" })
+          : confirm(`确认还原到 rev ${btn.dataset.pbRestore}？当前内容将被覆盖并生成新版本。`);
+        if (!ok) return;
         const r = await fetch(`${API}/playbooks/${encodeURIComponent(id)}/revisions/${btn.dataset.pbRestore}/restore`, { method: "POST" });
         const j = await r.json().catch(()=>({}));
         if (r.ok) { toast("已还原版本", "ok"); loadPlaybooks(); $("playbookMask").classList.remove("show"); }
@@ -1072,7 +1081,10 @@ function renderExecResult(exec, opts) {
     pollExecution(exec.id, exec.playbook_id);
   };
   if (rj) rj.onclick = async () => {
-    if (!confirm("确认拒绝该定时剧本执行？")) return;
+    const ok = typeof uiConfirm === "function"
+      ? await uiConfirm({ title: "拒绝执行", message: "确认拒绝该定时剧本执行？", tone: "danger" })
+      : confirm("确认拒绝该定时剧本执行？");
+    if (!ok) return;
     const r = await fetch(`${API}/playbooks/executions/by-id/${encodeURIComponent(exec.id)}/reject`, { method: "POST" });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { toast(j.error || "拒绝失败", "err"); return; }
@@ -1465,9 +1477,11 @@ function loadSRETab(tab){
 
 /* ---- 事件 ---- */
 async function loadIncidents(){
+  const el = $("incidentList");
+  if (el) el.innerHTML = `<div class="empty-line">${I18N.t("common.loading","加载中…")}</div>`;
   try {
     const list = await fetch(`${API}/incidents`).then(r=>r.json());
-    const el = $("incidentList");
+    if (!el) return;
     if (!list||!list.length){ el.innerHTML=`<div class="empty-line">${I18N.t("sre.no_incidents","暂无事件")}</div>`; return; }
     el.innerHTML = list.map(i=>`<div class="sre-row" data-incident="${i.id}">
       <span class="badge ${_sevCls(i.severity)}">${esc(i.severity)}</span>
@@ -1475,7 +1489,7 @@ async function loadIncidents(){
         <div class="sre-row-sub">#${i.id} · ${_srcLabel(i.source)}${i.hostname?" · "+esc(i.hostname):""} · ${fmtDateTime(i.created_at)}</div></div>
       <span class="badge ${_incStatusCls(i.status)}">${_incStatus(i.status)}</span></div>`).join("");
     el.querySelectorAll("[data-incident]").forEach(r=>r.onclick=()=>openIncidentDetail(r.dataset.incident));
-  } catch(e){ toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
+  } catch(e){ if (el) el.innerHTML=`<div class="empty-line">${I18N.t("sre.load_failed","加载失败")}</div>`; toast(I18N.t("sre.load_failed","加载失败")+": "+e,"err"); }
 }
 async function openIncidentDetail(id){
   try {
@@ -1581,9 +1595,10 @@ async function loadIncidentLoopStrip(inc){
       <span>${stepHtml||'<span class="hint">idle</span>'}</span>
       ${gate.ok===false?`<span class="badge warn" title="${esc(gate.reason||"")}">闸门</span>`:""}
       <div class="inc-loop-acts">
+        <button class="btn sm primary" data-iloop="demo" title="管理员：补诊断证据并自动跑 dry-run→提案→批准→回验→Skill">一键 Demo</button>
         <button class="btn sm" data-iloop="dry-run">Dry-run</button>
         <button class="btn sm" data-iloop="propose">提案</button>
-        <button class="btn sm primary" data-iloop="approve">批准</button>
+        <button class="btn sm" data-iloop="approve">批准</button>
         <button class="btn sm" data-iloop="verify">回验</button>
         <button class="btn sm" data-iloop="promote">沉淀 Skill</button>
       </div></div>
@@ -1651,6 +1666,24 @@ async function incidentLoopAct(id, action, gate){
       a.click();
       URL.revokeObjectURL(a.href);
       toast("案例已导出","ok");
+      return;
+    }
+    if(action==="demo"){
+      const ok = typeof uiConfirm === "function"
+        ? await uiConfirm({
+            title: "一键闭环 Demo",
+            message: "将自动补诊断证据（如缺失）并依次执行 dry-run → 提案 → 批准 → 回验 → 沉淀 Skill。仅管理员可用。",
+            detail: "适合销售/验收演示；生产事件请改用逐步按钮。",
+            confirmText: "开始 Demo",
+            tone: "warn"
+          })
+        : confirm("确认运行一键闭环 Demo？");
+      if(!ok) return;
+      const r=await fetch(`${API}/incidents/${id}/loop/demo`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ toast(j.error||"Demo 失败","err"); return; }
+      toast("一键闭环 Demo 完成","ok");
+      openIncidentDetail(id); loadRemediation(); loadSREBadge();
       return;
     }
     let body={};

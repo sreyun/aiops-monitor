@@ -69,6 +69,9 @@ func loadEmbeddedPlaybookPack(id string) (playbookPackFile, error) {
 // with pack:<id>: so re-import updates the same rows without colliding with
 // operator-authored playbooks.
 func (s *Server) importPlaybookPack(packID string) (imported, skipped int, err error) {
+	if s == nil || s.playbooks == nil {
+		return 0, 0, fmt.Errorf("playbook manager unavailable")
+	}
 	pack, err := loadEmbeddedPlaybookPack(packID)
 	if err != nil {
 		return 0, 0, err
@@ -93,7 +96,7 @@ func (s *Server) importPlaybookPack(packID string) (imported, skipped int, err e
 			pb.CreatedAt = now
 		}
 		pb.UpdatedAt = now
-		if _, err := s.cfg.UpsertPlaybook(pb); err != nil {
+		if _, err := s.playbooks.Upsert(pb); err != nil {
 			skipped++
 			continue
 		}

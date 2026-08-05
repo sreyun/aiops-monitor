@@ -420,6 +420,8 @@ func (s *Server) authenticatePhoneLogin(w http.ResponseWriter, r *http.Request, 
 
 // authenticateSMSLogin verifies a one-time SMS code previously issued by
 // handleLoginSMSCode. On failure, writes the error response and returns false.
+// The OTP is NOT consumed here — completeLogin deletes it only after a session
+// is issued, so MFA round-trips can resubmit the same sms_code (like password).
 func (s *Server) authenticateSMSLogin(w http.ResponseWriter, r *http.Request, phone, smsCode, ip string) (AccountConfig, bool) {
 	phone = strings.TrimSpace(phone)
 	smsCode = strings.TrimSpace(smsCode)
@@ -436,12 +438,13 @@ func (s *Server) authenticateSMSLogin(w http.ResponseWriter, r *http.Request, ph
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return acc, false
 	}
+	if !s.auth.loginAccountAllowed(acc.Username) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
+		return acc, false
+	}
 	smsCodeMu.Lock()
 	entry, ok := smsCodes[phone]
 	valid := ok && time.Now().Before(entry.ExpireAt) && subtle.ConstantTimeCompare([]byte(entry.Code), []byte(smsCode)) == 1
-	if valid {
-		delete(smsCodes, phone)
-	}
 	smsCodeMu.Unlock()
 	if !valid {
 		s.auth.loginFailed(ip)
@@ -450,11 +453,18 @@ func (s *Server) authenticateSMSLogin(w http.ResponseWriter, r *http.Request, ph
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "login.sms_code_invalid")})
 		return acc, false
 	}
-	if !s.auth.loginAccountAllowed(acc.Username) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
-		return acc, false
-	}
 	return acc, true
+}
+
+// consumeSMSLoginCode removes a pending OTP after a successful login session is issued.
+func consumeSMSLoginCode(phone string) {
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return
+	}
+	smsCodeMu.Lock()
+	delete(smsCodes, phone)
+	smsCodeMu.Unlock()
 }
 
 // completeLogin handles the post-authentication phase: default-credential
@@ -496,6 +506,9 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, acc Accou
 	}
 	// Credentials fully verified — clear the per-account failed-attempt counter.
 	s.auth.loginAccountReset(acc.Username)
+	// Burn SMS OTP only after MFA (if any) passed — keeps the same sms_code
+	// usable across the mfa_required round-trip.
+	consumeSMSLoginCode(acc.Phone)
 	// Forced password change BEFORE full access or MFA enrollment. A full
 	// session here would let API clients skip the SPA gate with admin/admin.
 	if acc.MustChangePassword {
@@ -678,6 +691,11 @@ func (s *Server) handleLoginSMSCode(w http.ResponseWriter, r *http.Request) {
 	smsCodeMu.Unlock()
 	smsCfg := cfgSnap.SMS
 	smsCfg.Phones = []string{phone}
+	// Login OTP templates should use {"code":"${code}"}; if TemplateParam is empty
+	// the SMS layer defaults to {"message":"<code>"} which may not match OTP templates.
+	if strings.TrimSpace(smsCfg.TemplateParam) == "" {
+		smsCfg.TemplateParam = `{"code":"${code}"}`
+	}
 	if err := s.notifier.sendSMS(smsCfg, code); err != nil {
 		smsCodeMu.Lock()
 		delete(smsCodes, phone)

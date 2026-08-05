@@ -168,7 +168,9 @@ async function startAgentFleetUpdate(hostIds, opts) {
         "agent_update.confirm",
         "将对 {0} 台在线主机推送 Agent 更新到 {1}（SHA-256 校验，配置与 host_id 保留）。是否继续？"
       ).replace("{0}", String(hostIds.length)).replace("{1}", target);
-    if (!confirm(msg)) return;
+    if (typeof uiConfirm === "function"
+      ? !(await uiConfirm({ title: I18N.t("agent_update.title", "Agent 更新"), message: msg, tone: "warn" }))
+      : !confirm(msg)) return;
   }
   try {
     const r = await fetch(`${API}/agents/update`, {
@@ -255,7 +257,9 @@ async function rollbackFailedAgentHosts() {
     "agent_update.rollback_confirm",
     "将对 {0} 台失败主机执行 .bak 回滚（需已具备 agent_update 模块）。是否继续？"
   ).replace("{0}", String(ids.length));
-  if (!confirm(msg)) return;
+  if (typeof uiConfirm === "function"
+    ? !(await uiConfirm({ title: I18N.t("agent_update.rollback", "回滚"), message: msg, tone: "danger" }))
+    : !confirm(msg)) return;
   await startAgentFleetUpdate(ids, { rollback: true, force: true, skipConfirm: true });
 }
 
