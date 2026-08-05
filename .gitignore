@@ -52,8 +52,8 @@ venv/
 docker/.env
 
 # 自动生成的检测/测试/日志文件（保留目录结构，忽略内容）
-# Agent go:embed 构建时复制的配置示例（源文件在项目根目录）
-cmd/agent/config_example.yaml
+# cmd/agent/config_example.yaml 已入库（go:embed / CI go test 需要）；变更根目录
+# config.example.yaml 后请执行: go generate ./cmd/agent
 generated/reports/*
 !generated/reports/.gitkeep
 generated/logs/*

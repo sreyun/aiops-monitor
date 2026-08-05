@@ -5,7 +5,7 @@
 **一个开源、可私有化的主机监控与 SRE 运维平台**  
 观测 · 告警 · 自愈 · 远程运维 · AI 诊断 —— 收敛进一个你完全掌控的二进制。
 
-[![Version](https://img.shields.io/badge/Version-v0.19.66-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.66)
+[![Version](https://img.shields.io/badge/Version-v0.19.67-blue)](https://github.com/sreyun/aiops-monitor/releases/tag/v0.19.67)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Android%20%7C%20HarmonyOS-lightgrey)]()
