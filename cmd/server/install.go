@@ -539,6 +539,14 @@ if [ "$OS" = "Linux" ] && [ "$(id -u)" = "0" ] && aiops_has_systemd; then
     echo "[AIOps] Set AIOPS_USER to an existing account, or omit it for root."
     exit 1
   fi
+  # Opt out of Agent startup heal that would escalate User=root via sudo/--install-service.
+  if [ "$AIOPS_USER" != "root" ]; then
+    mkdir -p /etc/aiops-agent
+    : > /etc/aiops-agent/allow-nonroot
+    echo "[AIOps] wrote /etc/aiops-agent/allow-nonroot (AIOPS_USER=$AIOPS_USER)"
+  else
+    rm -f /etc/aiops-agent/allow-nonroot 2>/dev/null || true
+  fi
   AIOPS_GROUP="$(id -gn "$AIOPS_USER" 2>/dev/null || echo "$AIOPS_USER")"
   chown -R "$AIOPS_USER:$AIOPS_GROUP" "$DIR"
   # SNI / content audit needs packet capture → raise NET_RAW/NET_ADMIN via ambient

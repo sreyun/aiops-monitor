@@ -159,11 +159,10 @@ if [ -n "$CFG" ] && [ -f "$CFG" ]; then
     RESTARTED=1
   fi
 fi
-if [ "$RESTARTED" -eq 0 ]; then
-  for label in "gui/$UIDN/com.aiops.agent" "system/com.aiops.agent" "system/com.aiops.monitor.agent"; do
-    if launchctl kickstart -k "$label" 2>/dev/null; then RESTARTED=1; break; fi
-  done
-fi
+# Always kickstart — --install-service bootstrap alone may not run the new binary.
+for label in "system/com.aiops.monitor.agent" "system/com.aiops.agent" "gui/$UIDN/com.aiops.agent" "gui/$UIDN/com.aiops.monitor.agent"; do
+  if launchctl kickstart -k "$label" 2>/dev/null; then RESTARTED=1; break; fi
+done
 if [ "$RESTARTED" -eq 0 ]; then
   if [ -z "$CFG" ]; then
     for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; do

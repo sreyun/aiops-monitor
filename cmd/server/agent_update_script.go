@@ -36,13 +36,29 @@ for c in "$DIR/config.yaml" "$DIR/config.yml" "$HOME/.aiops-agent/config.yaml"; 
   [ -f "$c" ] && CFG="$c" && break
 done
 RESTARTED=0
-# As root: rewrite unit (User=root, unlock Protect*) so terminal keeps full FS write.
+host_run() {
+  if [ "$(id -u)" -eq 0 ] && command -v nsenter >/dev/null 2>&1 && [ -e /proc/1/ns/mnt ]; then
+    nsenter -t 1 -m -u -i -n -- "$@"
+  else
+    "$@"
+  fi
+}
+# As root: rewrite unit from host mount ns (User=root, unlock Protect*).
 if command -v systemctl >/dev/null 2>&1 && [ -n "$CFG" ] && [ "$(id -u)" -eq 0 ]; then
-  if "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
+  if host_run "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
     RESTARTED=1
   fi
 fi
-if [ "$RESTARTED" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
+if [ "$RESTARTED" -eq 0 ] && command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then
+  host_run sh -c 'for u in aiops-agent aiops-monitor-agent; do
+    rm -rf /etc/systemd/system/${u}.service.d /run/systemd/system/${u}.service.d 2>/dev/null || true
+    f=/etc/systemd/system/${u}.service; [ -f "$f" ] || continue
+    sed -i -e "s/^User=.*/User=root/" -e "s/^ProtectHome=.*/ProtectHome=false/" \
+      -e "s/^ProtectSystem=.*/ProtectSystem=false/" -e "s/^PrivateTmp=.*/PrivateTmp=false/" \
+      -e "s/^NoNewPrivileges=.*/NoNewPrivileges=false/" -e "/^CapabilityBoundingSet=/d" "$f" 2>/dev/null || true
+    grep -q "^ProtectSystem=false" "$f" || echo "ProtectSystem=false" >> "$f"
+    grep -q "^User=root" "$f" || echo "User=root" >> "$f"
+  done; systemctl daemon-reload' 2>/dev/null || true
   if systemctl restart aiops-monitor-agent 2>/dev/null || systemctl restart aiops-agent 2>/dev/null; then
     RESTARTED=1
   fi
@@ -74,15 +90,11 @@ UIDN=$(id -u)
 xattr -dr com.apple.quarantine aiops-agent 2>/dev/null || true
 RESTARTED=0
 if [ -n "$CFG" ]; then
-  if "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1; then
-    RESTARTED=1
-  fi
+  "$DIR/aiops-agent" --install-service --config "$CFG" >/dev/null 2>&1 || true
 fi
-if [ "$RESTARTED" -eq 0 ]; then
-  for label in "gui/$UIDN/com.aiops.agent" "system/com.aiops.agent" "system/com.aiops.monitor.agent"; do
-    if launchctl kickstart -k "$label" 2>/dev/null; then RESTARTED=1; break; fi
-  done
-fi
+for label in "system/com.aiops.monitor.agent" "system/com.aiops.agent" "gui/$UIDN/com.aiops.agent" "gui/$UIDN/com.aiops.monitor.agent"; do
+  if launchctl kickstart -k "$label" 2>/dev/null; then RESTARTED=1; break; fi
+done
 if [ "$RESTARTED" -eq 0 ]; then
   pkill -x aiops-agent 2>/dev/null || true
   sleep 1

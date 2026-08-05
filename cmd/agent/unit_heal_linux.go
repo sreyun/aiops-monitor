@@ -83,13 +83,15 @@ func ensureLinuxAgentUnitPrivileges(cfgPath string) {
 	}
 
 	// Even when the unit file looks fine, a still-running sandboxed process keeps
-	// a RO mount namespace until restart. Detect and bounce once.
-	if !healed && !allowNonRoot && !etcWritable() {
-		slog.Warn("root 下 /etc 仍不可写，重启 Agent 以脱离沙箱挂载命名空间",
-			"diag", termPrivilegeDiag())
-		healed = true
-	}
+	// a RO mount namespace until restart. Only bounce when we actually rewrote the
+	// unit (or purged drop-ins via a successful write path). Restarting while /etc
+	// is still RO and unlock failed just loops without progress — interactive
+	// shells rely on nsenter instead.
 	if !healed {
+		if !allowNonRoot && !etcWritable() {
+			slog.Warn("root 下 /etc 仍不可写且未能重写 unit；跳过盲目重启，依赖远程终端 nsenter",
+				"diag", termPrivilegeDiag())
+		}
 		return
 	}
 	_ = exec.Command("systemctl", "daemon-reload").Run()
@@ -137,17 +139,25 @@ func tryHealViaNsenter(cfgPath string) bool {
 		}
 	}
 	// Minimal unlock: purge drop-ins + force Protect*=false on unit files.
+	// Keep AmbientCapabilities (SNI/packet) while stripping CapabilityBoundingSet.
 	script := `for u in aiops-agent aiops-monitor-agent; do
-  rm -rf /etc/systemd/system/${u}.service.d /run/systemd/system/${u}.service.d 2>/dev/null || true
+  rm -rf /etc/systemd/system/${u}.service.d /run/systemd/system/${u}.service.d \
+         /lib/systemd/system/${u}.service.d /usr/lib/systemd/system/${u}.service.d 2>/dev/null || true
   f=/etc/systemd/system/${u}.service
   [ -f "$f" ] || continue
   sed -i -e 's/^User=.*/User=root/' -e 's/^Group=.*/Group=root/' \
     -e 's/^ProtectHome=.*/ProtectHome=false/' -e 's/^ProtectSystem=.*/ProtectSystem=false/' \
     -e 's/^PrivateTmp=.*/PrivateTmp=false/' -e 's/^NoNewPrivileges=.*/NoNewPrivileges=false/' \
-    -e '/^CapabilityBoundingSet=/d' "$f" 2>/dev/null || true
+    -e 's|^Environment=HOME=.*|Environment=HOME=/root|' \
+    -e 's|^Environment=USER=.*|Environment=USER=root|' \
+    -e 's|^Environment=LOGNAME=.*|Environment=LOGNAME=root|' \
+    -e '/^CapabilityBoundingSet=/d' -e '/^ReadWritePaths=/d' -e '/^ReadOnlyPaths=/d' \
+    -e '/^InaccessiblePaths=/d' -e '/^TemporaryFileSystem=/d' "$f" 2>/dev/null || true
   grep -q '^ProtectSystem=false' "$f" || echo 'ProtectSystem=false' >> "$f"
   grep -q '^ProtectHome=false' "$f" || echo 'ProtectHome=false' >> "$f"
   grep -q '^User=root' "$f" || echo 'User=root' >> "$f"
+  grep -q '^PrivateTmp=false' "$f" || echo 'PrivateTmp=false' >> "$f"
+  grep -q '^NoNewPrivileges=false' "$f" || echo 'NoNewPrivileges=false' >> "$f"
 done
 systemctl daemon-reload
 systemctl restart aiops-agent 2>/dev/null || systemctl restart aiops-monitor-agent 2>/dev/null || true`

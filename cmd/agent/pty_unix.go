@@ -66,6 +66,7 @@ func newPTY(cols, rows int) termShell {
 	// On Linux root: wrap with nsenter into PID 1 mount ns so systemd
 	// ProtectSystem cannot leave /etc read-only for the interactive shell.
 	var cmd *exec.Cmd
+	var usedNsenter bool
 	for _, shArgs := range [][]string{{"-l", "-i"}, {"-i"}, {}} {
 		name, args, viaNs := linuxInteractiveShellInvocation(sh, shArgs, dir)
 		c := exec.Command(name, args...)
@@ -81,9 +82,31 @@ func newPTY(cols, rows int) termShell {
 			continue
 		}
 		cmd = c
+		usedNsenter = viaNs
 		slog.Info("PTY shell 已启动", "bin", name, "shell", sh, "args", shArgs, "pid", c.Process.Pid, "dir", dir, "nsenter", viaNs)
 		break
 	}
+	// nsenter itself may fail (no --wd support); fall back to a plain shell so the
+	// terminal still opens (may remain sandboxed — banner warns when /etc is RO).
+	if cmd == nil {
+		for _, shArgs := range [][]string{{"-l", "-i"}, {"-i"}, {}} {
+			name, args, _ := linuxInteractiveShellInvocationPlain(sh, shArgs)
+			c := exec.Command(name, args...)
+			c.Stdin, c.Stdout, c.Stderr = slave, slave, slave
+			c.Env = env
+			c.Dir = dir
+			c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+			if err := c.Start(); err != nil {
+				slog.Warn("PTY plain shell 启动失败", "err", err, "bin", name, "args", args)
+				continue
+			}
+			cmd = c
+			usedNsenter = false
+			slog.Info("PTY shell 已启动（无 nsenter 降级）", "bin", name, "shell", sh, "pid", c.Process.Pid)
+			break
+		}
+	}
+	_ = usedNsenter
 	if cmd == nil {
 		master.Close()
 		slave.Close()

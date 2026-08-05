@@ -32,67 +32,109 @@ func agentReplaceAndRestart(exe, staging, cfgPath string) error {
 		cfgPath = resolveAgentConfigBesideExe(dir)
 	}
 
-	// Always stage helper + log under a writable directory. Program Files may
-	// deny write for per-user installs; service TEMP is always writable.
-	workDir := filepath.Join(os.TempDir(), "aiops-agent-update")
+	// Prefer SYSTEM-readable, space-free work dir. Per-user TEMP with spaces
+	// breaks Scheduled Task -Argument quoting; SYSTEM often cannot read it.
+	workDir := windowsUpdateWorkDir()
 	_ = os.MkdirAll(workDir, 0o755)
 	helper := filepath.Join(workDir, "aiops-agent-update-helper.ps1")
 	logPath := filepath.Join(workDir, "aiops-agent-update.log")
 	resultPath := filepath.Join(dir, "aiops-agent-update.result")
-	// Also keep a copy of the result path under workDir when dir is not writable.
 	altResult := filepath.Join(workDir, "aiops-agent-update.result")
+	_ = os.Remove(logPath)
+	_ = os.Remove(altResult)
 
 	script := buildWindowsUpdateHelperScript(exe, staging, cfgPath, logPath, resultPath, altResult)
 	if err := os.WriteFile(helper, []byte(script), 0o644); err != nil {
 		return fmt.Errorf("write helper: %w", err)
 	}
-	// Best-effort mirror beside the exe for operators inspecting the install dir.
 	_ = os.WriteFile(filepath.Join(dir, "aiops-agent-update-helper.ps1"), []byte(script), 0o644)
 
 	ps := windowsPowerShellPath()
-	psArgs := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper}
+	// -Command & 'path' survives spaces better than -File for Task Scheduler.
+	psArgs := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+		"-Command", "& '" + strings.ReplaceAll(helper, "'", "''") + "'"}
 
-	// 1) Preferred: one-shot scheduled task as SYSTEM — survives service stop even
-	// when Job Objects / session 0 quirks kill ordinary children.
+	scheduled := false
 	if err := scheduleWindowsUpdateTask(ps, psArgs); err == nil {
+		scheduled = true
 		_ = os.WriteFile(altResult, []byte("scheduled "+time.Now().Format(time.RFC3339)), 0o644)
+	}
+	// Task registration ≠ helper running. Verify, else fall through to breakaway.
+	if scheduled && waitWindowsUpdateHelperAlive(logPath, altResult, resultPath, 6*time.Second) {
 		return nil
 	}
+	if scheduled {
+		_ = exec.Command(filepath.Join(windowsSystemRoot(), "System32", "schtasks.exe"),
+			"/Delete", "/TN", "AIOpsAgentSelfUpdate", "/F").Run()
+	}
 
-	// 2) Breakaway detached process (CREATE_BREAKAWAY_FROM_JOB).
 	if err := startWindowsBreakaway(ps, psArgs, workDir); err != nil {
-		// 3) Last resort: cmd start /b (new process tree).
 		if err2 := startWindowsCmdStart(ps, helper, workDir); err2 != nil {
 			return fmt.Errorf("start update helper: schtasks/breakaway/cmd all failed: %v / %v", err, err2)
 		}
 	}
+	_ = waitWindowsUpdateHelperAlive(logPath, altResult, resultPath, 4*time.Second)
+	return nil
+}
 
-	// Confirm the helper actually started (common silent failure: PATH / Job kill).
-	deadline := time.Now().Add(4 * time.Second)
+func windowsUpdateWorkDir() string {
+	for _, d := range []string{
+		filepath.Join(os.Getenv("ProgramData"), "aiops-agent-update"),
+		filepath.Join(windowsSystemRoot(), "Temp", "aiops-agent-update"),
+		filepath.Join(os.TempDir(), "aiops-agent-update"),
+	} {
+		if strings.TrimSpace(d) == "" {
+			continue
+		}
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			continue
+		}
+		probe := filepath.Join(d, ".w")
+		if err := os.WriteFile(probe, []byte("1"), 0o644); err != nil {
+			continue
+		}
+		_ = os.Remove(probe)
+		return d
+	}
+	return filepath.Join(os.TempDir(), "aiops-agent-update")
+}
+
+func waitWindowsUpdateHelperAlive(logPath, altResult, resultPath string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if windowsUpdateHelperAlive(logPath, altResult, resultPath) {
-			return nil
+		for _, p := range []string{logPath, resultPath, altResult} {
+			b, err := os.ReadFile(p)
+			if err != nil || len(b) == 0 {
+				continue
+			}
+			s := string(b)
+			if strings.Contains(s, "helper start") || strings.HasPrefix(s, "running") ||
+				strings.HasPrefix(s, "ok ") || strings.HasPrefix(s, "fail ") {
+				return true
+			}
+		}
+		if windowsUpdateHelperAlive() {
+			return true
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	// Still return nil if process start succeeded — helper may log slowly.
-	// Callers treat "restart scheduled" as pending_verify.
-	return nil
+	return false
 }
 
 func windowsUpdateHelperAlive(paths ...string) bool {
 	for _, p := range paths {
 		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
-			return true
+			b, _ := os.ReadFile(p)
+			s := string(b)
+			if strings.Contains(s, "helper start") || strings.HasPrefix(s, "running") ||
+				strings.HasPrefix(s, "ok ") || strings.HasPrefix(s, "fail ") {
+				return true
+			}
 		}
 	}
-	// Look for powershell running our helper file name.
 	out, err := exec.Command(windowsPowerShellPath(), "-NoProfile", "-NonInteractive", "-Command",
 		`Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'aiops-agent-update-helper\.ps1' } | Select-Object -First 1 -ExpandProperty ProcessId`).CombinedOutput()
-	if err == nil && strings.TrimSpace(string(out)) != "" {
-		return true
-	}
-	return false
+	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
 func scheduleWindowsUpdateTask(ps string, psArgs []string) error {
@@ -111,7 +153,8 @@ $exe='%s'
 $arg='%s'
 Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 $action = New-ScheduledTaskAction -Execute $exe -Argument $arg
-$trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(4))
+# Far-future ONCE trigger satisfies older Windows; we only Start once (no double /Run).
+$trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(10))
 $ok = $false
 try {
   $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
@@ -126,9 +169,7 @@ try {
   }
 }
 if ($ok) {
-  Start-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-  # Also nudge via schtasks /Run for older hosts where Start-ScheduledTask is flaky.
-  & "$env:SystemRoot\System32\schtasks.exe" /Run /TN $task 2>$null | Out-Null
+  Start-ScheduledTask -TaskName $task -ErrorAction Stop
 }
 `, psSingleQuote(task), psSingleQuote(ps), psSingleQuote(arguments))
 

@@ -12,11 +12,11 @@ import (
 const (
 	agentUpdateMaxJobs     = 50
 	agentUpdateConcurrency = 3
-	agentUpdateTimeoutSec  = 240
+	agentUpdateTimeoutSec  = 600
 	agentUpdateMaxRetries  = 2
 	// Cooldown after enqueue so success-before-version-ack cannot storm.
 	agentUpdateInFlightSec  = 1800 // hard cooldown after enqueue
-	agentUpdateSoftRetrySec = 90  // Windows helper often needs a second push if Job killed the first
+	agentUpdateSoftRetrySec = 360 // >= pending_verify window so soft-retry won't overlap an in-flight swap
 )
 
 type agentUpdateHostResult struct {
@@ -472,9 +472,10 @@ func (s *Server) finishHostInFlight(job *agentUpdateJob, hr *agentUpdateHostResu
 		return
 	}
 	switch hr.Status {
-	case "skipped", "failed":
+	case "skipped", "failed", "success":
+		// Terminal success without pending_verify: release cooldown immediately.
 		s.agentUpdates.clearInFlight(hr.HostID)
-	case "success", "pending_verify":
+	case "pending_verify":
 		// Keep cooldown until the host actually reports the new version (or TTL).
 		s.agentUpdates.refreshInFlight(hr.HostID)
 		go s.waitVersionAckOrExpire(job, hr.HostID, job.TargetVer, job.Rollback)
@@ -528,7 +529,11 @@ func (s *Server) waitVersionAckOrExpire(job *agentUpdateJob, hostID, target stri
 	if job != nil {
 		s.markHostUpdateVerifyFailed(job, hostID, target)
 	}
-	// Soft-retry path uses inFlight age; leave stamp so tryMarkInFlightOrSoftRetry can re-queue.
+	// Clear hard cooldown so soft-retry / manual push can proceed immediately
+	// after a known verify failure (do not block operators for 30 minutes).
+	if s.agentUpdates != nil {
+		s.agentUpdates.clearInFlight(hostID)
+	}
 }
 
 func (s *Server) markHostUpdateVerified(job *agentUpdateJob, hostID, ver string) {
@@ -650,7 +655,9 @@ func (s *Server) executeAgentUpdateHost(job *agentUpdateJob, hr *agentUpdateHost
 			// new binary is running — keep pending_verify until agent_version catches up.
 			low := strings.ToLower(out)
 			needsVerify := strings.Contains(low, "restart scheduled") ||
-				strings.Contains(low, "legacy agent update ok")
+				strings.Contains(low, "legacy agent update ok") ||
+				strings.Contains(low, "rollback to .bak scheduled") ||
+				strings.Contains(low, "scheduled")
 			if goos == "windows" && !job.Rollback {
 				needsVerify = true
 			}
@@ -772,6 +779,31 @@ func (s *Server) runLegacyAgentUpdateScriptKind(h *Host, serverURL string, force
 	return out, kind, nil
 }
 
+// hostHasPendingAgentUpdate is true when any in-memory job still has this host
+// in pending_verify / running — blocks soft-retry storms overlapping a live swap.
+func (s *Server) hostHasPendingAgentUpdate(hostID string) bool {
+	if s == nil || s.agentUpdates == nil || hostID == "" {
+		return false
+	}
+	s.agentUpdates.mu.Lock()
+	defer s.agentUpdates.mu.Unlock()
+	for _, j := range s.agentUpdates.jobs {
+		if j == nil || j.Status == "done" {
+			continue
+		}
+		for _, hr := range j.Hosts {
+			if hr == nil || hr.HostID != hostID {
+				continue
+			}
+			switch hr.Status {
+			case "pending", "running", "pending_verify":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // maybeAutoUpdateHost enqueues a single-host update when policy is enabled.
 func (s *Server) maybeAutoUpdateHost(hostID string) {
 	if s == nil || s.cfg == nil || s.agentUpdates == nil || hostID == "" {
@@ -801,6 +833,10 @@ func (s *Server) maybeAutoUpdateHost(hostID string) {
 	if !agentVersionBehind(h.AgentVersion, appVersion) {
 		// Version caught up — release any leftover cooldown early.
 		s.agentUpdates.clearInFlight(h.ID)
+		return
+	}
+	// Do not soft-retry while a prior job is still awaiting version ack.
+	if s.hostHasPendingAgentUpdate(h.ID) {
 		return
 	}
 	goos, goarch := hostGOOSArch(h)

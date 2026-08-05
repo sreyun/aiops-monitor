@@ -485,9 +485,10 @@ func (a *Agent) runTerminalSession(server, sid, lang string) {
 			a.termSendPlain(server, sid,
 				"\r\n\x1b[33m[AIOps] Agent 非 root（"+diag+"）。编辑 /etc 会只读；请用 root 重装：curl … | sudo bash\x1b[0m\r\n")
 		} else if !etcWritable() {
-			// Shell already nsenter'd into PID 1 mount ns; agent process itself may still be sandboxed.
+			// Agent process may still be sandboxed; interactive shell tries nsenter.
+			// Do not claim escape succeeded — operator should check vim/touch /etc.
 			a.termSendPlain(server, sid,
-				"\r\n\x1b[33m[AIOps] Agent 进程命名空间内 /etc 只读（"+diag+"）。交互 Shell 已 nsenter 到宿主机挂载命名空间。若 vim 仍报 E45：检查 /etc/resolv.conf 是否为 systemd-resolved 只读 symlink，请改编辑 /etc/systemd/resolved.conf。\x1b[0m\r\n")
+				"\r\n\x1b[33m[AIOps] Agent 进程命名空间内 /etc 只读（"+diag+"）。交互 Shell 会尝试 nsenter 进入宿主机挂载命名空间；若 vim 仍报 E45：检查 nsenter 是否可用，或改编辑 /etc/systemd/resolved.conf（resolv.conf 可能是只读 symlink）。\x1b[0m\r\n")
 		}
 		slog.Info("远程终端会话开始", "session", sid, "shell", shell, "diag", diag)
 	} else {

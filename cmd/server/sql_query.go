@@ -121,8 +121,8 @@ func (s *Server) handleSQLWorkbenchQuery(w http.ResponseWriter, r *http.Request)
 
 func mysqlWorkbenchQuery(c MySQLConnection, schema, sqlText string, limit int, timeout time.Duration) (*sqlWorkbenchQueryResult, error) {
 	sqlText = strings.TrimSpace(sqlText)
-	if !sqltoolkit.IsReadOnlyQuery(sqlText) || sqltoolkit.ForbiddenWrite(sqlText) {
-		return nil, fmt.Errorf("仅允许单条只读 SELECT/WITH/SHOW/DESC")
+	if reason := sqltoolkit.StrictReadOnlyMySQL(sqlText); reason != "" {
+		return nil, fmt.Errorf("仅允许只读查询：%s", reason)
 	}
 	kw := sqltoolkit.FirstKeyword(sqlText)
 	if kw != "select" && kw != "with" && kw != "show" && kw != "desc" && kw != "describe" {
@@ -153,14 +153,25 @@ func mysqlWorkbenchQuery(c MySQLConnection, schema, sqlText string, limit int, t
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	// 使用独占连接：会话级 SET/USE 必须与查询落在同一条连接上，
+	// 否则连接池可能把查询分到未设置只读模式的连接。
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取数据库连接失败：%w", err)
+	}
+	defer conn.Close()
+	// 数据库侧兜底：即使 SQL 绕过上层校验，任何写操作也会被数据库拒绝。
+	if _, err := conn.ExecContext(ctx, "SET SESSION TRANSACTION READ ONLY"); err != nil {
+		return nil, fmt.Errorf("设置只读会话失败：%w", err)
+	}
 	if schema != "" {
-		if _, err := db.ExecContext(ctx, "USE `"+schema+"`"); err != nil {
+		if _, err := conn.ExecContext(ctx, "USE `"+schema+"`"); err != nil {
 			return nil, fmt.Errorf("切换库失败：%w", err)
 		}
 	}
 
 	execStart := time.Now()
-	rs, err := db.QueryContext(ctx, execSQL)
+	rs, err := conn.QueryContext(ctx, execSQL)
 	execMs := time.Since(execStart).Milliseconds()
 	if err != nil {
 		return &sqlWorkbenchQueryResult{ExecMs: execMs, TotalMs: time.Since(totalStart).Milliseconds(), Schema: schema}, err
@@ -185,8 +196,8 @@ func mysqlWorkbenchQuery(c MySQLConnection, schema, sqlText string, limit int, t
 
 func pgWorkbenchQuery(c MySQLConnection, schema, sqlText string, limit int, timeout time.Duration) (*sqlWorkbenchQueryResult, error) {
 	sqlText = strings.TrimSpace(sqlText)
-	if !sqltoolkit.IsReadOnlyQuery(sqlText) || sqltoolkit.ForbiddenWrite(sqlText) {
-		return nil, fmt.Errorf("仅允许单条只读 SELECT/WITH/VALUES")
+	if reason := sqltoolkit.StrictReadOnlyPostgres(sqlText); reason != "" {
+		return nil, fmt.Errorf("仅允许只读查询：%s", reason)
 	}
 	kw := sqltoolkit.FirstKeyword(sqlText)
 	if kw != "select" && kw != "with" && kw != "values" && kw != "show" && kw != "table" {
@@ -212,14 +223,25 @@ func pgWorkbenchQuery(c MySQLConnection, schema, sqlText string, limit int, time
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取数据库连接失败：%w", err)
+	}
+	defer conn.Close()
+	// 会话级只读兜底：任何写操作都会被 PostgreSQL 拒绝。
+	if _, err := conn.ExecContext(ctx, "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"); err != nil {
+		return nil, fmt.Errorf("设置只读会话失败：%w", err)
+	}
 	if schema != "" {
-		if _, err := db.ExecContext(ctx, `SELECT set_config('search_path', $1, true)`, schema); err != nil {
+		// set_config(..., false) 为会话级；旧代码用 true（事务级）在 autocommit
+		// 下仅对 SET 语句自身生效，后续查询拿不到 search_path。
+		if _, err := conn.ExecContext(ctx, `SELECT set_config('search_path', $1, false)`, schema); err != nil {
 			return nil, fmt.Errorf("设置 search_path 失败：%w", err)
 		}
 	}
 
 	execStart := time.Now()
-	rs, err := db.QueryContext(ctx, execSQL)
+	rs, err := conn.QueryContext(ctx, execSQL)
 	execMs := time.Since(execStart).Milliseconds()
 	if err != nil {
 		return &sqlWorkbenchQueryResult{ExecMs: execMs, TotalMs: time.Since(totalStart).Milliseconds(), Schema: schema, Driver: "postgres"}, err

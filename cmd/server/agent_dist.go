@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -110,7 +111,7 @@ func (s *Server) listAgentDistManifest() []agentDistArtifact {
 		if err != nil || fi.IsDir() {
 			continue
 		}
-		sum, err := fileSHA256HexServer(p)
+		sum, err := cachedFileSHA256(p, fi)
 		if err != nil {
 			continue
 		}
@@ -120,6 +121,37 @@ func (s *Server) listAgentDistManifest() []agentDistArtifact {
 		})
 	}
 	return out
+}
+
+type shaCacheEntry struct {
+	size    int64
+	modTime int64
+	sum     string
+}
+
+var (
+	shaCacheMu sync.Mutex
+	shaCache   = map[string]shaCacheEntry{}
+)
+
+func cachedFileSHA256(path string, fi os.FileInfo) (string, error) {
+	mod := fi.ModTime().UnixNano()
+	size := fi.Size()
+	shaCacheMu.Lock()
+	if e, ok := shaCache[path]; ok && e.size == size && e.modTime == mod {
+		sum := e.sum
+		shaCacheMu.Unlock()
+		return sum, nil
+	}
+	shaCacheMu.Unlock()
+	sum, err := fileSHA256HexServer(path)
+	if err != nil {
+		return "", err
+	}
+	shaCacheMu.Lock()
+	shaCache[path] = shaCacheEntry{size: size, modTime: mod, sum: sum}
+	shaCacheMu.Unlock()
+	return sum, nil
 }
 
 func (s *Server) agentDistHas(goos, goarch string) bool {

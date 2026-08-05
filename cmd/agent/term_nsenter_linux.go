@@ -33,18 +33,28 @@ func linuxInteractiveShellInvocation(sh string, shArgs []string, dir string) (na
 
 	// Always enter host mount/uts/ipc/net ns as root — fixes "root but /etc is
 	// read-only" under ProtectSystem=strict/full and PrivateTmp.
-	// --wd is applied after setns in util-linux nsenter, so use the *host* path
-	// without probing writability in the sandboxed agent namespace.
+	// --wd is applied after setns in util-linux nsenter: use a *host* path
+	// (never a sandbox-probed PrivateTmp /tmp or install-dir fallback).
 	args = []string{"-t", "1", "-m", "-u", "-i", "-n"}
-	wd := strings.TrimSpace(dir)
-	if wd == "" {
-		wd = "/root"
+	wd := "/root"
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" && !strings.HasPrefix(home, "/tmp") && home != "/" {
+		// Prefer configured HOME when it looks like a real host home (not PrivateTmp).
+		if strings.HasPrefix(home, "/root") || strings.HasPrefix(home, "/home/") {
+			wd = home
+		}
 	}
+	_ = dir // caller may pass sandbox cwd; ignore for nsenter --wd
 	args = append(args, "--wd="+wd)
 	args = append(args, "--", sh)
 	args = append(args, shArgs...)
 	slog.Info("远程终端经 nsenter 进入宿主机挂载命名空间", "shell", sh, "wd", wd)
 	return nsenter, args, true
+}
+
+// linuxInteractiveShellInvocationPlain is the non-nsenter fallback when nsenter
+// fails to start (BusyBox without --wd, missing host path, etc.).
+func linuxInteractiveShellInvocationPlain(sh string, shArgs []string) (string, []string, bool) {
+	return sh, shArgs, false
 }
 
 func sameMountNS(pidA, pidB int) bool {

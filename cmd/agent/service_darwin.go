@@ -100,9 +100,12 @@ func installAgentService(exePath, cfgPath string) error {
 	if err := runSvcCmd("launchctl", "bootstrap", "system", launchDaemonPlist); err != nil {
 		// Fall back to legacy load on older macOS.
 		if err2 := runSvcCmd("launchctl", "load", "-w", launchDaemonPlist); err2 != nil {
-			return fmt.Errorf("launchctl ????: %v / %v", err, err2)
+			return fmt.Errorf("launchctl bootstrap/load 失败: %v / %v", err, err2)
 		}
 	}
+	// kickstart so a replace-in-place upgrade actually runs the new binary
+	// (bootstrap alone may leave a stopped/old instance on some macOS versions).
+	_ = runSvcCmd("launchctl", "kickstart", "-k", "system/"+agentServiceName)
 	return nil
 }
 
