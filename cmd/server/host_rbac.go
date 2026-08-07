@@ -83,6 +83,53 @@ func (s *Server) requireHostAccess(w http.ResponseWriter, r *http.Request, hostI
 	return false
 }
 
+// requireIncidentHostAccess enforces host-scope RBAC for a host-bound incident.
+// Hostless/global incidents remain visible to scoped operators (same rule as
+// filterAlertsForUser for alerts without host_id).
+func (s *Server) requireIncidentHostAccess(w http.ResponseWriter, r *http.Request, inc Incident) bool {
+	if strings.TrimSpace(inc.HostID) == "" {
+		return true
+	}
+	return s.requireHostAccess(w, r, inc.HostID)
+}
+
+// filterIncidentsForUser drops host-bound incidents outside the caller's scope.
+func (s *Server) filterIncidentsForUser(r *http.Request, incidents []Incident) []Incident {
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return incidents
+	}
+	out := make([]Incident, 0, len(incidents))
+	for _, inc := range incidents {
+		if inc.HostID == "" || s.userCanAccessHost(u, inc.HostID) {
+			out = append(out, inc)
+		}
+	}
+	return out
+}
+
+// scopedHostAllowSet returns the caller's allowed host IDs when host-scoped.
+// ok=false means unrestricted (admin / no scope). Used by log search to avoid
+// returning fleet-wide results to a scoped viewer.
+func (s *Server) scopedHostAllowSet(r *http.Request) (allowed map[string]bool, scoped bool) {
+	u, ok := s.currentUser(r)
+	if !ok || !u.hostScopeRestricted() || roleRank(u.Role) >= roleRank(RoleAdmin) {
+		return nil, false
+	}
+	allowed = map[string]bool{}
+	for _, id := range u.AllowedHostIDs {
+		if id != "" {
+			allowed[id] = true
+		}
+	}
+	for _, h := range s.store.ListHosts() {
+		if h != nil && s.userCanAccessHost(u, h.ID) {
+			allowed[h.ID] = true
+		}
+	}
+	return allowed, true
+}
+
 // filterAlertsForUser drops alerts whose HostID is outside the caller's scope.
 // Alerts without a host_id (global checks) are kept for scoped users only when
 // they are not host-bound; host-bound entries are always filtered.
