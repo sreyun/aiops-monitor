@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -302,15 +303,12 @@ func TestTerminalSessionHostScopeRBAC(t *testing.T) {
 	s, tok := scopedOperatorServer(t)
 	_ = s.term.create("host-a", "alpha", "admin")
 	sessB := s.term.create("host-b", "beta", "admin")
-	s.auth.markTerminalVerified(withCookie(httptest.NewRequest(http.MethodGet, "/", nil), tok))
 
 	withSession := func(req *http.Request) *http.Request {
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
 		return req
 	}
-	// Ensure terminal secondary verification is marked on the live session.
-	reqMark := withSession(httptest.NewRequest(http.MethodGet, "/", nil))
-	s.auth.markTerminalVerified(reqMark)
+	s.auth.markTerminalVerified(withSession(httptest.NewRequest(http.MethodGet, "/", nil)))
 
 	rr := httptest.NewRecorder()
 	s.handleListTerminalSessions(rr, withSession(httptest.NewRequest(http.MethodGet, "/api/v1/terminal/sessions", nil)))
@@ -336,11 +334,3 @@ func TestTerminalSessionHostScopeRBAC(t *testing.T) {
 	}
 }
 
-func withCookie(r *http.Request, tok string) *http.Request {
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
-	return r
-}
-
-func itoa64(v int64) string {
-	return strconv.FormatInt(v, 10)
-}
