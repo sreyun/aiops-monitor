@@ -105,9 +105,17 @@ func (ls *logStore) search(hostID, level, keyword string, since int64, limit int
 	return out
 }
 
+func logHostAllowed(hostID string, allowed map[string]bool) bool {
+	if allowed == nil {
+		return true
+	}
+	return hostID != "" && allowed[hostID]
+}
+
 // searchPage returns paginated matching logs newest-first plus total count.
 // offset = (page-1) * pageSize; limit = pageSize.
-func (ls *logStore) searchPage(hostID, level, keyword string, since int64, page, pageSize int) ([]StoredLog, int) {
+// When allowed is non-nil, only hosts in that set are returned (host-scope RBAC).
+func (ls *logStore) searchPage(hostID, level, keyword string, since int64, page, pageSize int, allowed map[string]bool) ([]StoredLog, int) {
 	if pageSize <= 0 || pageSize > 2000 {
 		pageSize = 50
 	}
@@ -125,6 +133,9 @@ func (ls *logStore) searchPage(hostID, level, keyword string, since int64, page,
 	for i := len(ls.logs) - 1; i >= 0; i-- {
 		l := ls.logs[i]
 		if hostID != "" && l.HostID != hostID {
+			continue
+		}
+		if !logHostAllowed(l.HostID, allowed) {
 			continue
 		}
 		if level != "" && l.Level != level {
@@ -145,6 +156,9 @@ func (ls *logStore) searchPage(hostID, level, keyword string, since int64, page,
 	for i := len(ls.logs) - 1; i >= 0 && len(out) < pageSize; i-- {
 		l := ls.logs[i]
 		if hostID != "" && l.HostID != hostID {
+			continue
+		}
+		if !logHostAllowed(l.HostID, allowed) {
 			continue
 		}
 		if level != "" && l.Level != level {
@@ -179,7 +193,8 @@ type logHostCount struct {
 }
 
 // searchStats aggregates stats for matching logs (level breakdown, top hosts, time distribution).
-func (ls *logStore) searchStats(hostID, level, keyword string, since int64) logStats {
+// When allowed is non-nil, only hosts in that set contribute to aggregates.
+func (ls *logStore) searchStats(hostID, level, keyword string, since int64, allowed map[string]bool) logStats {
 	kw := strings.ToLower(strings.TrimSpace(keyword))
 	now := time.Now().Unix()
 
@@ -198,6 +213,9 @@ func (ls *logStore) searchStats(hostID, level, keyword string, since int64) logS
 	for i := len(ls.logs) - 1; i >= 0; i-- {
 		l := ls.logs[i]
 		if hostID != "" && l.HostID != hostID {
+			continue
+		}
+		if !logHostAllowed(l.HostID, allowed) {
 			continue
 		}
 		// 统计面板刻意不按 level 过滤：ByLevel 需展示所有级别的总数（需求：筛选某级别时其他级别

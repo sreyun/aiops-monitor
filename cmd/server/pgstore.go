@@ -976,6 +976,23 @@ func (p *pgStore) listTermRecordings(limit int) []termSessionInfo {
 	return out
 }
 
+// getTermRecordingInfo loads one ended session's metadata by id (audit index).
+func (p *pgStore) getTermRecordingInfo(id string) (termSessionInfo, bool) {
+	if p == nil || id == "" {
+		return termSessionInfo{}, false
+	}
+	var raw []byte
+	if err := p.db.QueryRow(`SELECT info FROM terminal_recordings WHERE id=$1`, id).Scan(&raw); err != nil {
+		return termSessionInfo{}, false
+	}
+	var info termSessionInfo
+	if json.Unmarshal(raw, &info) != nil || info.ID == "" {
+		return termSessionInfo{}, false
+	}
+	info.Active = false
+	return info, true
+}
+
 // --- plugin events ---
 
 func (p *pgStore) appendEvent(e storedEvent) {

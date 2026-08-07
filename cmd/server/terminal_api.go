@@ -7,7 +7,17 @@ import "net/http"
 // -----------------------------------------------------------------------
 
 func (s *Server) handleListTerminalSessions(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.term.listSessions())
+	sessions := s.term.listSessions()
+	if u, ok := s.currentUser(r); ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+		filtered := make([]termSessionInfo, 0, len(sessions))
+		for _, sess := range sessions {
+			if s.userCanAccessHost(u, sess.HostID) {
+				filtered = append(filtered, sess)
+			}
+		}
+		sessions = filtered
+	}
+	writeJSON(w, http.StatusOK, sessions)
 }
 
 func (s *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) {
@@ -19,6 +29,24 @@ func (s *Server) handleTerminalReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := r.PathValue("id")
+	info, found := s.term.lookupSessionInfo(sid)
+	if !found {
+		// Orphan recording files without metadata must not leak to scoped users.
+		if frames := s.term.getRecording(sid); frames != nil {
+			u, ok := s.currentUser(r)
+			if ok && u.hostScopeRestricted() && roleRank(u.Role) < roleRank(RoleAdmin) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "无权访问该主机（主机组/标签授权）"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"frames": frames, "count": len(frames)})
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "terminal.session_not_found")})
+		return
+	}
+	if info.HostID != "" && !s.requireHostAccess(w, r, info.HostID) {
+		return
+	}
 	frames := s.term.getRecording(sid)
 	if frames == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "terminal.session_not_found")})
@@ -39,6 +67,14 @@ func (s *Server) handleTerminalObserve(w http.ResponseWriter, r *http.Request) {
 	// secondary verification, same as opening a shell.
 	if verified, _ := s.auth.isTerminalVerified(r); !verified {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": Tr(r, "terminal_auth.terminal_verify_required"), "code": "terminal_verify_required"})
+		return
+	}
+	info, found := s.term.lookupSessionInfo(sid)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": Tr(r, "terminal.session_not_found")})
+		return
+	}
+	if info.HostID != "" && !s.requireHostAccess(w, r, info.HostID) {
 		return
 	}
 	obs, ok := s.term.addObserver(sid)

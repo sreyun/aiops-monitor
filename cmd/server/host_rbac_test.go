@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -184,3 +185,152 @@ func TestForwardCreateRuleRequiresWhitelistOnNonLoopback(t *testing.T) {
 		t.Fatal("expected whitelist required error")
 	}
 }
+
+func scopedOperatorServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg, err := NewConfigStore(filepath.Join(dir, "cfg.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore()
+	_ = store.RegisterHost("host-a", "alpha", "fp-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	_ = store.RegisterHost("host-b", "beta", "fp-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	salt := genToken()[:16]
+	cfg.cfg.Users = append(cfg.cfg.Users, AccountConfig{
+		Username: "scoped", Role: RoleOperator,
+		Salt: salt, Hash: hashPassword("Passw0rd!", salt),
+		AllowedHostIDs: []string{"host-a"},
+	})
+	_ = cfg.save()
+	auth := NewAuth(cfg)
+	s := &Server{
+		cfg: cfg, store: store, auth: auth,
+		incidents: newIncidentManager(),
+		term:      newTermManager(),
+		logs:      newLogStore(),
+		oncall:    newOnCallManager(),
+	}
+	return s, auth.issueSession("scoped")
+}
+
+func TestIncidentHostScopeRBAC(t *testing.T) {
+	s, tok := scopedOperatorServer(t)
+	incA := s.incidents.CreateManual("a down", "warning", "host-a", "alpha", "admin")
+	incB := s.incidents.CreateManual("b down", "critical", "host-b", "beta", "admin")
+
+	withSession := func(req *http.Request) *http.Request {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+		return req
+	}
+
+	rr := httptest.NewRecorder()
+	s.handleListIncidents(rr, withSession(httptest.NewRequest(http.MethodGet, "/api/v1/incidents", nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var listed []Incident
+	if err := json.NewDecoder(rr.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != incA.ID {
+		t.Fatalf("list should only include host-a incident, got %+v", listed)
+	}
+
+	rr = httptest.NewRecorder()
+	req := withSession(httptest.NewRequest(http.MethodGet, "/api/v1/incidents/"+itoa64(incB.ID), nil))
+	req.SetPathValue("id", itoa64(incB.ID))
+	s.handleGetIncident(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("get out-of-scope: want 403 got %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	req = withSession(httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+itoa64(incB.ID)+"/resolve", strings.NewReader(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", itoa64(incB.ID))
+	s.handleResolveIncident(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("resolve out-of-scope: want 403 got %d", rr.Code)
+	}
+	if got, _ := s.incidents.Get(incB.ID); got.Status == "resolved" {
+		t.Fatal("out-of-scope resolve must not mutate incident")
+	}
+
+	rr = httptest.NewRecorder()
+	req = withSession(httptest.NewRequest(http.MethodGet, "/api/v1/incidents/"+itoa64(incA.ID), nil))
+	req.SetPathValue("id", itoa64(incA.ID))
+	s.handleGetIncident(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get in-scope: want 200 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestLogSearchHostScopeRBAC(t *testing.T) {
+	s, tok := scopedOperatorServer(t)
+	s.logs.ingest("host-a", "alpha", []shared.LogLine{{Ts: time.Now().Unix(), Level: "error", Message: "secret-a"}})
+	s.logs.ingest("host-b", "beta", []shared.LogLine{{Ts: time.Now().Unix(), Level: "error", Message: "secret-b-password"}})
+
+	withSession := func(req *http.Request) *http.Request {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+		return req
+	}
+
+	rr := httptest.NewRecorder()
+	s.handleSearchLogs(rr, withSession(httptest.NewRequest(http.MethodGet, "/api/v1/logs?level=error", nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("search status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Items []StoredLog `json:"items"`
+		Total int         `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 1 || len(out.Items) != 1 || out.Items[0].HostID != "host-a" {
+		t.Fatalf("scoped search leaked host-b logs: %+v", out)
+	}
+
+	rr = httptest.NewRecorder()
+	s.handleSearchLogs(rr, withSession(httptest.NewRequest(http.MethodGet, "/api/v1/logs?host=host-b", nil)))
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("explicit host-b search: want 403 got %d", rr.Code)
+	}
+}
+
+func TestTerminalSessionHostScopeRBAC(t *testing.T) {
+	s, tok := scopedOperatorServer(t)
+	_ = s.term.create("host-a", "alpha", "admin")
+	sessB := s.term.create("host-b", "beta", "admin")
+
+	withSession := func(req *http.Request) *http.Request {
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: tok})
+		return req
+	}
+	s.auth.markTerminalVerified(withSession(httptest.NewRequest(http.MethodGet, "/", nil)))
+
+	rr := httptest.NewRecorder()
+	s.handleListTerminalSessions(rr, withSession(httptest.NewRequest(http.MethodGet, "/api/v1/terminal/sessions", nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status=%d", rr.Code)
+	}
+	var sessions []termSessionInfo
+	if err := json.NewDecoder(rr.Body).Decode(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	for _, sess := range sessions {
+		if sess.HostID == "host-b" {
+			t.Fatalf("list leaked host-b session: %+v", sess)
+		}
+	}
+
+	rr = httptest.NewRecorder()
+	req := withSession(httptest.NewRequest(http.MethodGet, "/api/v1/terminal/sessions/"+sessB.id+"/replay", nil))
+	req.SetPathValue("id", sessB.id)
+	s.handleTerminalReplay(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("replay out-of-scope: want 403 got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+

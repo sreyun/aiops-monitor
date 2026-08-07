@@ -1046,6 +1046,42 @@ func (m *termManager) listSessions() []termSessionInfo {
 	return out
 }
 
+// lookupSessionInfo resolves metadata for a live, archived, or PG-indexed session.
+// Used by replay/observe to enforce host-scope RBAC before returning shell I/O.
+func (m *termManager) lookupSessionInfo(sessionID string) (termSessionInfo, bool) {
+	if sessionID == "" {
+		return termSessionInfo{}, false
+	}
+	m.mu.Lock()
+	if s, ok := m.sessions[sessionID]; ok {
+		s.recMu.Lock()
+		info := termSessionInfo{
+			ID: s.id, HostID: s.hostID, Hostname: s.hostname,
+			Operator: s.operator, IP: s.ip, CreatedAt: s.createdAt,
+			Active: true, Observers: len(s.observers),
+			Frames: len(s.recording), ChangeID: s.changeID, IncidentID: s.incidentID,
+		}
+		s.recMu.Unlock()
+		m.mu.Unlock()
+		return info, true
+	}
+	for _, a := range m.archived {
+		if a.info.ID == sessionID {
+			info := a.info
+			m.mu.Unlock()
+			return info, true
+		}
+	}
+	pg := m.pg
+	m.mu.Unlock()
+	if pg != nil {
+		if info, ok := pg.getTermRecordingInfo(sessionID); ok {
+			return info, true
+		}
+	}
+	return termSessionInfo{}, false
+}
+
 // getRecording returns the recorded frames for a session (for replay). Live
 // sessions come from memory; ended sessions come from the in-memory archive if
 // still loaded, otherwise from the persisted file (survives restart / eviction).
