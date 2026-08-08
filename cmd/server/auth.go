@@ -415,6 +415,13 @@ func (s *Server) authenticateUsernameLogin(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": Tr(r, "auth.invalid_credentials")})
 		return acc, false
 	}
+	// Per-account throttle (independent of IP) — same gate as phone/SMS login.
+	// Without this, a botnet rotating source IPs can still complete username
+	// login once the password is found, even after loginAccountMaxFail failures.
+	if !s.auth.loginAccountAllowed(acc.Username) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": Tr(r, "auth.too_many_attempts")})
+		return acc, false
+	}
 	return acc, true
 }
 
