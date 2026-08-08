@@ -28,6 +28,33 @@ func TestLoginAccountLockout(t *testing.T) {
 	}
 }
 
+// TestUsernameLoginHonorsAccountLockout ensures the default username+password
+// path enforces loginAccountAllowed after credentials verify — matching phone/SMS.
+// Without this gate, rotating-IP brute force can still issue a session once the
+// password is found, even after loginAccountMaxFail failures in the window.
+func TestUsernameLoginHonorsAccountLockout(t *testing.T) {
+	cfg := newTestConfigStore(t)
+	s := &Server{cfg: cfg, auth: NewAuth(cfg), store: NewStore()}
+	for i := 0; i < loginAccountMaxFail; i++ {
+		s.auth.loginAccountFailed("admin")
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/login", nil)
+	_, ok := s.authenticateUsernameLogin(w, r, "admin", "admin", "203.0.113.50")
+	if ok {
+		t.Fatal("username login must reject correct password while account is locked")
+	}
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d body=%s", w.Code, w.Body.String())
+	}
+	// Fresh IP must still be blocked — lockout is per-account, not per-IP.
+	w2 := httptest.NewRecorder()
+	_, ok = s.authenticateUsernameLogin(w2, r, "admin", "admin", "198.51.100.9")
+	if ok || w2.Code != http.StatusTooManyRequests {
+		t.Fatalf("rotating IP must not bypass account lockout, got ok=%v code=%d", ok, w2.Code)
+	}
+}
+
 // TestTOTPSingleUse verifies a valid TOTP code is accepted once and its replay
 // (same code/time-step) is rejected as totpReplay (not totpInvalid) within the skew window.
 func TestTOTPSingleUse(t *testing.T) {
